@@ -1,0 +1,440 @@
+// =============================================================================
+//  RoyalStuffs CRM — relational model
+//
+//  Module 1 (Product Enquiry) is fully modelled. Customer, Vendor, MediaAsset
+//  and User are deliberately built as shared masters so that Sales, Procurement,
+//  Packing & Dispatch, Billing, Vendor Invoices and Post-Sales attach by foreign
+//  key later without altering anything here.
+//
+//  Locked decisions:
+//    Q1  the customer belongs to the enquiry, not to each product line
+//    Q2  the SLA clock stops at the first submit (firstSubmitAt)
+//    Q3  Full Submit needs every line RESPONDED or NO_VENDOR (with a reason)
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ---------------------------------------------------------------------------
+//  Identity & access
+// ---------------------------------------------------------------------------
+
+enum Role {
+  ADMIN
+  USER
+}
+
+/// Pre-declared for all seven modules so future permissions need no migration.
+enum AppModule {
+  PRODUCT_ENQUIRY
+  SALES
+  PROCUREMENT
+  PACKING_DISPATCH
+  CUSTOMER_BILLING
+  VENDOR_INVOICE
+  POST_SALES
+}
+
+enum PermissionAction {
+  VIEW
+  CREATE
+  EDIT
+  DELETE
+  ASSIGN
+}
+
+/// §6 — created by seed only; there is no public signup in v1.
+model User {
+  id           String    @id @default(cuid())
+  employeeId   String    @unique
+  name         String
+  email        String    @unique
+  mobile       String?
+  passwordHash String
+  role         Role      @default(USER)
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  permissions       UserModulePermission[]
+  createdEnquiries  ProductEnquiry[]       @relation("EnquiryCreatedBy")
+  assignedEnquiries ProductEnquiry[]       @relation("EnquiryAssignedTo")
+  closedEnquiries   ProductEnquiry[]       @relation("EnquiryClosedBy")
+  vendorResponses   VendorResponse[]
+  events            EnquiryEvent[]
+  delayRecords      DelayRecord[]
+  auditLogs         AuditLog[]
+  uploadedAssets    MediaAsset[]
+
+  @@index([role, isActive])
+}
+
+/// Absent rows mean "use the role default"; present rows override it.
+/// v1 needs no rows at all while the mechanism is already in place.
+model UserModulePermission {
+  id      String           @id @default(cuid())
+  userId  String
+  module  AppModule
+  action  PermissionAction
+  allowed Boolean          @default(true)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, module, action])
+}
+
+// ---------------------------------------------------------------------------
+//  Shared masters
+// ---------------------------------------------------------------------------
+
+enum CustomerType {
+  RETAIL
+  BULK
+  WEDDING_GIFTING
+  CORPORATE_GIFTING
+}
+
+/// Q1 — one enquiry belongs to one customer. Sales and Billing will reference
+/// this same row rather than duplicating the name.
+model Customer {
+  id        String       @id @default(cuid())
+  name      String
+  type      CustomerType
+  phone     String?
+  email     String?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  enquiries ProductEnquiry[]
+
+  /// Not unique: two real firms can legitimately share a name.
+  @@index([name])
+}
+
+/// §37 — a reusable entity, never re-created per enquiry.
+model Vendor {
+  id            String   @id @default(cuid())
+  name          String   @unique
+  contactPerson String?
+  phone         String?
+  email         String?
+  city          String?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  responses VendorResponse[]
+
+  @@index([isActive, name])
+}
+
+/// §5 / §6 — one Cloudinary object. URL and public ID only; never binary data.
+/// Detailed Cloudinary behaviour is deferred until those requirements arrive.
+model MediaAsset {
+  id           String   @id @default(cuid())
+  publicId     String   @unique
+  secureUrl    String
+  format       String?
+  width        Int?
+  height       Int?
+  bytes        Int?
+  uploadedById String
+  createdAt    DateTime @default(now())
+
+  uploadedBy      User             @relation(fields: [uploadedById], references: [id])
+  enquiryProducts EnquiryProduct[]
+  vendorResponses VendorResponse[]
+
+  @@index([uploadedById, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+//  Product Enquiry
+// ---------------------------------------------------------------------------
+
+enum EnquirySource {
+  WHATSAPP
+  EMAIL
+  CALL
+  WEBSITE
+  INDIAMART
+  OTHERS
+}
+
+/// §27 — coverage status only. Time state lives in the SLA columns below.
+enum EnquiryStatus {
+  OPEN
+  PARTIAL_CLOSED
+  CLOSED
+}
+
+enum EnquiryEfficiency {
+  ON_TIME
+  DELAYED
+}
+
+/// Q3 — NO_VENDOR is what makes Full Submit reachable when nobody stocks a line.
+enum EnquiryProductStatus {
+  PENDING
+  RESPONDED
+  NO_VENDOR
+}
+
+enum WeightUnit {
+  G
+  KG
+  LB
+}
+
+enum DimensionUnit {
+  MM
+  CM
+  IN
+  FT
+}
+
+enum ProductMatchType {
+  EXACT
+  SIMILAR
+}
+
+model ProductEnquiry {
+  /// Used in URLs — not guessable, unlike a sequential integer.
+  id        String @id @default(cuid())
+  /// §23 — human-facing only: ENQ-2026-000001.
+  enquiryNo String @unique
+
+  customerId   String
+  source       EnquirySource
+  /// §17 — required when source is OTHERS; also a CHECK constraint.
+  sourceDetail String?
+
+  status       EnquiryStatus @default(OPEN)
+  createdById  String
+  /// §28 — "Towards": whose SLA clock is running.
+  assignedToId String
+
+  // --- the clock -----------------------------------------------------------
+  // Every timestamp comes from one Postgres now() taken inside the creation
+  // transaction. Node's clock is never consulted for business time.
+
+  /// §24 — snapshot of the policy in force, so a later change to the SLA
+  /// cannot retroactively rewrite whether this enquiry was on time.
+  slaMinutes    Int      @default(15)
+  createdAt     DateTime
+  slaDeadlineAt DateTime
+
+  /// Q2 — the clock stops at the first submit, partial or full.
+  firstSubmitAt   DateTime?
+  /// createdAt → firstSubmitAt, frozen at the same moment. Powers average
+  /// response time without recomputing it from the event log.
+  responseSeconds Int?
+  /// §29 — written exactly once, never recalculated.
+  efficiency      EnquiryEfficiency?
+
+  partialSubmittedAt DateTime?
+  closedAt           DateTime?
+  closedById         String?
+  updatedAt          DateTime  @updatedAt
+
+  customer   Customer @relation(fields: [customerId], references: [id])
+  createdBy  User     @relation("EnquiryCreatedBy", fields: [createdById], references: [id])
+  assignedTo User     @relation("EnquiryAssignedTo", fields: [assignedToId], references: [id])
+  closedBy   User?    @relation("EnquiryClosedBy", fields: [closedById], references: [id])
+
+  products EnquiryProduct[]
+  events   EnquiryEvent[]
+  delays   DelayRecord[]
+
+  @@index([status, slaDeadlineAt])
+  @@index([assignedToId, status])
+  @@index([customerId])
+  @@index([createdAt])
+  @@index([efficiency, createdAt])
+  @@index([firstSubmitAt])
+}
+
+/// §11 — one of up to twenty requested items.
+/// The cap is guaranteed by @@unique([enquiryId, lineNo]) plus a CHECK
+/// constraint, so two concurrent requests cannot produce a 21st row.
+model EnquiryProduct {
+  id        String @id @default(cuid())
+  enquiryId String
+  lineNo    Int
+
+  name     String
+  imageId  String?
+  quantity Int
+
+  // §19 — stored as entered, plus a normalised column so mixed units still
+  // sort and filter together.
+  weightValue   Decimal?    @db.Decimal(10, 3)
+  weightUnit    WeightUnit?
+  weightInGrams Decimal?    @db.Decimal(12, 3)
+
+  // §20 — structured, never a free-text string.
+  lengthValue   Decimal?       @db.Decimal(10, 2)
+  widthValue    Decimal?       @db.Decimal(10, 2)
+  heightValue   Decimal?       @db.Decimal(10, 2)
+  dimensionUnit DimensionUnit?
+  lengthMm      Decimal?       @db.Decimal(12, 2)
+  widthMm       Decimal?       @db.Decimal(12, 2)
+  heightMm      Decimal?       @db.Decimal(12, 2)
+
+  /// §21 — the customer will accept alternatives for this line.
+  similarOptionNeeded Boolean              @default(false)
+  status              EnquiryProductStatus @default(PENDING)
+  /// Q3 — mandatory when status is NO_VENDOR; also a CHECK constraint.
+  noVendorReason      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  enquiry         ProductEnquiry   @relation(fields: [enquiryId], references: [id], onDelete: Cascade)
+  image           MediaAsset?      @relation(fields: [imageId], references: [id], onDelete: SetNull)
+  vendorResponses VendorResponse[]
+
+  @@unique([enquiryId, lineNo])
+  @@index([enquiryId, status])
+}
+
+/// §39 — many of these per line. That is the heart of the module.
+model VendorResponse {
+  id               String @id @default(cuid())
+  enquiryProductId String
+  vendorId         String
+
+  /// §32 — a separate relation from the customer's image, so a vendor upload
+  /// can never overwrite what the customer sent.
+  imageId   String?
+  /// §38 — exact match or proposed alternative.
+  matchType ProductMatchType
+
+  /// §35 / Q8 — NUMERIC, per unit. The line total is derived, never stored.
+  ratePerUnit Decimal @db.Decimal(12, 2)
+  currency    String  @default("INR")
+
+  /// §36 — structured days rather than free text.
+  deliveryWithinDays Int
+  deliveryNote       String?
+
+  weightValue   Decimal?       @db.Decimal(10, 3)
+  weightUnit    WeightUnit?
+  weightInGrams Decimal?       @db.Decimal(12, 3)
+  lengthValue   Decimal?       @db.Decimal(10, 2)
+  widthValue    Decimal?       @db.Decimal(10, 2)
+  heightValue   Decimal?       @db.Decimal(10, 2)
+  dimensionUnit DimensionUnit?
+
+  notes       String?
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  enquiryProduct EnquiryProduct @relation(fields: [enquiryProductId], references: [id], onDelete: Cascade)
+  vendor         Vendor         @relation(fields: [vendorId], references: [id])
+  image          MediaAsset?    @relation(fields: [imageId], references: [id], onDelete: SetNull)
+  createdBy      User           @relation(fields: [createdById], references: [id])
+
+  @@index([enquiryProductId])
+  @@index([vendorId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+//  History, delays, numbering
+// ---------------------------------------------------------------------------
+
+enum EnquiryEventType {
+  CREATED
+  ASSIGNED
+  REASSIGNED
+  PRODUCT_ADDED
+  PRODUCT_UPDATED
+  PRODUCT_REMOVED
+  VENDOR_RESPONSE_ADDED
+  VENDOR_RESPONSE_UPDATED
+  DEADLINE_BREACHED
+  DELAY_REASON_SUBMITTED
+  PARTIAL_SUBMITTED
+  FULL_SUBMITTED
+  CLOSED
+  REOPENED
+}
+
+/// §44 — the Efficiency History. Append-only: the service layer exposes no
+/// update path, and nothing here is ever rewritten.
+model EnquiryEvent {
+  id         String           @id @default(cuid())
+  enquiryId  String
+  type       EnquiryEventType
+  /// Null means the system acted — the SLA breach sweeper, typically.
+  actorId    String?
+  field      String?
+  oldValue   String?
+  newValue   String?
+  /// Shape-varying diff payload; never queried relationally.
+  metadata   Json?
+  occurredAt DateTime         @default(now())
+
+  enquiry ProductEnquiry @relation(fields: [enquiryId], references: [id], onDelete: Cascade)
+  actor   User?          @relation(fields: [actorId], references: [id])
+
+  @@index([enquiryId, occurredAt])
+  @@index([type, occurredAt])
+}
+
+/// §43 — one row per breach, many rows allowed. Never overwritten, because
+/// management analytics depend on the full history.
+model DelayRecord {
+  id            String   @id @default(cuid())
+  enquiryId     String
+  reason        String
+  /// Snapshot of the deadline that was missed.
+  deadlineAt    DateTime
+  /// When the breach was detected.
+  detectedAt    DateTime
+  minutesLate   Int
+  submittedById String
+  submittedAt   DateTime @default(now())
+
+  enquiry     ProductEnquiry @relation(fields: [enquiryId], references: [id], onDelete: Cascade)
+  submittedBy User           @relation(fields: [submittedById], references: [id])
+
+  @@index([enquiryId, submittedAt])
+}
+
+/// §23 — row-locked inside the creation transaction so two employees creating
+/// enquiries at the same instant cannot be handed the same number.
+model EnquiryCounter {
+  /// "2026" for a calendar year, "2026-27" for an Indian financial year (Q5).
+  period    String @id
+  lastValue Int    @default(0)
+}
+
+/// §45 — generic trail for everything without an enquiry parent: logins, user
+/// management, vendor edits, permission changes.
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  action     String
+  entityType String
+  entityId   String?
+  oldValue   Json?
+  newValue   Json?
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  actor User? @relation(fields: [actorId], references: [id])
+
+  @@index([entityType, entityId, createdAt])
+  @@index([actorId, createdAt])
+}

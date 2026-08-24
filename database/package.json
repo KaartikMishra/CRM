@@ -1,0 +1,45 @@
+{
+  "name": "@rs/database",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Prisma schema, migrations, seed and the shared PrismaClient. The only tier permitted to talk to PostgreSQL.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "prisma"
+  ],
+  "scripts": {
+    "generate": "prisma generate",
+    "migrate": "prisma migrate dev",
+    "migrate:deploy": "prisma migrate deploy",
+    "migrate:invariants": "prisma migrate dev --create-only --name business_invariants",
+    "studio": "prisma studio",
+    "seed": "tsx prisma/seed.ts",
+    "build": "prisma generate && tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.0.0",
+    "@rs/shared": "*",
+    "bcrypt": "^6.0.0",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^6.0.0",
+    "@types/node": "^22.9.0",
+    "prisma": "^6.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}
