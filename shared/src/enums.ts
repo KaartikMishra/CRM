@@ -56,8 +56,13 @@ export type WeightUnit = (typeof WEIGHT_UNITS)[number];
 export const DIMENSION_UNITS = ['MM', 'CM', 'IN', 'FT'] as const;
 export type DimensionUnit = (typeof DIMENSION_UNITS)[number];
 
-/** §38 — exact vs similar, per vendor response. */
-export const PRODUCT_MATCH_TYPES = ['EXACT', 'SIMILAR'] as const;
+/**
+ * §38 — how a vendor response relates to the requested product.
+ *
+ * A vendor response always represents a similar/alternative option for the
+ * customer's requested product, so SIMILAR_PRODUCT is the only value.
+ */
+export const PRODUCT_MATCH_TYPES = ['SIMILAR_PRODUCT'] as const;
 export type ProductMatchType = (typeof PRODUCT_MATCH_TYPES)[number];
 
 /** §44 — the Efficiency History event vocabulary. */

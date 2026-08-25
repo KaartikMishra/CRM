@@ -201,9 +201,10 @@ enum DimensionUnit {
   FT
 }
 
+/// §38 — a vendor response always represents a similar/alternative option for
+/// the customer's requested product, so this enum has a single value.
 enum ProductMatchType {
-  EXACT
-  SIMILAR
+  SIMILAR_PRODUCT
 }
 
 model ProductEnquiry {
@@ -315,7 +316,7 @@ model VendorResponse {
   /// §32 — a separate relation from the customer's image, so a vendor upload
   /// can never overwrite what the customer sent.
   imageId   String?
-  /// §38 — exact match or proposed alternative.
+  /// §38 — always a similar/alternative option for the requested product.
   matchType ProductMatchType
 
   /// §35 / Q8 — NUMERIC, per unit. The line total is derived, never stored.

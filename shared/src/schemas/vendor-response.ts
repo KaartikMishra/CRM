@@ -10,9 +10,9 @@ export const createVendorResponseSchema = z.object({
   vendorId: cuidSchema,
   /** §32 — kept separate from the customer's own product image. */
   imageAssetId: cuidSchema.optional(),
-  /** §38 — exact match or a proposed alternative. */
+  /** §38 — a vendor response is always a similar/alternative option. */
   matchType: z.enum(PRODUCT_MATCH_TYPES, {
-    errorMap: () => ({ message: 'Choose exact or similar product' }),
+    errorMap: () => ({ message: 'Product match must be "Similar Product"' }),
   }),
   /** Q8 — per unit. The line total is derived, never stored. */
   ratePerUnit: amountSchema,
