@@ -16,12 +16,16 @@ export { prisma };
 /**
  * Development only: how long to keep trying a sleeping database.
  *
- * Neon suspends idle compute, and a cold resume has been measured here at
- * roughly 60–90 seconds. These seven delays sum to 75 seconds of waiting
- * across eight attempts, which covers a typical resume. It is deliberately
- * finite: a database that is genuinely down should still fail the boot.
+ * Neon suspends idle compute, and a cold resume on this project has been
+ * observed taking anywhere from 60 seconds to over 90. These nine delays sum
+ * to 120 seconds across ten attempts — the top of the intended one-to-two
+ * minute window, because a budget that merely covers the average still fails
+ * on a slow resume. It is deliberately finite: a database that is genuinely
+ * down should still fail the boot rather than hang forever.
  */
-const DEV_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000, 20_000, 25_000] as const;
+const DEV_RETRY_DELAYS_MS = [
+  1_000, 2_000, 4_000, 8_000, 15_000, 20_000, 25_000, 25_000, 20_000,
+] as const;
 
 /**
  * Prisma codes that mean "the server did not answer", as opposed to "the
