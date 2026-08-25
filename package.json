@@ -16,6 +16,7 @@
     "db:seed": "npm run seed --workspace @rs/database",
     "db:studio": "npm run studio --workspace @rs/database",
     "typecheck": "npm run typecheck --workspaces --if-present",
+    "dev": "concurrently --names \"backend,frontend\" --prefix-colors \"yellow.bold,cyan.bold\" --prefix \"[{name}]\" --kill-others --handle-input --success first \"npm:dev:backend\" \"npm:dev:frontend\"",
     "dev:backend": "npm run dev --workspace @rs/backend",
     "build:backend": "npm run build --workspace @rs/backend",
     "dev:frontend": "npm run dev --workspace @rs/frontend",
@@ -30,6 +31,7 @@
     "deepmerge-ts": "^8.0.0"
   },
   "devDependencies": {
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "concurrently": "^9.1.2"
   }
 }
