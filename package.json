@@ -6,7 +6,8 @@
   "workspaces": [
     "shared",
     "database",
-    "backend"
+    "backend",
+    "frontend"
   ],
   "scripts": {
     "build:shared": "npm run build --workspace @rs/shared",
@@ -16,7 +17,9 @@
     "db:studio": "npm run studio --workspace @rs/database",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "dev:backend": "npm run dev --workspace @rs/backend",
-    "build:backend": "npm run build --workspace @rs/backend"
+    "build:backend": "npm run build --workspace @rs/backend",
+    "dev:frontend": "npm run dev --workspace @rs/frontend",
+    "build:frontend": "npm run build --workspace @rs/frontend"
   },
   "engines": {
     "node": ">=20"

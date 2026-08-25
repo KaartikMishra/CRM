@@ -1,0 +1,57 @@
+@import "tailwindcss";
+
+/*
+  RoyalStuffs CRM palette. Grounded in the company's own material — oxidised
+  copper — so the accent is verdigris rather than a generic blue, with brass
+  for warnings and oxide red for destructive states. Both themes are defined
+  at token level so components never reference a raw colour.
+*/
+@theme {
+  --color-ground: #f4f6f5;
+  --color-surface: #ffffff;
+  --color-surface-2: #edf1ef;
+  --color-ink: #12201c;
+  --color-ink-2: #3b4a45;
+  --color-muted: #677a74;
+  --color-line: #d5deda;
+  --color-accent: #1f6f5c;
+  --color-accent-ink: #ffffff;
+  --color-accent-soft: #e4f0eb;
+  --color-brass: #8f6314;
+  --color-oxide: #a93026;
+  --color-oxide-soft: #f8e7e4;
+}
+
+@media (prefers-color-scheme: dark) {
+  @theme {
+    --color-ground: #0e1614;
+    --color-surface: #16211e;
+    --color-surface-2: #1d2a26;
+    --color-ink: #e6edea;
+    --color-ink-2: #c2d0cb;
+    --color-muted: #8fa39c;
+    --color-line: #283733;
+    --color-accent: #4fbf9f;
+    --color-accent-ink: #0e1614;
+    --color-accent-soft: #16302a;
+    --color-brass: #d9a441;
+    --color-oxide: #e5786c;
+    --color-oxide-soft: #331e1c;
+  }
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background-color: var(--color-ground);
+  color: var(--color-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}

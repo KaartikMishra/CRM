@@ -67,7 +67,18 @@ royalstuffs-crm/
 │       ├── utils/       AppError · apiResponse · requestContext
 │       ├── app.ts       Express assembly (importable by tests)
 │       └── server.ts    bootstrap, listener, graceful shutdown
-├── frontend/            (not yet created — Phase 7)
+├── frontend/            @rs/frontend  — Next.js UI; owns the session
+│   ├── auth.ts          Auth.js: Credentials provider + HS256 session JWT
+│   ├── auth.config.ts   cookie name and options
+│   ├── proxy.ts         route protection (convenience, not the boundary)
+│   ├── app/
+│   │   ├── login/       sign-in page + server action
+│   │   ├── dashboard/   minimal protected page + sign-out
+│   │   └── api/
+│   │       ├── auth/    Auth.js handlers
+│   │       └── proxy/   bearer-attaching proxy for client mutations
+│   ├── components/ui/   shadcn-style primitives
+│   └── lib/api-server   the only place Next.js calls Express
 ├── .env.example
 └── package.json         npm workspaces root
 ```
@@ -151,6 +162,9 @@ npm run dev:backend     # tsx watch on http://localhost:4000
 | --- | --- |
 | `GET /api/health` | Liveness — process only, touches nothing external |
 | `GET /api/health/ready` | Readiness — pings the database; 503 when it is down |
+| `POST /api/auth/login` | bcrypt verification; rate limited; audited |
+| `GET /api/auth/me` | identity + resolved permission matrix |
+| `POST /api/auth/logout` | records the sign-out in the audit trail |
 
 The API refuses to start if the environment is invalid or the database is
 unreachable, rather than binding a port and failing on the first real request.
@@ -217,8 +231,8 @@ Schema changes go through Devansh so migrations stay linear.
 | 1 | Architecture planning | ✅ |
 | 2 | Database schema | ✅ |
 | 3 | Backend foundation | ✅ |
-| 4 | Authentication | — |
-| 5 | User / role system | — |
+| 4 | Authentication | ✅ |
+| 5 | User / role system | ✅ |
 | 6 | Product Enquiry APIs | — |
 | 7 | Product Enquiry frontend | — |
 | 8 | Vendor response workflow | — |
@@ -226,3 +240,44 @@ Schema changes go through Devansh so migrations stay linear.
 | 10 | History / audit system | — |
 | 11 | Dashboard foundations | — |
 | 12 | Testing | — |
+
+---
+
+## Authentication
+
+**Next.js owns the session. Express owns the authentication truth.**
+
+```
+Browser → Auth.js Credentials → POST /api/auth/login (Express)
+                                    ↓ Zod · user lookup · isActive · bcrypt · audit
+                                 safe user
+                                    ↓
+                        HS256 session JWT (AUTH_SECRET, 8h)
+                                    ↓
+                    httpOnly · SameSite=Lax · Secure in production
+                                    ↓
+              Next.js server attaches Authorization: Bearer
+                                    ↓
+      Express requireAuth → verify signature → re-read user → requirePermission
+```
+
+Three points worth knowing before changing any of it:
+
+**Auth.js is configured to emit a signed JWS, not its default encrypted JWE.**
+`jwt.encode`/`jwt.decode` in `auth.ts` are overridden so the session token is a
+plain HS256 JWT that Express can verify with the shared `AUTH_SECRET`.
+
+**`requireAuth` re-reads the user on every request.** A signature only proves the
+token came from the session tier — not that the person is still employed here.
+`isActive` and `role` always come from the database, so deactivating an account
+takes effect on the next request rather than in eight hours. Do not remove that
+lookup to make authentication stateless.
+
+**Permissions are never in the token.** They resolve per request from role
+defaults plus `UserModulePermission` overrides, so a revoked capability applies
+immediately. An absent override row means "use the role default".
+
+Sign-in failures are deliberately indistinguishable: unknown email, wrong
+password and deactivated account all return the same 401, and a bcrypt
+comparison runs even when the email does not exist so response timing cannot
+enumerate the staff directory.

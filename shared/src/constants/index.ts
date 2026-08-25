@@ -41,3 +41,15 @@ export const ENQUIRY_NUMBER_PAD = 6;
 /** Default page size for server-side paginated lists. */
 export const DEFAULT_PAGE_SIZE = 25;
 export const MAX_PAGE_SIZE = 100;
+
+/**
+ * §12 — session JWT contract.
+ *
+ * Auth.js signs the session token with these claims and Express verifies
+ * against the same values, so they live here rather than as matching literals
+ * in two packages that could drift apart.
+ */
+export const SESSION_JWT_ALG = 'HS256' as const;
+export const SESSION_JWT_ISSUER = 'royalstuffs-crm';
+export const SESSION_JWT_AUDIENCE = 'royalstuffs-crm-api';
+export const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
