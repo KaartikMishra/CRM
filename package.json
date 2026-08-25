@@ -5,7 +5,8 @@
   "description": "Internal CRM for RoyalStuffs.com",
   "workspaces": [
     "shared",
-    "database"
+    "database",
+    "backend"
   ],
   "scripts": {
     "build:shared": "npm run build --workspace @rs/shared",
@@ -13,7 +14,9 @@
     "db:migrate": "npm run migrate --workspace @rs/database",
     "db:seed": "npm run seed --workspace @rs/database",
     "db:studio": "npm run studio --workspace @rs/database",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "dev:backend": "npm run dev --workspace @rs/backend",
+    "build:backend": "npm run build --workspace @rs/backend"
   },
   "engines": {
     "node": ">=20"

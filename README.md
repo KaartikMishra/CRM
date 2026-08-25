@@ -58,7 +58,15 @@ royalstuffs-crm/
 │   │   └── seed.ts
 │   └── src/index.ts     the PrismaClient singleton
 │
-├── backend/             (not yet created — Phase 3)
+├── backend/             @rs/backend   — Express API, owns all business logic
+│   └── src/
+│       ├── config/      env (Zod-parsed) · logger · cors · database
+│       ├── middleware/  requestId · requestLogger · validate · notFound · errorHandler
+│       ├── modules/     health/ (auth, customers, vendors, enquiries follow)
+│       ├── routes/      API surface assembly
+│       ├── utils/       AppError · apiResponse · requestContext
+│       ├── app.ts       Express assembly (importable by tests)
+│       └── server.ts    bootstrap, listener, graceful shutdown
 ├── frontend/            (not yet created — Phase 7)
 ├── .env.example
 └── package.json         npm workspaces root
@@ -124,6 +132,22 @@ npm run db:seed         # create Kaartik, Devansh, Aparna + dev fixtures
 npm run db:studio       # browse the data
 ```
 
+### Running the API
+
+```bash
+npm run build:shared    # backend imports @rs/shared from dist
+npm run db:generate     # backend imports @rs/database from dist
+npm run dev:backend     # tsx watch on http://localhost:4000
+```
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/health` | Liveness — process only, touches nothing external |
+| `GET /api/health/ready` | Readiness — pings the database; 503 when it is down |
+
+The API refuses to start if the environment is invalid or the database is
+unreachable, rather than binding a port and failing on the first real request.
+
 The seed is idempotent — it upserts by `employeeId`, so re-running it rotates
 passwords rather than creating duplicate users.
 
@@ -185,7 +209,7 @@ Schema changes go through Devansh so migrations stay linear.
 | --- | --- | --- |
 | 1 | Architecture planning | ✅ |
 | 2 | Database schema | ✅ |
-| 3 | Backend foundation | — |
+| 3 | Backend foundation | ✅ |
 | 4 | Authentication | — |
 | 5 | User / role system | — |
 | 6 | Product Enquiry APIs | — |
