@@ -4,6 +4,7 @@ import type {
   EnquirySummary,
   VendorView,
 } from '@rs/shared';
+import { cache } from 'react';
 import { apiFetch, type ApiResult } from './api-server';
 
 /**
@@ -34,15 +35,25 @@ export async function fetchEnquiries(
   return { result, meta: result.success ? ((result.meta ?? {}) as ListMeta) : {} };
 }
 
-export async function fetchEnquiry(
-  id: string,
-): Promise<{ result: ApiResult<{ enquiry: EnquiryDetail }>; serverTime?: string }> {
-  const result = await apiFetch<{ enquiry: EnquiryDetail }>(`/api/product-enquiries/${id}`);
-  return {
-    result,
-    serverTime: result.success ? ((result.meta?.serverTime as string) ?? undefined) : undefined,
-  };
-}
+/**
+ * Deduplicated per render pass.
+ *
+ * `generateMetadata` and the page component both need the enquiry, and this is
+ * the heaviest query in the module — the full tree of products, vendor
+ * responses and events. Without `cache` it ran twice for every detail page
+ * view, doubling the round trip to a database several thousand kilometres away.
+ */
+export const fetchEnquiry = cache(
+  async (
+    id: string,
+  ): Promise<{ result: ApiResult<{ enquiry: EnquiryDetail }>; serverTime?: string }> => {
+    const result = await apiFetch<{ enquiry: EnquiryDetail }>(`/api/product-enquiries/${id}`);
+    return {
+      result,
+      serverTime: result.success ? ((result.meta?.serverTime as string) ?? undefined) : undefined,
+    };
+  },
+);
 
 export async function fetchCustomers(q?: string): Promise<CustomerView[]> {
   const query = new URLSearchParams({ limit: '20' });

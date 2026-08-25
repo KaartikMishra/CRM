@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useState, useTransition } from 'react';
+import { useId, useRef, useState, useTransition } from 'react';
 import { Loader2, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -57,8 +57,22 @@ type ProductDraft = {
   imageAssetId: string | null;
 };
 
-const emptyProduct = (): ProductDraft => ({
-  key: crypto.randomUUID(),
+/**
+ * Row keys must be identical on the server and on the client.
+ *
+ * `emptyProduct()` runs inside the initial useState, which executes in both
+ * places. `crypto.randomUUID()` gave two different values and React reported a
+ * hydration mismatch on every input id derived from them. A module-level
+ * counter is no better: the server process keeps counting across requests, so
+ * it might render `p4` while a freshly loaded client module starts at `p1`.
+ *
+ * The key is therefore passed in by the caller, derived from the row's position
+ * in the list — the one thing both renders agree on. Rows added later get keys
+ * from a counter seeded off the current length, which only ever runs on the
+ * client, after hydration.
+ */
+const emptyProduct = (key: string): ProductDraft => ({
+  key,
   name: '',
   quantity: '',
   weightValue: '',
@@ -94,12 +108,16 @@ export function CreateEnquiryForm({
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  // Stable across server and client render, and unique per form instance.
+  const formId = useId();
+  // Seeded past the initial row; advanced only by user interaction.
+  const nextKey = useRef(1);
 
   const [customer, setCustomer] = useState<PickerOption | null>(null);
   const [source, setSource] = useState<(typeof ENQUIRY_SOURCES)[number] | ''>('');
   const [sourceDetail, setSourceDetail] = useState('');
   const [assignedToId, setAssignedToId] = useState(currentUserId);
-  const [products, setProducts] = useState<ProductDraft[]>([emptyProduct()]);
+  const [products, setProducts] = useState<ProductDraft[]>(() => [emptyProduct('p0')]);
 
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<{ message: string; code?: string } | null>(null);
@@ -121,7 +139,8 @@ export function CreateEnquiryForm({
       toast.error(`An enquiry can hold at most ${MAX_PRODUCTS_PER_ENQUIRY} products.`);
       return;
     }
-    setProducts((list) => [...list, emptyProduct()]);
+    // Only ever runs from a click, so it is client-side and cannot desync.
+    setProducts((list) => [...list, emptyProduct(`p${nextKey.current++}`)]);
   };
 
   const removeProduct = (key: string) =>
@@ -343,9 +362,9 @@ export function CreateEnquiryForm({
 
                 <div className="flex flex-col gap-4">
                   <div className="flex flex-col gap-1.5">
-                    <Label htmlFor={`name-${product.key}`}>Product name</Label>
+                    <Label htmlFor={`${formId}-name-${product.key}`}>Product name</Label>
                     <Input
-                      id={`name-${product.key}`}
+                      id={`${formId}-name-${product.key}`}
                       value={product.name}
                       onChange={(e) => updateProduct(product.key, { name: e.target.value })}
                       placeholder="Hammered copper water bottle"
@@ -357,9 +376,9 @@ export function CreateEnquiryForm({
 
                   <div className="grid gap-4 sm:grid-cols-3">
                     <div className="flex flex-col gap-1.5">
-                      <Label htmlFor={`qty-${product.key}`}>Quantity</Label>
+                      <Label htmlFor={`${formId}-qty-${product.key}`}>Quantity</Label>
                       <Input
-                        id={`qty-${product.key}`}
+                        id={`${formId}-qty-${product.key}`}
                         inputMode="numeric"
                         value={product.quantity}
                         onChange={(e) => updateProduct(product.key, { quantity: e.target.value })}
@@ -372,10 +391,10 @@ export function CreateEnquiryForm({
                     </div>
 
                     <div className="flex flex-col gap-1.5 sm:col-span-2">
-                      <Label htmlFor={`weight-${product.key}`}>Weight</Label>
+                      <Label htmlFor={`${formId}-weight-${product.key}`}>Weight</Label>
                       <div className="flex gap-2">
                         <Input
-                          id={`weight-${product.key}`}
+                          id={`${formId}-weight-${product.key}`}
                           inputMode="decimal"
                           value={product.weightValue}
                           onChange={(e) =>

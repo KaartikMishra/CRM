@@ -37,7 +37,13 @@ export default async function EnquiryDetailPage({ params }: { params: Params }) 
   const user = await getCurrentUser();
   if (!user) redirect('/login');
 
-  const { result, serverTime } = await fetchEnquiry(id);
+  // Independent of each other; see the note on the list page.
+  const [{ result, serverTime }, assigneesResult] = await Promise.all([
+    fetchEnquiry(id),
+    apiFetch<{ assignees: { id: string; name: string; employeeId: string }[] }>(
+      '/api/product-enquiries/assignees',
+    ),
+  ]);
 
   if (!result.success) {
     if (result.code === 'PRODUCT_ENQUIRY_NOT_FOUND') notFound();
@@ -46,9 +52,6 @@ export default async function EnquiryDetailPage({ params }: { params: Params }) 
 
   const enquiry = result.data.enquiry;
 
-  const assigneesResult = await apiFetch<{
-    assignees: { id: string; name: string; employeeId: string }[];
-  }>('/api/product-enquiries/assignees');
   const assignees = assigneesResult.success ? assigneesResult.data.assignees : [];
 
   // Mirrors backend/src/policies/enquiry-access.ts. The API is authoritative;

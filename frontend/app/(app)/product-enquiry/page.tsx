@@ -29,18 +29,23 @@ export default async function ProductEnquiryListPage({
   const canCreate = can(user, 'PRODUCT_ENQUIRY', 'CREATE');
 
   // Filters travel to the backend; nothing is filtered client-side (§46).
-  const { result, meta } = await fetchEnquiries({
-    q: first(params.q),
-    status: first(params.status),
-    assignedToId: first(params.assignedToId),
-    efficiency: first(params.efficiency),
-    cursor: first(params.cursor),
-    limit: '25',
-  });
-
-  const assigneesResult = await apiFetch<{
-    assignees: { id: string; name: string; employeeId: string }[];
-  }>('/api/product-enquiries/assignees');
+  //
+  // These two calls do not depend on each other, and the API sits a long way
+  // from here — roughly 200ms per round trip to Neon in ap-southeast-1. Run
+  // sequentially they cost the sum; in parallel they cost the slower one.
+  const [{ result, meta }, assigneesResult] = await Promise.all([
+    fetchEnquiries({
+      q: first(params.q),
+      status: first(params.status),
+      assignedToId: first(params.assignedToId),
+      efficiency: first(params.efficiency),
+      cursor: first(params.cursor),
+      limit: '25',
+    }),
+    apiFetch<{ assignees: { id: string; name: string; employeeId: string }[] }>(
+      '/api/product-enquiries/assignees',
+    ),
+  ]);
   const assignees = assigneesResult.success ? assigneesResult.data.assignees : [];
 
   const isFiltered = Boolean(
