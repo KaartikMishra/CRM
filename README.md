@@ -110,22 +110,29 @@ Generate the auth secret with `openssl rand -base64 32`. Never commit `.env`.
 
 ### Database
 
-```bash
-npm run db:generate     # generate the Prisma client
-npm run db:migrate      # create and apply the initial migration
-```
-
-Then add the constraints Prisma cannot express:
+The schema is already migrated. Against a fresh database:
 
 ```bash
-npm run db:migrate -- --create-only --name business_invariants
-# paste database/prisma/sql/business-invariants.sql into the new migration
-npm run db:migrate
+npm run db:generate                              # generate the Prisma client
+npm run migrate:deploy --workspace @rs/database  # apply existing migrations
 ```
 
-These enforce the 20-product cap, positive quantities and rates, the
-`OTHERS`-needs-a-detail rule, and the closed-enquiry integrity checks at the
-database level, so concurrency cannot slip past them.
+Two migrations exist:
+
+| Migration | Contents |
+| --- | --- |
+| `20260825090210_initial_crm_schema` | 12 tables, 12 enums, 17 foreign keys, 20 unique indexes |
+| `20260825090309_business_invariants` | 13 CHECK constraints from `prisma/sql/business-invariants.sql` |
+
+The invariants enforce the 20-product cap, positive quantities and rates, the
+`NO_VENDOR`-needs-a-reason rule, the `OTHERS`-needs-a-detail rule, and the
+frozen-efficiency pairing, at the database level — so concurrency cannot slip
+past them.
+
+Prisma commands run through `dotenv-cli` so the single root `.env` stays the
+only secrets file; the Prisma CLI would otherwise look for `.env` beside the
+schema. Use `migrate:deploy` rather than `migrate dev` against a database that
+holds real data — `deploy` never resets.
 
 ```bash
 npm run db:seed         # create Kaartik, Devansh, Aparna + dev fixtures

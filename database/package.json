@@ -17,17 +17,20 @@
     "prisma"
   ],
   "scripts": {
-    "generate": "prisma generate",
-    "migrate": "prisma migrate dev",
-    "migrate:deploy": "prisma migrate deploy",
+    "generate": "dotenv -e ../.env -- prisma generate",
+    "migrate": "dotenv -e ../.env -- prisma migrate dev",
+    "migrate:deploy": "dotenv -e ../.env -- prisma migrate deploy",
     "migrate:invariants": "prisma migrate dev --create-only --name business_invariants",
-    "studio": "prisma studio",
-    "seed": "tsx prisma/seed.ts",
-    "build": "prisma generate && tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "studio": "dotenv -e ../.env -- prisma studio",
+    "seed": "dotenv -e ../.env -- tsx prisma/seed.ts",
+    "build": "dotenv -e ../.env -- prisma generate && tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "migrate:status": "dotenv -e ../.env -- prisma migrate status",
+    "migrate:create": "dotenv -e ../.env -- prisma migrate dev --create-only",
+    "validate": "dotenv -e ../.env -- prisma validate"
   },
   "prisma": {
-    "seed": "tsx prisma/seed.ts"
+    "seed": "dotenv -e ../.env -- tsx prisma/seed.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.0.0",
@@ -40,6 +43,7 @@
     "@types/node": "^22.9.0",
     "prisma": "^6.0.0",
     "tsx": "^4.19.2",
-    "typescript": "^5.6.3"
+    "typescript": "^5.6.3",
+    "dotenv-cli": "^7.4.4"
   }
 }
