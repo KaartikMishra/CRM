@@ -49,6 +49,14 @@ export function canEditEnquiry(actor: Actor, e: EnquiryOwnership): boolean {
   return isCreator(actor, e) || isTowards(actor, e);
 }
 
+/**
+ * §12/§23 — adding a line follows the same rule as editing: the creator or the
+ * person it is Towards, and never on a closed enquiry.
+ */
+export function canAddProduct(actor: Actor, e: EnquiryOwnership): boolean {
+  return canEditEnquiry(actor, e);
+}
+
 /** §22 — vendor responses belong to whoever is Towards. Admin may act on any. */
 export function canAddVendorResponse(actor: Actor, e: EnquiryOwnership): boolean {
   if (e.status === 'CLOSED') return false;

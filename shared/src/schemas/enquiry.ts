@@ -107,18 +107,49 @@ export const delayReasonSchema = z.object({
     .max(1000, 'Keep the reason under 1000 characters'),
 });
 
+/** §24 — reopening a closed enquiry is deliberate and always explains itself. */
+export const reopenEnquirySchema = z.object({
+  reason: z
+    .string()
+    .trim()
+    .min(5, 'Say why this enquiry is being reopened')
+    .max(1000, 'Keep the reason under 1000 characters'),
+});
+
+/**
+ * Sortable columns, as an allowlist.
+ *
+ * A raw column name from the client would be an injection surface and would
+ * also let callers sort by unindexed columns; only these four are offered, and
+ * each is backed by an index on ProductEnquiry.
+ */
+export const ENQUIRY_SORT_FIELDS = [
+  'createdAt',
+  'slaDeadlineAt',
+  'status',
+  'efficiency',
+] as const;
+export type EnquirySortField = (typeof ENQUIRY_SORT_FIELDS)[number];
+
 /** §49 — every filter round-trips to the server. */
 export const enquiryListQuerySchema = paginationSchema.merge(dateRangeSchema).extend({
   q: z.string().trim().max(160).optional(),
   status: z.enum(ENQUIRY_STATUSES).optional(),
   assignedToId: cuidSchema.optional(),
+  customerId: cuidSchema.optional(),
   efficiency: z.enum(ENQUIRY_EFFICIENCIES).optional(),
   /** §46 — breached with no submit at all; distinct from DELAYED. */
   neverResponded: z.coerce.boolean().optional(),
+  sortBy: z.enum(ENQUIRY_SORT_FIELDS).default('createdAt'),
+  sortDir: z.enum(['asc', 'desc']).default('desc'),
 });
 
 export type EnquiryProductInput = z.infer<typeof enquiryProductInputSchema>;
 export type CreateEnquiryInput = z.infer<typeof createEnquirySchema>;
+export type UpdateEnquiryInput = z.infer<typeof updateEnquirySchema>;
+export type ReassignEnquiryInput = z.infer<typeof reassignEnquirySchema>;
+export type AddEnquiryProductInput = z.infer<typeof addEnquiryProductSchema>;
 export type UpdateEnquiryProductInput = z.infer<typeof updateEnquiryProductSchema>;
 export type DelayReasonInput = z.infer<typeof delayReasonSchema>;
+export type ReopenEnquiryInput = z.infer<typeof reopenEnquirySchema>;
 export type EnquiryListQuery = z.infer<typeof enquiryListQuerySchema>;

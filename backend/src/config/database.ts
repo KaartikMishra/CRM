@@ -54,8 +54,10 @@ export async function pingDatabase(): Promise<DatabaseHealth> {
  * countdown that renders it must agree, and only one of those two clocks can be
  * the source of truth.
  */
-export async function databaseNow(): Promise<Date> {
-  const [row] = await prisma.$queryRaw<{ now: Date }[]>`SELECT now() AS now`;
+export async function databaseNow(
+  client: Pick<typeof prisma, '$queryRaw'> = prisma,
+): Promise<Date> {
+  const [row] = await client.$queryRaw<{ now: Date }[]>`SELECT now() AS now`;
   if (!row) {
     throw new Error('Database returned no result for now()');
   }

@@ -19,12 +19,17 @@
     "dev:backend": "npm run dev --workspace @rs/backend",
     "build:backend": "npm run build --workspace @rs/backend",
     "dev:frontend": "npm run dev --workspace @rs/frontend",
-    "build:frontend": "npm run build --workspace @rs/frontend"
+    "build:frontend": "npm run build --workspace @rs/frontend",
+    "test": "npm run test --workspace @rs/backend",
+    "test:watch": "npm run test:watch --workspace @rs/backend"
   },
   "engines": {
     "node": ">=20"
   },
   "overrides": {
     "deepmerge-ts": "^8.0.0"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.11"
   }
 }

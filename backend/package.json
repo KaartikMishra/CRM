@@ -9,7 +9,9 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@rs/database": "*",
@@ -32,6 +34,7 @@
     "pino-pretty": "^13.0.0",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
-    "@types/bcrypt": "^6.0.0"
+    "@types/bcrypt": "^6.0.0",
+    "vitest": "^4.1.11"
   }
 }

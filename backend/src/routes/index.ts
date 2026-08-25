@@ -9,8 +9,10 @@
 import { Router } from 'express';
 import { authRoutes } from '../modules/auth/auth.routes.js';
 import { healthRoutes } from '../modules/health/health.routes.js';
+import { productEnquiryRoutes } from '../modules/product-enquiry/product-enquiry.routes.js';
 
 export const apiRouter = Router();
 
 apiRouter.use('/health', healthRoutes);
 apiRouter.use('/auth', authRoutes);
+apiRouter.use('/product-enquiries', productEnquiryRoutes);
