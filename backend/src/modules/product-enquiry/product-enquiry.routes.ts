@@ -52,6 +52,13 @@ productEnquiryRoutes.get(
   controller.list,
 );
 
+/** Declared before /:id so the literal path is not parsed as an enquiry id. */
+productEnquiryRoutes.get(
+  '/assignees',
+  requirePermission('PRODUCT_ENQUIRY', 'VIEW'),
+  controller.assignees,
+);
+
 productEnquiryRoutes.get(
   '/:id',
   requirePermission('PRODUCT_ENQUIRY', 'VIEW'),

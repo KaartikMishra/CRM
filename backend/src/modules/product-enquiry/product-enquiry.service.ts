@@ -197,6 +197,23 @@ export async function getEnquiry(
   return { enquiry, serverTime: now.toISOString() };
 }
 
+/**
+ * §22/§34 — the employees an enquiry can be assigned to.
+ *
+ * Deliberately scoped to this module rather than exposed as a Users API: it
+ * exists so the Towards picker and the Towards filter have something to show.
+ * Returns identity only — no email, no hash, no permission matrix.
+ */
+export async function listAssignees(): Promise<
+  { id: string; name: string; employeeId: string; role: AuthenticatedUser['role'] }[]
+> {
+  return prisma.user.findMany({
+    where: { isActive: true },
+    select: { id: true, name: true, employeeId: true, role: true },
+    orderBy: { name: 'asc' },
+  });
+}
+
 // ---------------------------------------------------------------------------
 //  Header edit (§34 PATCH)
 // ---------------------------------------------------------------------------

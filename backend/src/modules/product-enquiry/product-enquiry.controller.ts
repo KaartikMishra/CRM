@@ -36,6 +36,10 @@ export async function create(req: Request, res: Response): Promise<void> {
   sendCreated(res, { enquiry });
 }
 
+export async function assignees(_req: Request, res: Response): Promise<void> {
+  sendSuccess(res, { assignees: await enquiries.listAssignees() });
+}
+
 export async function list(req: Request, res: Response): Promise<void> {
   const { items, nextCursor, serverTime } = await enquiries.listEnquiries(
     validatedQuery<EnquiryListQuery>(req),

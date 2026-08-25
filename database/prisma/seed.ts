@@ -94,6 +94,16 @@ async function seedUsers(): Promise<void> {
       throw new Error(`${user.passwordEnvVar} must be at least 8 characters.`);
     }
 
+    // A '$' survives dotenv but is expanded by tools that do variable
+    // substitution, which silently seeds a different password from the one in
+    // .env. Refuse rather than create an account nobody can sign into.
+    if (password.includes('$')) {
+      throw new Error(
+        `${user.passwordEnvVar} contains '$', which some env loaders expand. ` +
+          'Use a password without it.',
+      );
+    }
+
     const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
 
     await prisma.user.upsert({

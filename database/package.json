@@ -22,7 +22,7 @@
     "migrate:deploy": "dotenv -e ../.env -- prisma migrate deploy",
     "migrate:invariants": "prisma migrate dev --create-only --name business_invariants",
     "studio": "dotenv -e ../.env -- prisma studio",
-    "seed": "dotenv -e ../.env -- tsx prisma/seed.ts",
+    "seed": "tsx prisma/seed.ts",
     "build": "dotenv -e ../.env -- prisma generate && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "migrate:status": "dotenv -e ../.env -- prisma migrate status",
@@ -30,7 +30,7 @@
     "validate": "dotenv -e ../.env -- prisma validate"
   },
   "prisma": {
-    "seed": "dotenv -e ../.env -- tsx prisma/seed.ts"
+    "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.0.0",
