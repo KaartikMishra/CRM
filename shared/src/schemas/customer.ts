@@ -22,7 +22,11 @@ export const createCustomerSchema = z.object({
 export const customerSearchSchema = z.object({
   q: z.string().trim().max(160).optional(),
   type: z.enum(CUSTOMER_TYPES).optional(),
+  /** Typeahead sizing; the list is for picking, not for browsing. */
+  limit: z.coerce.number().int().min(1).max(50).default(20),
 });
+
+export type CustomerSearchQuery = z.infer<typeof customerSearchSchema>;
 
 /** The enquiry form either picks an existing customer or creates one inline. */
 export const customerSelectionSchema = z

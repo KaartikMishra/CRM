@@ -173,3 +173,19 @@ export type FullSubmitBlocker = {
   name: string;
   status: EnquiryProductStatus;
 };
+
+/** The customer master as the picker sees it. */
+export type CustomerView = CustomerRef & {
+  phone: string | null;
+  email: string | null;
+  createdAt: IsoDateTime;
+};
+
+/** The vendor master as the picker sees it. */
+export type VendorView = VendorRef & {
+  contactPerson: string | null;
+  phone: string | null;
+  email: string | null;
+  city: string | null;
+  isActive: boolean;
+};
