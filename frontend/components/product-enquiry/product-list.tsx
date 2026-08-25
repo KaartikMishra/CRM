@@ -62,6 +62,8 @@ export function ProductList({ enquiryId, products, canRespond }: Props) {
   const [notes, setNotes] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
 
+  const [imageAssetId, setImageAssetId] = useState<string | null>(null);
+
   // no-vendor draft
   const [noVendorReason, setNoVendorReason] = useState('');
 
@@ -75,6 +77,7 @@ export function ProductList({ enquiryId, products, canRespond }: Props) {
     setDeliveryDays('');
     setWeightValue('');
     setNotes('');
+    setImageAssetId(null);
     setErrors({});
   }
 
@@ -91,6 +94,8 @@ export function ProductList({ enquiryId, products, canRespond }: Props) {
         ? { weight: { value: weight, unit: weightUnit } }
         : {}),
       ...(notes.trim() ? { notes: notes.trim() } : {}),
+      // §32 — kept separate from the customer's own product image.
+      ...(imageAssetId ? { imageAssetId } : {}),
     };
 
     const parsed = createVendorResponseSchema.safeParse(candidate);
@@ -273,7 +278,11 @@ export function ProductList({ enquiryId, products, canRespond }: Props) {
           </DialogHeader>
 
           <div className="grid gap-4 sm:grid-cols-[120px_1fr]">
-            <ImageUploadField label="Vendor image" />
+            <ImageUploadField
+              label="Vendor image"
+              value={imageAssetId}
+              onChange={setImageAssetId}
+            />
 
             <div className="flex flex-col gap-4">
               <div className="flex flex-col gap-1.5">

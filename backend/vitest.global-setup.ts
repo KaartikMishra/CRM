@@ -16,8 +16,14 @@ import { resolve } from 'node:path';
 
 config({ path: resolve(__dirname, '../.env') });
 
-const ATTEMPTS = 6;
+/*
+  Neon suspends idle compute and a cold resume has been observed to take about
+  a minute. The budget below spans roughly two, so a suspended instance costs
+  the run some waiting rather than a wholesale failure.
+*/
+const ATTEMPTS = 12;
 const BACKOFF_MS = 2_000;
+const MAX_BACKOFF_MS = 15_000;
 
 export default async function setup(): Promise<void> {
   // Imported after dotenv, so the client sees DATABASE_URL.
@@ -42,7 +48,7 @@ export default async function setup(): Promise<void> {
             `Last error: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`,
         );
       }
-      await new Promise((r) => setTimeout(r, BACKOFF_MS * attempt));
+      await new Promise((r) => setTimeout(r, Math.min(BACKOFF_MS * attempt, MAX_BACKOFF_MS)));
     }
   }
 }

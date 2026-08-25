@@ -70,7 +70,7 @@ export function Sidebar() {
                     'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
                     collapsed && 'justify-center px-0',
                     active
-                      ? 'bg-accent-soft font-medium text-accent'
+                      ? 'bg-brass-soft font-medium text-accent'
                       : 'text-ink-2 hover:bg-surface-2 hover:text-ink',
                   )}
                 >

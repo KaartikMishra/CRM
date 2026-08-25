@@ -24,6 +24,13 @@ declare global {
   namespace Express {
     interface Request {
       validated: ValidatedData;
+      /** Set by multer on the single upload route. */
+      file?: {
+        buffer: Buffer;
+        mimetype: string;
+        size: number;
+        originalname: string;
+      };
     }
   }
 }

@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LogOut, Menu, Search } from 'lucide-react';
+import { LogOut, Search } from 'lucide-react';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -15,7 +15,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { NAV_ITEMS } from './nav-items';
-import { Logo } from './logo';
+import { LogoMark } from './logo';
+import { MobileNav } from './mobile-nav';
 
 type Props = {
   name: string;
@@ -45,9 +46,10 @@ export function Topbar({ name, employeeId, role, initials, onSignOut }: Props) {
 
   return (
     <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-4 border-b border-line bg-surface/95 px-4 backdrop-blur sm:px-6">
-      <div className="lg:hidden">
+      <div className="flex items-center gap-1 lg:hidden">
+        <MobileNav />
         <Link href="/dashboard" aria-label="RoyalStuffs CRM home">
-          <Logo collapsed />
+          <LogoMark size={30} />
         </Link>
       </div>
 
@@ -111,11 +113,6 @@ export function Topbar({ name, employeeId, role, initials, onSignOut }: Props) {
           </DropdownMenuContent>
         </DropdownMenu>
 
-        <Button variant="ghost" size="icon" className="lg:hidden" aria-label="Open navigation" asChild>
-          <Link href="/product-enquiry">
-            <Menu className="size-4" />
-          </Link>
-        </Button>
       </div>
     </header>
   );

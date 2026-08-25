@@ -38,6 +38,28 @@ const envSchema = z.object({
   ENQUIRY_SLA_MINUTES: z.coerce.number().int().positive().default(15),
   ENQUIRY_NUMBER_PERIOD: z.enum(['CALENDAR', 'FINANCIAL']).default('CALENDAR'),
 
+  /**
+   * Cloudinary, as a single credential string:
+   *   cloudinary://<api_key>:<api_secret>@<cloud_name>
+   *
+   * Optional on purpose — the API boots without it and uploads report that
+   * they are unavailable, rather than a missing image service taking the whole
+   * service down. The secret inside it is never logged or returned.
+   */
+  CLOUDINARY_URL: z
+    .preprocess(
+      // A key present but blank in .env means "not configured", not "invalid".
+      (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+      z
+        .string()
+        .regex(/^cloudinary:\/\/[^:]+:[^@]+@[^/]+$/, 'CLOUDINARY_URL is malformed')
+        .optional(),
+    )
+    .optional(),
+
+  /** Largest image accepted, in megabytes. */
+  UPLOAD_MAX_MB: z.coerce.number().int().min(1).max(25).default(5),
+
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 });
 

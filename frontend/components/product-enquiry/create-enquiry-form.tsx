@@ -53,6 +53,8 @@ type ProductDraft = {
   height: string;
   dimensionUnit: (typeof DIMENSION_UNITS)[number];
   similarOptionNeeded: boolean;
+  /** MediaAsset id returned by the upload endpoint, once an image is attached. */
+  imageAssetId: string | null;
 };
 
 const emptyProduct = (): ProductDraft => ({
@@ -66,6 +68,7 @@ const emptyProduct = (): ProductDraft => ({
   height: '',
   dimensionUnit: 'CM',
   similarOptionNeeded: false,
+  imageAssetId: null,
 });
 
 const num = (v: string): number | undefined => {
@@ -139,6 +142,7 @@ export function CreateEnquiryForm({
           name: p.name.trim(),
           quantity: num(p.quantity) ?? Number.NaN,
           similarOptionNeeded: p.similarOptionNeeded,
+          ...(p.imageAssetId ? { imageAssetId: p.imageAssetId } : {}),
           ...(weight !== undefined ? { weight: { value: weight, unit: p.weightUnit } } : {}),
           ...(length !== undefined && width !== undefined && height !== undefined
             ? { dimension: { length, width, height, unit: p.dimensionUnit } }
@@ -332,7 +336,10 @@ export function CreateEnquiryForm({
               </div>
 
               <div className="grid gap-4 sm:grid-cols-[132px_1fr]">
-                <ImageUploadField />
+                <ImageUploadField
+                  value={product.imageAssetId}
+                  onChange={(assetId) => updateProduct(product.key, { imageAssetId: assetId })}
+                />
 
                 <div className="flex flex-col gap-4">
                   <div className="flex flex-col gap-1.5">

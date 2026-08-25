@@ -32,11 +32,21 @@ async function forward(req: NextRequest, path: string[]): Promise<NextResponse> 
   const contentType = req.headers.get('content-type');
   if (contentType) headers.set('Content-Type', contentType);
 
+  // Forwarded as bytes, not text: multipart uploads carry binary and a
+  // boundary that must survive the hop intact. The incoming Content-Type
+  // (including that boundary) is passed through untouched above.
   const body =
-    req.method === 'GET' || req.method === 'HEAD' ? undefined : await req.text();
+    req.method === 'GET' || req.method === 'HEAD'
+      ? undefined
+      : Buffer.from(await req.arrayBuffer());
 
   try {
-    const response = await fetch(target, { method: req.method, headers, body, cache: 'no-store' });
+    const response = await fetch(target, {
+      method: req.method,
+      headers,
+      body,
+      cache: 'no-store',
+    });
     const payload = await response.text();
     return new NextResponse(payload, {
       status: response.status,

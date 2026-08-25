@@ -12,11 +12,14 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: 'bg-accent text-accent-ink hover:bg-accent-hover',
+        // Charcoal on brass reads as gold leaf and clears AA at 6.8:1;
+        // white on brass would be 2.4:1 and is deliberately not offered.
+        default: 'bg-brass text-ink hover:bg-brass-hover',
         outline: 'border border-line-2 bg-surface text-ink hover:bg-surface-2',
         subtle: 'bg-surface-2 text-ink hover:bg-surface-3',
         ghost: 'text-ink-2 hover:bg-surface-2 hover:text-ink',
         destructive: 'bg-critical text-white hover:opacity-90',
+        brass: 'border border-brass-line bg-brass-soft text-accent hover:bg-brass-soft/70',
         link: 'text-accent underline-offset-4 hover:underline',
       },
       size: {

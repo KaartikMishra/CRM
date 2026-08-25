@@ -22,8 +22,8 @@ import { resolve } from 'node:path';
 
 config({ path: resolve(__dirname, '../.env') });
 
-const ATTEMPTS = 5;
-const BACKOFF_MS = 1_500;
+const ATTEMPTS = 8;
+const BACKOFF_MS = 2_000;
 
 beforeAll(async () => {
   const { prisma } = await import('@rs/database');
@@ -42,4 +42,4 @@ beforeAll(async () => {
       await new Promise((r) => setTimeout(r, BACKOFF_MS * attempt));
     }
   }
-}, 60_000);
+}, 120_000);

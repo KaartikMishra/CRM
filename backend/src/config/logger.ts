@@ -19,6 +19,9 @@ const REDACTED_PATHS = [
   'passwordHash',
   'AUTH_SECRET',
   'DATABASE_URL',
+  'CLOUDINARY_URL',
+  'api_secret',
+  '*.api_secret',
   '*.password',
   '*.passwordHash',
 ];

@@ -1,7 +1,6 @@
 import { redirect } from 'next/navigation';
 import { Sidebar } from '@/components/layout/sidebar';
 import { Topbar } from '@/components/layout/topbar';
-import { MobileNav } from '@/components/layout/mobile-nav';
 import { getCurrentUser, initials } from '@/lib/current-user';
 import { signOutAction } from './actions';
 
@@ -28,7 +27,6 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           onSignOut={signOutAction}
         />
         <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">{children}</main>
-        <MobileNav />
       </div>
     </div>
   );

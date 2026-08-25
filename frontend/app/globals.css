@@ -3,98 +3,88 @@
 /*
   RoyalStuffs CRM — design tokens.
 
-  The palette comes from the company's own material: antique brass on warm
-  ivory, with patina green for positive states and oxide red for failures.
-  Nothing here is a generic dashboard blue.
+  A single light theme, deliberately. This is an operations tool used all day
+  in an office; committing to one calm, bright surface keeps every screen
+  legible and predictable rather than shifting with whatever the operating
+  system happens to prefer.
 
-  The interface is meant to read as expensive because of spacing, hierarchy and
-  restraint — so shadows stay faint, radii stay small, and the accent is used
-  sparingly rather than everywhere.
+  The accent is brass, taken from what RoyalStuffs actually makes. It is used
+  sparingly — primary actions, the active nav item, selected states, a few key
+  numbers — while the interface itself stays ivory and white. Gold everywhere
+  reads as cheap; gold in three places reads as expensive.
 */
 @theme {
-  /* surfaces — warm ivory rather than pure grey */
-  --color-ground: #faf8f5;
+  /* surfaces */
+  --color-ground: #faf9f6;
   --color-surface: #ffffff;
-  --color-surface-2: #f4f1ea;
-  --color-surface-3: #ece7dc;
+  --color-surface-2: #f5f3ee;
+  --color-surface-3: #ede9e0;
 
-  /* ink — warm near-black, never pure #000 */
-  --color-ink: #1a1815;
-  --color-ink-2: #4a453d;
-  --color-muted: #857e73;
-  --color-faint: #a8a096;
+  /* text */
+  --color-ink: #1f1f1c;
+  --color-ink-2: #45443e;
+  --color-muted: #6b6a64;
+  --color-faint: #9a9890;
 
   /* structure */
-  --color-line: #e6e1d9;
-  --color-line-2: #d4cec2;
+  --color-line: #e7e2d8;
+  --color-line-2: #d8d1c3;
 
-  /* antique brass — the one accent, used sparingly */
+  /*
+    Two brasses, because one cannot do both jobs.
+
+    --color-brass is the brand gold. At roughly 2.1:1 against white it is a
+    fill, not a text colour: primary buttons pair it with charcoal ink, which
+    lands near 8.9:1 and reads as gold leaf rather than a coloured button.
+
+    --color-accent is the same hue darkened until it passes AA on white
+    (~4.6:1), for links, active labels and icons that must actually be read.
+  */
+  --color-brass: #c9a227;
+  --color-brass-hover: #b8931f;
+  --color-brass-soft: #faf4e2;
+  --color-brass-line: #e8d9a8;
+
   --color-accent: #8a6a2f;
-  --color-accent-hover: #75591f;
-  --color-accent-ink: #ffffff;
-  --color-accent-soft: #f5efe1;
-  --color-accent-line: #d9c9a3;
+  --color-accent-hover: #715526;
+  --color-accent-ink: #1f1f1c;
+  --color-accent-soft: #faf4e2;
+  --color-accent-line: #e8d9a8;
 
-  /* semantic — separate from the accent, per dataviz discipline */
-  --color-positive: #2f6f52;
-  --color-positive-soft: #e8f1ec;
-  --color-warning: #a8730f;
-  --color-warning-soft: #fbf1de;
-  --color-critical: #9e3b2e;
-  --color-critical-soft: #f9eae7;
+  /* Semantic — deliberately muted, never the brand gold, and each darkened
+     until it clears 4.5:1 on its own soft background so badge text at 12px is
+     genuinely readable rather than merely tasteful. */
+  --color-positive: #447251;
+  --color-positive-soft: #eef4ef;
+  --color-warning: #8c6414;
+  --color-warning-soft: #fdf5e6;
+  --color-critical: #a8443a;
+  --color-critical-soft: #fbeeec;
+
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+
+  /* restrained: a hairline and a soft lift, nothing heavier */
+  --shadow-card: 0 1px 2px rgba(31, 31, 28, 0.04);
+  --shadow-raised: 0 1px 2px rgba(31, 31, 28, 0.04), 0 8px 24px -14px rgba(31, 31, 28, 0.16);
+  --shadow-overlay: 0 16px 48px -16px rgba(31, 31, 28, 0.22);
 
   /* Bound to the next/font variables set on <html>. Named distinctly so the
      Tailwind family tokens are not self-referential. */
   --font-sans: var(--font-instrument), ui-sans-serif, system-ui, sans-serif;
   --font-serif: var(--font-cormorant), ui-serif, Georgia, serif;
   --font-mono: var(--font-plex-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
-
-  --radius-sm: 0.25rem;
-  --radius-md: 0.375rem;
-  --radius-lg: 0.5rem;
-
-  --shadow-card: 0 1px 2px rgba(26, 24, 21, 0.04);
-  --shadow-raised: 0 1px 3px rgba(26, 24, 21, 0.06), 0 8px 24px -12px rgba(26, 24, 21, 0.14);
-  --shadow-overlay: 0 12px 40px -12px rgba(26, 24, 21, 0.28);
-}
-
-@media (prefers-color-scheme: dark) {
-  @theme {
-    --color-ground: #14120f;
-    --color-surface: #1c1917;
-    --color-surface-2: #241f1b;
-    --color-surface-3: #2e2822;
-
-    --color-ink: #ede9e3;
-    --color-ink-2: #cec7bc;
-    --color-muted: #9a9187;
-    --color-faint: #736c63;
-
-    --color-line: #2e2822;
-    --color-line-2: #3d352d;
-
-    --color-accent: #c9a227;
-    --color-accent-hover: #dbb43a;
-    --color-accent-ink: #14120f;
-    --color-accent-soft: #2a2418;
-    --color-accent-line: #4a3f24;
-
-    --color-positive: #6cc39a;
-    --color-positive-soft: #16281f;
-    --color-warning: #d9a441;
-    --color-warning-soft: #2b2416;
-    --color-critical: #e0796a;
-    --color-critical-soft: #2e1c18;
-
-    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --shadow-raised: 0 1px 3px rgba(0, 0, 0, 0.5), 0 8px 24px -12px rgba(0, 0, 0, 0.7);
-    --shadow-overlay: 0 12px 40px -12px rgba(0, 0, 0, 0.8);
-  }
 }
 
 html,
 body {
   height: 100%;
+}
+
+/* The app commits to light, so form controls and scrollbars follow. */
+html {
+  color-scheme: light;
 }
 
 body {
@@ -119,6 +109,15 @@ body {
 .scroll-x {
   overflow-x: auto;
   overscroll-behavior-x: contain;
+}
+
+/*
+  The supplied logo ships with an opaque white background and no alpha channel.
+  Multiplying drops that white into whatever sits behind it, so the mark reads
+  cleanly on ivory and on white without the source file being altered.
+*/
+.logo-blend {
+  mix-blend-mode: multiply;
 }
 
 @media (prefers-reduced-motion: reduce) {
