@@ -98,6 +98,7 @@ const TITLE_CASE: Record<string, string> = {
   ON_TIME: 'On Time',
   DELAYED: 'Delayed',
   SIMILAR_PRODUCT: 'Similar Product',
+  EXACT_PRODUCT: 'Exact Product',
   ADMIN: 'Admin',
   USER: 'User',
 };

@@ -142,6 +142,10 @@ export async function cleanup(): Promise<void> {
     await prisma.customer.deleteMany({ where: { id: { in: created.customerIds } } });
   }
   if (created.vendorIds.length) {
+    // Vendor -> VendorResponse is Restrict, so a vendor still referenced by any
+    // response cannot be removed. Clear those responses first; they belong to
+    // enquiries this suite created, which are already gone or going.
+    await prisma.vendorResponse.deleteMany({ where: { vendorId: { in: created.vendorIds } } });
     await prisma.vendor.deleteMany({ where: { id: { in: created.vendorIds } } });
   }
   if (created.userIds.length) {

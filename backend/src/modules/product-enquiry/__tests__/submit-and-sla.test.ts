@@ -131,8 +131,8 @@ describe('vendor responses', () => {
     expect(res.body.code).toBe('PRODUCT_NOT_FOUND');
   });
 
-  it.each(['EXACT_PRODUCT', 'EXACT', 'SIMILAR'])(
-    'rejects the removed match type %s',
+  it.each(['EXACT', 'SIMILAR', 'EXACT_PRODUCT_MATCH', 'similar_product'])(
+    'rejects the invalid match type %s',
     async (matchType) => {
       const enquiry = await newEnquiry(1);
       const res = await respond(enquiry.id, enquiry.products[0]!.id, {
@@ -143,6 +143,101 @@ describe('vendor responses', () => {
       expect(res.status).toBe(422);
     },
   );
+
+  it.each(['SIMILAR_PRODUCT', 'EXACT_PRODUCT'] as const)(
+    'accepts and persists match type %s',
+    async (matchType) => {
+      const enquiry = await newEnquiry(1);
+      const res = await respond(enquiry.id, enquiry.products[0]!.id, {
+        ...vendorResponsePayload(vendor.id),
+        matchType,
+      });
+
+      expect(res.status).toBe(201);
+      const saved = res.body.data!.enquiry.products[0]!.vendorResponses[0]!;
+      expect(saved.matchType).toBe(matchType);
+
+      // And it survives a re-read, not just the create response.
+      const reread = await api<Wrapped>('GET', `/api/product-enquiries/${enquiry.id}`, { token });
+      expect(reread.body.data!.enquiry.products[0]!.vendorResponses[0]!.matchType).toBe(matchType);
+    },
+  );
+
+  it('records Same Day when the vendor offers it', async () => {
+    const enquiry = await newEnquiry(1);
+    const res = await respond(enquiry.id, enquiry.products[0]!.id, {
+      ...vendorResponsePayload(vendor.id),
+      sameDay: true,
+    });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data!.enquiry.products[0]!.vendorResponses[0]!.sameDay).toBe(true);
+
+    const reread = await api<Wrapped>('GET', `/api/product-enquiries/${enquiry.id}`, { token });
+    expect(reread.body.data!.enquiry.products[0]!.vendorResponses[0]!.sameDay).toBe(true);
+  });
+
+  it('records Same Day as false when explicitly declined', async () => {
+    const enquiry = await newEnquiry(1);
+    const res = await respond(enquiry.id, enquiry.products[0]!.id, {
+      ...vendorResponsePayload(vendor.id),
+      sameDay: false,
+    });
+
+    expect(res.body.data!.enquiry.products[0]!.vendorResponses[0]!.sameDay).toBe(false);
+  });
+
+  it('leaves Same Day null when the vendor did not state it', async () => {
+    const enquiry = await newEnquiry(1);
+    const res = await respond(enquiry.id, enquiry.products[0]!.id);
+
+    // Omitted is "not stated", which is distinct from an explicit false.
+    expect(res.body.data!.enquiry.products[0]!.vendorResponses[0]!.sameDay).toBeNull();
+  });
+
+  it('rejects a non-boolean Same Day', async () => {
+    const enquiry = await newEnquiry(1);
+    const res = await respond(enquiry.id, enquiry.products[0]!.id, {
+      ...vendorResponsePayload(vendor.id),
+      sameDay: 'yes',
+    });
+
+    expect(res.status).toBe(422);
+  });
+
+  it('still reads a response written before Same Day existed', async () => {
+    const enquiry = await newEnquiry(1);
+    await respond(enquiry.id, enquiry.products[0]!.id);
+
+    // Reproduce a pre-migration row exactly: SIMILAR_PRODUCT with a NULL
+    // sameDay, which is what all 21 existing rows look like.
+    await prisma.vendorResponse.updateMany({
+      where: { enquiryProductId: enquiry.products[0]!.id },
+      data: { sameDay: null, matchType: 'SIMILAR_PRODUCT' },
+    });
+
+    const res = await api<Wrapped>('GET', `/api/product-enquiries/${enquiry.id}`, { token });
+    const saved = res.body.data!.enquiry.products[0]!.vendorResponses[0]!;
+
+    expect(res.status).toBe(200);
+    expect(saved.matchType).toBe('SIMILAR_PRODUCT');
+    expect(saved.sameDay).toBeNull();
+    // The rest of the record is untouched by the migration. Prisma renders
+    // NUMERIC without trailing zeros, so 850.00 comes back as '850'.
+    expect(Number(saved.ratePerUnit)).toBe(850);
+    expect(saved.deliveryWithinDays).toBe(7);
+  });
+
+  it('treats responses differing only in Same Day as distinct quotes', async () => {
+    const enquiry = await newEnquiry(1);
+    const body = vendorResponsePayload(vendor.id);
+
+    await respond(enquiry.id, enquiry.products[0]!.id, { ...body, sameDay: true });
+    const second = await respond(enquiry.id, enquiry.products[0]!.id, { ...body, sameDay: false });
+
+    // Same vendor and rate, but a different delivery promise — not a retry.
+    expect(second.body.data!.enquiry.products[0]!.vendorResponses).toHaveLength(2);
+  });
 
   it('rejects a negative rate and a zero delivery time', async () => {
     const enquiry = await newEnquiry(1);

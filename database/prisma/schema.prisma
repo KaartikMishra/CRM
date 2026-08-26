@@ -201,10 +201,11 @@ enum DimensionUnit {
   FT
 }
 
-/// §38 — a vendor response always represents a similar/alternative option for
-/// the customer's requested product, so this enum has a single value.
+/// §38 — how a vendor's offering relates to the product the customer asked for.
+/// SIMILAR_PRODUCT keeps its original position so existing rows are unaffected.
 enum ProductMatchType {
   SIMILAR_PRODUCT
+  EXACT_PRODUCT
 }
 
 model ProductEnquiry {
@@ -325,6 +326,13 @@ model VendorResponse {
 
   /// §36 — structured days rather than free text.
   deliveryWithinDays Int
+  /// The vendor can deliver on the day of order.
+  ///
+  /// A separate flag rather than deliveryWithinDays = 0, which the
+  /// delivery_positive CHECK forbids, or = 1, which already means "tomorrow".
+  /// Nullable so vendor responses recorded before this field existed remain
+  /// valid and read as "not stated" rather than a false denial.
+  sameDay            Boolean?
   deliveryNote       String?
 
   weightValue   Decimal?       @db.Decimal(10, 3)

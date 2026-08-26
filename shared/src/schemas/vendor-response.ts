@@ -10,9 +10,9 @@ export const createVendorResponseSchema = z.object({
   vendorId: cuidSchema,
   /** §32 — kept separate from the customer's own product image. */
   imageAssetId: cuidSchema.optional(),
-  /** §38 — a vendor response is always a similar/alternative option. */
+  /** §38 — an exact match for the requested product, or an alternative. */
   matchType: z.enum(PRODUCT_MATCH_TYPES, {
-    errorMap: () => ({ message: 'Product match must be "Similar Product"' }),
+    errorMap: () => ({ message: 'Choose Exact Product or Similar Product' }),
   }),
   /** Q8 — per unit. The line total is derived, never stored. */
   ratePerUnit: amountSchema,
@@ -23,6 +23,13 @@ export const createVendorResponseSchema = z.object({
     .int('Use whole days')
     .positive('Delivery time must be at least 1 day')
     .max(365, 'Delivery time looks too long — check the value'),
+  /**
+   * The vendor can deliver on the day of order.
+   *
+   * Optional, so a response that does not mention it is recorded as "not
+   * stated" rather than an explicit no — and so existing rows stay valid.
+   */
+  sameDay: z.boolean().optional(),
   deliveryNote: z.string().trim().max(300).optional(),
   weight: weightSchema.optional(),
   dimension: dimensionSchema.optional(),

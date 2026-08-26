@@ -11,7 +11,12 @@ import { formatCurrency, formatDimension, formatWeight, label } from '@/lib/form
 export function VendorResponseCard({ response }: { response: VendorResponseView }) {
   const details: { label: string; value: string }[] = [
     { label: 'Rate', value: `${formatCurrency(response.ratePerUnit, response.currency)} / unit` },
-    { label: 'Delivery', value: `${response.deliveryWithinDays} days` },
+    {
+      label: 'Delivery',
+      // Same Day is the stronger promise, so it replaces the day count rather
+      // than sitting beside it and reading as a contradiction.
+      value: response.sameDay ? 'Same Day' : `${response.deliveryWithinDays} days`,
+    },
     { label: 'Weight', value: formatWeight(response.weight) },
     { label: 'Dimensions', value: formatDimension(response.dimension) },
   ];
@@ -23,7 +28,10 @@ export function VendorResponseCard({ response }: { response: VendorResponseView 
           <p className="truncate text-sm font-medium text-ink">{response.vendor.name}</p>
           <p className="mt-0.5 text-xs text-muted">Recorded by {response.createdBy.name}</p>
         </div>
-        <Badge variant="accent">{label(response.matchType)}</Badge>
+        <div className="flex shrink-0 items-center gap-1.5">
+          {response.sameDay && <Badge variant="positive">Same Day</Badge>}
+          <Badge variant="accent">{label(response.matchType)}</Badge>
+        </div>
       </div>
 
       <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">

@@ -57,12 +57,12 @@ export const DIMENSION_UNITS = ['MM', 'CM', 'IN', 'FT'] as const;
 export type DimensionUnit = (typeof DIMENSION_UNITS)[number];
 
 /**
- * §38 — how a vendor response relates to the requested product.
+ * §38 — how a vendor's offering relates to the product the customer asked for.
  *
- * A vendor response always represents a similar/alternative option for the
- * customer's requested product, so SIMILAR_PRODUCT is the only value.
+ * SIMILAR_PRODUCT stays first so it remains the backward-compatible default for
+ * the responses recorded before EXACT_PRODUCT existed.
  */
-export const PRODUCT_MATCH_TYPES = ['SIMILAR_PRODUCT'] as const;
+export const PRODUCT_MATCH_TYPES = ['SIMILAR_PRODUCT', 'EXACT_PRODUCT'] as const;
 export type ProductMatchType = (typeof PRODUCT_MATCH_TYPES)[number];
 
 /** §44 — the Efficiency History event vocabulary. */

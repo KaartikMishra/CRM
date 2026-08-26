@@ -78,6 +78,7 @@ export async function addVendorResponse(
         matchType: input.matchType,
         ratePerUnit: input.ratePerUnit,
         deliveryWithinDays: input.deliveryWithinDays,
+        sameDay: input.sameDay ?? null,
         createdAt: { gte: new Date(at.getTime() - DUPLICATE_WINDOW_MS) },
       },
       select: { id: true },
@@ -92,6 +93,7 @@ export async function addVendorResponse(
           ratePerUnit: input.ratePerUnit,
           currency: input.currency,
           deliveryWithinDays: input.deliveryWithinDays,
+          sameDay: input.sameDay ?? null,
           deliveryNote: input.deliveryNote ?? null,
           notes: input.notes ?? null,
           imageId: input.imageAssetId ?? null,
@@ -120,6 +122,8 @@ export async function addVendorResponse(
           vendorName: vendor.name,
           ratePerUnit: input.ratePerUnit,
           deliveryWithinDays: input.deliveryWithinDays,
+          matchType: input.matchType,
+          ...(input.sameDay === undefined ? {} : { sameDay: input.sameDay }),
         },
       });
     }

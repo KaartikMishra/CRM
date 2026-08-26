@@ -71,6 +71,8 @@ export type VendorResponseView = {
   ratePerUnit: DecimalString;
   currency: string;
   deliveryWithinDays: number;
+  /** Null when the vendor did not state whether same-day delivery is possible. */
+  sameDay: boolean | null;
   deliveryNote: string | null;
   weight: WeightView | null;
   dimension: DimensionView | null;

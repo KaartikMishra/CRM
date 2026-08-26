@@ -11,6 +11,7 @@ import {
 } from '@rs/shared';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
@@ -60,6 +61,10 @@ export function ProductList({ enquiryId, products, canRespond }: Props) {
   const [weightValue, setWeightValue] = useState('');
   const [weightUnit, setWeightUnit] = useState<(typeof WEIGHT_UNITS)[number]>('KG');
   const [notes, setNotes] = useState('');
+  const [sameDay, setSameDay] = useState(false);
+  // SIMILAR_PRODUCT first, matching the enum order and the historical default.
+  const [matchType, setMatchType] =
+    useState<(typeof PRODUCT_MATCH_TYPES)[number]>('SIMILAR_PRODUCT');
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const [imageAssetId, setImageAssetId] = useState<string | null>(null);
@@ -77,6 +82,8 @@ export function ProductList({ enquiryId, products, canRespond }: Props) {
     setDeliveryDays('');
     setWeightValue('');
     setNotes('');
+    setSameDay(false);
+    setMatchType('SIMILAR_PRODUCT');
     setImageAssetId(null);
     setErrors({});
   }
@@ -87,9 +94,12 @@ export function ProductList({ enquiryId, products, canRespond }: Props) {
     const weight = weightValue.trim() === '' ? undefined : Number(weightValue);
     const candidate = {
       vendorId: vendor?.id ?? '',
-      matchType: PRODUCT_MATCH_TYPES[0],
+      matchType,
       ratePerUnit: rate.trim(),
       deliveryWithinDays: Number(deliveryDays),
+      // Only sent when the vendor actually offers it, so an untouched control
+      // records "not stated" rather than an explicit refusal.
+      ...(sameDay ? { sameDay: true } : {}),
       ...(weight !== undefined && Number.isFinite(weight)
         ? { weight: { value: weight, unit: weightUnit } }
         : {}),
@@ -363,13 +373,34 @@ export function ProductList({ enquiryId, products, canRespond }: Props) {
               </div>
 
               <div className="flex flex-col gap-1.5">
-                <Label>Product match</Label>
-                {/* Only one value exists in the backend, so this states the
-                    fact rather than offering a choice that isn't one. */}
-                <div className="flex h-10 items-center rounded-md border border-line bg-surface-2 px-3">
-                  <Badge variant="accent">{label(PRODUCT_MATCH_TYPES[0])}</Badge>
-                </div>
+                <Label htmlFor="matchType">Product match</Label>
+                <Select
+                  value={matchType}
+                  onValueChange={(v) => setMatchType(v as typeof matchType)}
+                >
+                  <SelectTrigger id="matchType">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PRODUCT_MATCH_TYPES.map((m) => (
+                      <SelectItem key={m} value={m}>
+                        {label(m)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {errors.matchType && (
+                  <p className="text-xs text-critical">{errors.matchType}</p>
+                )}
               </div>
+
+              <label className="flex w-fit cursor-pointer items-center gap-2.5 text-sm text-ink-2">
+                <Checkbox
+                  checked={sameDay}
+                  onCheckedChange={(checked) => setSameDay(checked === true)}
+                />
+                Same Day
+              </label>
 
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="notes">Notes</Label>
