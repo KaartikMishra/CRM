@@ -39,6 +39,18 @@ export type CustomerRef = {
   type: CustomerType;
 };
 
+/**
+ * The customer plus the two ways to reach them.
+ *
+ * Kept separate from CustomerRef rather than widening it: a list row needs a
+ * name and nothing more, and contact details have no business travelling with
+ * every row of a table. Detail payloads use this; summaries keep CustomerRef.
+ */
+export type CustomerContactRef = CustomerRef & {
+  phone: string | null;
+  email: string | null;
+};
+
 export type VendorRef = {
   id: string;
   name: string;

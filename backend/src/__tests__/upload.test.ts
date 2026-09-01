@@ -99,12 +99,18 @@ describe('authorization', () => {
   });
 
   it('refuses when the permission is revoked for that person', async () => {
-    await prisma.userModulePermission.create({
-      data: { userId: user.id, module: 'PRODUCT_ENQUIRY', action: 'CREATE', allowed: false },
+    // The route admits either PRODUCT_ENQUIRY CREATE or SALES CREATE, so both
+    // have to go for this to test the guard rather than just one branch of it.
+    await prisma.userModulePermission.createMany({
+      data: [
+        { userId: user.id, module: 'PRODUCT_ENQUIRY', action: 'CREATE', allowed: false },
+        { userId: user.id, module: 'SALES', action: 'CREATE', allowed: false },
+      ],
     });
 
     const res = await postImage(PNG, 'a.png', 'image/png', token);
     expect(res.status).toBe(403);
+    // Rejected before any of the upload pipeline ran.
     expect(uploadStream).not.toHaveBeenCalled();
 
     await prisma.userModulePermission.deleteMany({ where: { userId: user.id } });

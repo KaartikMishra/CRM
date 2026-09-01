@@ -40,6 +40,10 @@ const ROLE_DEFAULTS: Record<Role, ModuleMatrix> = {
   },
   USER: {
     PRODUCT_ENQUIRY: { VIEW: true, CREATE: true, EDIT: true, DELETE: false, ASSIGN: false },
+    // Sales mirrors Product Enquiry: employees record and maintain their own
+    // orders, while deleting one and reassigning stay with administrators. The
+    // ownership rules in sales-access.ts narrow "edit" to orders they created.
+    SALES: { VIEW: true, CREATE: true, EDIT: true, DELETE: false, ASSIGN: false },
   },
 };
 

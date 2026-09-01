@@ -77,3 +77,53 @@ ALTER TABLE "ProductEnquiry"
 ALTER TABLE "DelayRecord"
   ADD CONSTRAINT "delay_reason_not_blank"
     CHECK (length(btrim("reason")) >= 5);
+
+-- =============================================================================
+--  Sales Order.
+--
+--  Applied by the 20260826080054_sales_order_module migration rather than by
+--  this file; repeated here so this stays the complete picture of what the
+--  database guarantees.
+-- =============================================================================
+
+-- Quantity is manually entered, whole numbers only, minimum 1.
+ALTER TABLE "SalesOrder"
+  ADD CONSTRAINT "sales_quantity_positive"
+    CHECK ("quantity" > 0);
+
+-- Price is manually entered and must be positive.
+ALTER TABLE "SalesOrder"
+  ADD CONSTRAINT "sales_price_positive"
+    CHECK ("price" > 0);
+
+-- Partial payments are allowed, but never exceed the order's worth. Written
+-- against "quantity" * "price" so the total has one definition, not two.
+ALTER TABLE "SalesOrder"
+  ADD CONSTRAINT "sales_paid_within_total"
+    CHECK ("paidAmount" >= 0 AND "paidAmount" <= "quantity" * "price");
+
+-- The dispatch deadline cannot precede the order date. Same-day is legitimate.
+ALTER TABLE "SalesOrder"
+  ADD CONSTRAINT "sales_dispatch_not_before_order"
+    CHECK ("toBeDispatchedBy" >= "orderDate");
+
+-- The dispatch moment and its verdict are written together or not at all.
+ALTER TABLE "SalesOrder"
+  ADD CONSTRAINT "sales_efficiency_accompanies_dispatch"
+    CHECK (("dispatchedAt" IS NULL) = ("efficiency" IS NULL));
+
+-- A closed order always records when it closed and who closed it.
+ALTER TABLE "SalesOrder"
+  ADD CONSTRAINT "sales_closed_has_closer"
+    CHECK ("status" <> 'CLOSED'
+           OR ("closedAt" IS NOT NULL AND "closedById" IS NOT NULL));
+
+-- An order may only be closed once it is settled in full.
+--
+-- Applied by 20260826115401_sales_close_requires_full_settlement as NOT VALID,
+-- because one order predating the rule is closed with a balance outstanding.
+-- New and updated rows are checked; that historical row is left as recorded.
+ALTER TABLE "SalesOrder"
+  ADD CONSTRAINT "sales_closed_fully_paid"
+    CHECK ("status" <> 'CLOSED' OR "paidAmount" = "quantity" * "price")
+    NOT VALID;

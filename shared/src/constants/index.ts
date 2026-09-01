@@ -43,6 +43,25 @@ export const DEFAULT_PAGE_SIZE = 25;
 export const MAX_PAGE_SIZE = 100;
 
 /**
+ * Sales order ids are entered by hand, never generated.
+ *
+ * Orders reach the CRM from Shopify as often as they are keyed in, so the
+ * accepted shape has to cover what those systems actually produce — `#1001`,
+ * `RS-1001/A`, `SO_2026_44` — rather than a format invented here. Anything
+ * outside this set is almost certainly a typo, so the pattern stays closed.
+ */
+export const SALES_ORDER_ID_MAX_LENGTH = 64;
+export const SALES_ORDER_ID_PATTERN = /^[A-Za-z0-9#\-_/]+$/;
+
+/**
+ * Hard cap on product lines in one sales order.
+ *
+ * Higher than the twenty an enquiry allows: an enquiry is a question about a
+ * handful of products, while an order can legitimately be a long bill.
+ */
+export const MAX_ITEMS_PER_SALES_ORDER = 50;
+
+/**
  * §12 — session JWT contract.
  *
  * Auth.js signs the session token with these claims and Express verifies

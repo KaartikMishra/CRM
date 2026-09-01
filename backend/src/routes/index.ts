@@ -11,6 +11,7 @@ import { authRoutes } from '../modules/auth/auth.routes.js';
 import { customerRoutes } from '../modules/customer/customer.routes.js';
 import { healthRoutes } from '../modules/health/health.routes.js';
 import { productEnquiryRoutes } from '../modules/product-enquiry/product-enquiry.routes.js';
+import { salesRoutes } from '../modules/sales/sales.routes.js';
 import { uploadRoutes } from '../modules/upload/upload.routes.js';
 import { vendorRoutes } from '../modules/vendor/vendor.routes.js';
 
@@ -19,6 +20,7 @@ export const apiRouter = Router();
 apiRouter.use('/health', healthRoutes);
 apiRouter.use('/auth', authRoutes);
 apiRouter.use('/product-enquiries', productEnquiryRoutes);
+apiRouter.use('/sales', salesRoutes);
 apiRouter.use('/customers', customerRoutes);
 apiRouter.use('/vendors', vendorRoutes);
 apiRouter.use('/uploads', uploadRoutes);

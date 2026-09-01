@@ -73,6 +73,12 @@ model User {
   delayRecords      DelayRecord[]
   auditLogs         AuditLog[]
   uploadedAssets    MediaAsset[]
+  createdSalesOrders SalesOrder[]          @relation("SalesOrderCreatedBy")
+  closedSalesOrders  SalesOrder[]          @relation("SalesOrderClosedBy")
+  proposedSalesItems SalesOrderItem[]      @relation("SalesItemProposedBy")
+  approvedSalesItems SalesOrderItem[]      @relation("SalesItemApprovedBy")
+  requestedSalesChanges SalesItemChangeRequest[] @relation("SalesChangeRequestedBy")
+  reviewedSalesChanges  SalesItemChangeRequest[] @relation("SalesChangeReviewedBy")
 
   @@index([role, isActive])
 }
@@ -113,7 +119,8 @@ model Customer {
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
 
-  enquiries ProductEnquiry[]
+  enquiries   ProductEnquiry[]
+  salesOrders SalesOrder[]
 
   /// Not unique: two real firms can legitimately share a name.
   @@index([name])
@@ -152,6 +159,8 @@ model MediaAsset {
   uploadedBy      User             @relation(fields: [uploadedById], references: [id])
   enquiryProducts EnquiryProduct[]
   vendorResponses VendorResponse[]
+  salesOrderItems SalesOrderItem[] @relation("SalesItemImage")
+  salesChangeRequests SalesItemChangeRequest[] @relation("SalesChangeImage")
 
   @@index([uploadedById, createdAt])
 }
@@ -426,6 +435,195 @@ model EnquiryCounter {
   /// "2026" for a calendar year, "2026-27" for an Indian financial year (Q5).
   period    String @id
   lastValue Int    @default(0)
+}
+
+// ---------------------------------------------------------------------------
+//  Sales
+// ---------------------------------------------------------------------------
+
+/// A deliberately linear lifecycle. There is no reopen: leaving CLOSED is not a
+/// sanctioned move, and every closed order therefore carries a frozen verdict.
+enum SalesOrderStatus {
+  OPEN
+  DISPATCHED
+  CLOSED
+}
+
+/// The dispatch verdict. Mirrors EnquiryEfficiency in shape but is its own type,
+/// because the two are frozen by different events and must stay free to diverge.
+enum SalesEfficiency {
+  ON_TIME
+  DELAYED
+}
+
+/// Whether a line counts toward the order.
+///
+/// A line added during editing by someone without approval rights waits here
+/// until an approver acts. PENDING_APPROVAL lines are excluded from every total,
+/// so a proposal cannot move money on its own.
+/// Every item row that exists is part of the order. PENDING_APPROVAL is kept so
+/// no column has to be dropped, but nothing writes it any more: proposals live
+/// in SalesItemChangeRequest, so there is one mechanism rather than two.
+enum SalesItemStatus {
+  ACTIVE
+  PENDING_APPROVAL
+}
+
+/// What a change request is asking for.
+enum SalesChangeType {
+  ADD
+  EDIT
+  REMOVE
+}
+
+/// A request is decided exactly once. The decision is kept rather than deleted,
+/// so an order can show what was asked for and refused, not only what survived.
+enum SalesChangeStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// A proposed change to an order's products, held apart from the products
+/// themselves.
+///
+/// This is the only way an order's lines change after creation. The separation
+/// is the whole point: an EDIT has to hold proposed values *beside* the
+/// untouched original, and a REMOVE has to record intent while the line keeps
+/// counting. Neither is expressible on the item row itself, which has exactly
+/// one quantity and one price.
+///
+/// Nothing here is visible to any total. Order value sums SalesOrderItem rows,
+/// so a pending request cannot move money however long it sits.
+model SalesItemChangeRequest {
+  id      String @id @default(cuid())
+  orderId String
+  /// Null for ADD — there is no line yet. Required for EDIT and REMOVE.
+  itemId  String?
+
+  type   SalesChangeType
+  status SalesChangeStatus @default(PENDING)
+
+  // Proposed values: required for ADD and EDIT, unused by REMOVE.
+  productName    String?
+  productImageId String?
+  quantity       Int?
+  price          Decimal? @db.Decimal(12, 2)
+
+  requestedById String
+  requestedAt   DateTime @default(now())
+
+  /// Written together with reviewedAt when the request is decided.
+  reviewedById String?
+  reviewedAt   DateTime?
+  reviewNote   String?
+
+  order        SalesOrder      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  /// Cascade: if the line is ever removed, its request history goes with it.
+  item         SalesOrderItem? @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  productImage MediaAsset?     @relation("SalesChangeImage", fields: [productImageId], references: [id], onDelete: SetNull)
+  requestedBy  User            @relation("SalesChangeRequestedBy", fields: [requestedById], references: [id])
+  reviewedBy   User?           @relation("SalesChangeReviewedBy", fields: [reviewedById], references: [id])
+
+  @@index([orderId, status])
+  @@index([itemId, status])
+}
+
+/// One sales order, holding one or more product lines.
+///
+/// Money invariant: the only figure stored on the order itself is paidAmount.
+/// The total is the sum of its ACTIVE lines and pending is total − paid; neither
+/// has a column anywhere, so there is exactly one definition of each and nothing
+/// to drift. A read-only field with no column cannot be edited by a hand-crafted
+/// request, only by one that does not exist.
+///
+/// Because the total now spans two tables, a row-local CHECK can no longer
+/// express the payment ceiling or the settlement rule. Deferred constraint
+/// triggers do that instead — see the sales_order_multi_item migration.
+model SalesOrder {
+  /// Used in URLs — not guessable, and stable even if the order id is corrected.
+  id      String @id @default(cuid())
+  /// Manually entered, never generated: orders arrive from Shopify as often as
+  /// they are keyed in by hand, so the CRM records the number rather than
+  /// inventing a competing one.
+  orderId String @unique
+
+  customerId String
+
+  /// Partial payments accumulate here. The ceiling is the sum of the order's
+  /// ACTIVE lines, enforced by trigger rather than written down a second time.
+  paidAmount Decimal @db.Decimal(14, 2) @default(0)
+
+  orderDate        DateTime
+  /// The dispatch deadline. A date, so the verdict below compares against the
+  /// end of this day rather than its midnight.
+  toBeDispatchedBy DateTime
+
+  status SalesOrderStatus @default(OPEN)
+
+  /// Written exactly once, together with efficiency, at dispatch.
+  dispatchedAt DateTime?
+  /// Frozen at dispatch and never recalculated — a later edit to the deadline
+  /// cannot retroactively rewrite whether this order went out on time.
+  efficiency   SalesEfficiency?
+
+  closedAt   DateTime?
+  closedById String?
+
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  customer  Customer         @relation(fields: [customerId], references: [id])
+  createdBy User             @relation("SalesOrderCreatedBy", fields: [createdById], references: [id])
+  closedBy  User?            @relation("SalesOrderClosedBy", fields: [closedById], references: [id])
+  items          SalesOrderItem[]
+  changeRequests SalesItemChangeRequest[]
+
+  @@index([status, toBeDispatchedBy])
+  @@index([customerId])
+  @@index([orderDate])
+  @@index([efficiency, orderDate])
+}
+
+/// One product line on an order.
+///
+/// A line proposed by someone without approval rights is created
+/// PENDING_APPROVAL and contributes nothing to the order's total until an
+/// approver moves it to ACTIVE. That is the whole of the approval mechanism:
+/// totals only ever sum ACTIVE rows, so a pending line cannot move money.
+model SalesOrderItem {
+  id      String @id @default(cuid())
+  orderId String
+  /// Position on the order. Unique per order, so two concurrent adds cannot
+  /// collide on the same line number.
+  lineNo  Int
+
+  productName    String
+  productImageId String?
+  quantity       Int
+  price          Decimal @db.Decimal(12, 2)
+
+  status SalesItemStatus @default(ACTIVE)
+
+  /// Who put this line forward. Always set, including for lines created with
+  /// the order itself.
+  proposedById String
+  /// Written together with approvedAt when the line is accepted.
+  approvedById String?
+  approvedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  order        SalesOrder  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productImage MediaAsset? @relation("SalesItemImage", fields: [productImageId], references: [id], onDelete: SetNull)
+  proposedBy   User        @relation("SalesItemProposedBy", fields: [proposedById], references: [id])
+  approvedBy   User?       @relation("SalesItemApprovedBy", fields: [approvedById], references: [id])
+  changeRequests SalesItemChangeRequest[]
+
+  @@unique([orderId, lineNo])
+  @@index([orderId, status])
 }
 
 /// §45 — generic trail for everything without an enquiry parent: logins, user

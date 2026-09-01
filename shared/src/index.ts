@@ -14,5 +14,6 @@ export * from './constants/index.js';
 export * from './enums.js';
 export * from './schemas/index.js';
 export * from './types/enquiry.js';
+export * from './types/sales.js';
 export * from './utils/units.js';
 export * from './utils/money.js';

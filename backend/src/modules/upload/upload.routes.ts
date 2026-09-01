@@ -4,7 +4,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { env } from '../../config/env.js';
 import { AppError } from '../../utils/AppError.js';
 import { requireAuth } from '../../middleware/requireAuth.js';
-import { requirePermission } from '../../middleware/requirePermission.js';
+import { requireAnyPermission } from '../../middleware/requirePermission.js';
 import { ALLOWED_MIME_TYPES } from './upload.service.js';
 import { upload } from './upload.controller.js';
 
@@ -55,13 +55,18 @@ export const uploadRoutes = Router();
 uploadRoutes.use(requireAuth);
 
 /**
- * Guarded on PRODUCT_ENQUIRY CREATE — the same capability that lets someone
- * record an enquiry lets them attach an image to one. Resolved through the
- * existing permission system, so a UserModulePermission override applies.
+ * Guarded on the create capability of either module that attaches images: the
+ * same permission that lets someone record an enquiry or a sales order lets them
+ * attach a picture to it.
+ *
+ * One endpoint rather than one per module, so there is a single Cloudinary path
+ * and a single place to fix an upload bug. Both pairs resolve through the
+ * existing permission system, so a UserModulePermission override still applies,
+ * and anyone who could upload before this widened still can.
  */
 uploadRoutes.post(
   '/',
-  requirePermission('PRODUCT_ENQUIRY', 'CREATE'),
+  requireAnyPermission(['PRODUCT_ENQUIRY', 'CREATE'], ['SALES', 'CREATE']),
   receiveImage,
   upload,
 );

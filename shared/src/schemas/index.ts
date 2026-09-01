@@ -4,3 +4,4 @@ export * from './customer.js';
 export * from './vendor.js';
 export * from './enquiry.js';
 export * from './vendor-response.js';
+export * from './sales.js';

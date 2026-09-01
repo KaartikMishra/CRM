@@ -65,6 +65,49 @@ export type DimensionUnit = (typeof DIMENSION_UNITS)[number];
 export const PRODUCT_MATCH_TYPES = ['SIMILAR_PRODUCT', 'EXACT_PRODUCT'] as const;
 export type ProductMatchType = (typeof PRODUCT_MATCH_TYPES)[number];
 
+/**
+ * The Sales Order lifecycle — deliberately linear.
+ *
+ * An order is dispatched before it is closed, so every closed order carries a
+ * frozen efficiency verdict. There is no reopen.
+ */
+export const SALES_ORDER_STATUSES = ['OPEN', 'DISPATCHED', 'CLOSED'] as const;
+export type SalesOrderStatus = (typeof SALES_ORDER_STATUSES)[number];
+
+/**
+ * The dispatch verdict, frozen when the order is dispatched.
+ *
+ * Structurally identical to EnquiryEfficiency but a separate type: the two are
+ * decided by different events, and collapsing them would couple the SLA clock
+ * to the dispatch deadline.
+ */
+export const SALES_EFFICIENCIES = ['ON_TIME', 'DELAYED'] as const;
+export type SalesEfficiency = (typeof SALES_EFFICIENCIES)[number];
+
+/**
+ * Whether a product line counts toward its order.
+ *
+ * A line proposed during editing by someone without approval rights waits as
+ * PENDING_APPROVAL and is excluded from every total, so a proposal cannot move
+ * money on its own.
+ */
+export const SALES_ITEM_STATUSES = ['ACTIVE', 'PENDING_APPROVAL'] as const;
+export type SalesItemStatus = (typeof SALES_ITEM_STATUSES)[number];
+
+/** What a product change request is asking for. */
+export const SALES_CHANGE_TYPES = ['ADD', 'EDIT', 'REMOVE'] as const;
+export type SalesChangeType = (typeof SALES_CHANGE_TYPES)[number];
+
+/**
+ * A request is decided once and the decision is kept.
+ *
+ * REJECTED lives here rather than on the item, because rejecting a proposal
+ * says nothing about the product already on the order — that line was never
+ * touched.
+ */
+export const SALES_CHANGE_STATUSES = ['PENDING', 'APPROVED', 'REJECTED'] as const;
+export type SalesChangeStatus = (typeof SALES_CHANGE_STATUSES)[number];
+
 /** §44 — the Efficiency History event vocabulary. */
 export const ENQUIRY_EVENT_TYPES = [
   'CREATED',

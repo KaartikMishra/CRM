@@ -14,7 +14,14 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 
-export type PickerOption = { id: string; label: string; hint?: string };
+export type PickerOption = {
+  id: string;
+  label: string;
+  hint?: string;
+  /** Contact details, when the searched master carries them. Customers do. */
+  phone?: string | null;
+  email?: string | null;
+};
 
 /**
  * Searchable picker for a master record — a customer or a vendor.
@@ -65,11 +72,24 @@ export function EntityPicker({
           }
           const rows = endpoint === 'customers' ? body.data.customers : body.data.vendors;
           setOptions(
-            rows.map((row: { id: string; name: string; type?: string; city?: string }) => ({
-              id: row.id,
-              label: row.name,
-              hint: row.type ?? row.city ?? undefined,
-            })),
+            rows.map(
+              (row: {
+                id: string;
+                name: string;
+                type?: string;
+                city?: string;
+                phone?: string | null;
+                email?: string | null;
+              }) => ({
+                id: row.id,
+                label: row.name,
+                hint: row.type ?? row.city ?? undefined,
+                // Carried through so a caller can show who it is about to bill.
+                // Product Enquiry ignores these; the customer search returns them.
+                phone: row.phone ?? null,
+                email: row.email ?? null,
+              }),
+            ),
           );
         } catch {
           // An aborted request is the expected outcome of fast typing.

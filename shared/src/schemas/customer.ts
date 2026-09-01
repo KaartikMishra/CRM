@@ -6,17 +6,28 @@ import { cuidSchema } from './common.js';
  * Q1 — the customer belongs to the enquiry, not to each product line.
  * One enquiry, one customer.
  */
+/**
+ * The customer phone format, extracted so a caller that needs it *required*
+ * reuses the rule rather than restating the pattern and drifting from it.
+ */
+export const customerPhoneSchema = z
+  .string()
+  .trim()
+  .regex(/^[0-9+\-\s()]{7,20}$/, 'Enter a valid phone number');
+
+export const customerEmailSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .email('Enter a valid email address');
+
 export const createCustomerSchema = z.object({
   name: z.string().trim().min(2, 'Customer name is required').max(160),
   type: z.enum(CUSTOMER_TYPES, {
     errorMap: () => ({ message: 'Choose a customer type' }),
   }),
-  phone: z
-    .string()
-    .trim()
-    .regex(/^[0-9+\-\s()]{7,20}$/, 'Enter a valid phone number')
-    .optional(),
-  email: z.string().trim().toLowerCase().email('Enter a valid email address').optional(),
+  phone: customerPhoneSchema.optional(),
+  email: customerEmailSchema.optional(),
 });
 
 export const customerSearchSchema = z.object({
@@ -45,5 +56,17 @@ export const customerSelectionSchema = z
     }
   });
 
+/**
+ * Creating a customer from the Sales flow, where a contact number is required.
+ *
+ * An order that needs chasing is far easier to chase with a number attached, so
+ * Sales asks for one. Product Enquiry keeps phone optional — the base schema is
+ * unchanged, and both reuse the same format rule.
+ */
+export const salesNewCustomerSchema = createCustomerSchema.extend({
+  phone: customerPhoneSchema,
+});
+
 export type CreateCustomerInput = z.infer<typeof createCustomerSchema>;
+export type SalesNewCustomerInput = z.infer<typeof salesNewCustomerSchema>;
 export type CustomerSelection = z.infer<typeof customerSelectionSchema>;

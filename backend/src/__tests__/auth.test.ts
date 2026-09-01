@@ -178,25 +178,31 @@ describe('permission resolution', () => {
     expect(has(forUser, 'PRODUCT_ENQUIRY', 'VIEW')).toBe(true);
     expect(has(forUser, 'PRODUCT_ENQUIRY', 'CREATE')).toBe(true);
     expect(has(forUser, 'PRODUCT_ENQUIRY', 'ASSIGN')).toBe(false);
-    expect(has(forUser, 'SALES', 'VIEW')).toBe(false);
+    // Sales mirrors Product Enquiry for a plain USER: view, create and edit,
+    // with delete and assign reserved for administrators.
+    expect(has(forUser, 'SALES', 'VIEW')).toBe(true);
+    expect(has(forUser, 'SALES', 'ASSIGN')).toBe(false);
   });
 
   it('lets an override revoke and grant, and falls back when removed', async () => {
     await prisma.userModulePermission.create({
       data: { userId: user.id, module: 'PRODUCT_ENQUIRY', action: 'CREATE', allowed: false },
     });
+    // SALES ASSIGN, not SALES VIEW: view is now a USER default, so granting it
+    // would be indistinguishable from the default and would prove nothing about
+    // overrides. Assign is still admin-only, so a grant here is a real grant.
     await prisma.userModulePermission.create({
-      data: { userId: user.id, module: 'SALES', action: 'VIEW', allowed: true },
+      data: { userId: user.id, module: 'SALES', action: 'ASSIGN', allowed: true },
     });
 
     const overridden = await permissions(userToken);
     expect(has(overridden, 'PRODUCT_ENQUIRY', 'CREATE')).toBe(false);
-    expect(has(overridden, 'SALES', 'VIEW')).toBe(true);
+    expect(has(overridden, 'SALES', 'ASSIGN')).toBe(true);
 
     await prisma.userModulePermission.deleteMany({ where: { userId: user.id } });
 
     const restored = await permissions(userToken);
     expect(has(restored, 'PRODUCT_ENQUIRY', 'CREATE')).toBe(true);
-    expect(has(restored, 'SALES', 'VIEW')).toBe(false);
+    expect(has(restored, 'SALES', 'ASSIGN')).toBe(false);
   });
 });

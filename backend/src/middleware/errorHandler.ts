@@ -45,6 +45,82 @@ const CONSTRAINT_MESSAGES: Record<string, { code: string; message: string }> = {
     code: 'INVALID_DELIVERY_DAYS',
     message: 'Delivery time must be at least one day.',
   },
+  sales_quantity_positive: {
+    code: 'INVALID_QUANTITY',
+    message: 'Quantity must be at least 1.',
+  },
+  sales_price_positive: {
+    code: 'INVALID_PRICE',
+    message: 'Price must be greater than zero.',
+  },
+  sales_paid_within_total: {
+    code: 'PAYMENT_EXCEEDS_TOTAL',
+    message: 'The paid amount cannot exceed the order total.',
+  },
+  sales_dispatch_not_before_order: {
+    code: 'INVALID_DISPATCH_DEADLINE',
+    message: 'The dispatch deadline cannot fall before the order date.',
+  },
+  sales_efficiency_accompanies_dispatch: {
+    code: 'INVALID_DISPATCH_STATE',
+    message: 'A dispatch and its efficiency verdict must be recorded together.',
+  },
+  sales_closed_has_closer: {
+    code: 'INVALID_CLOSE_STATE',
+    message: 'A closed order must record when it closed and who closed it.',
+  },
+  sales_closed_fully_paid: {
+    code: 'PAYMENT_OUTSTANDING',
+    message: 'An order cannot be closed while a payment is still outstanding.',
+  },
+  sales_item_quantity_positive: {
+    code: 'INVALID_QUANTITY',
+    message: 'Quantity must be at least 1.',
+  },
+  sales_item_price_positive: {
+    code: 'INVALID_PRICE',
+    message: 'Price must be greater than zero.',
+  },
+  sales_item_approval_recorded_together: {
+    code: 'INVALID_APPROVAL_STATE',
+    message: 'An approval must record both who approved it and when.',
+  },
+  sales_item_pending_has_no_approval: {
+    code: 'INVALID_APPROVAL_STATE',
+    message: 'A product line awaiting approval cannot already carry one.',
+  },
+  sales_change_quantity_positive: {
+    code: 'INVALID_QUANTITY',
+    message: 'Quantity must be at least 1.',
+  },
+  sales_change_price_positive: {
+    code: 'INVALID_PRICE',
+    message: 'Price must be greater than zero.',
+  },
+  sales_change_one_pending_per_item: {
+    code: 'CHANGE_REQUEST_ALREADY_PENDING',
+    message: 'This product already has a change waiting for approval.',
+  },
+  sales_change_add_has_no_item: {
+    code: 'INVALID_CHANGE_REQUEST',
+    message: 'A request to add a product cannot point at an existing line.',
+  },
+  sales_change_edit_remove_have_item: {
+    code: 'INVALID_CHANGE_REQUEST',
+    message: 'A request to edit or remove a product must name the line it affects.',
+  },
+  sales_change_add_edit_have_values: {
+    code: 'INVALID_CHANGE_REQUEST',
+    message: 'A request to add or edit a product must carry the proposed values.',
+  },
+  sales_change_review_recorded_together: {
+    code: 'INVALID_REVIEW_STATE',
+    message: 'A decision must record both who made it and when.',
+  },
+  sales_change_decided_has_reviewer: {
+    code: 'INVALID_REVIEW_STATE',
+    message: 'A decided request must record its reviewer.',
+  },
 };
 
 function matchConstraint(message: string): { code: string; message: string } | undefined {

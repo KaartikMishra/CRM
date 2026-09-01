@@ -91,6 +91,7 @@ const TITLE_CASE: Record<string, string> = {
   CORPORATE_GIFTING: 'Corporate Gifting',
   OPEN: 'Open',
   PARTIAL_CLOSED: 'Partially Closed',
+  DISPATCHED: 'Dispatched',
   CLOSED: 'Closed',
   PENDING: 'Pending',
   RESPONDED: 'Responded',
