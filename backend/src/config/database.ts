@@ -8,13 +8,12 @@
  */
 
 import { prisma } from '@rs/database';
-import { isDevelopment } from './env.js';
 import { logger } from './logger.js';
 
 export { prisma };
 
 /**
- * Development only: how long to keep trying a sleeping database.
+ * How long to keep trying a database that is not answering yet.
  *
  * Neon suspends idle compute, and a cold resume on this project has been
  * observed taking anywhere from 60 seconds to over 90. These nine delays sum
@@ -23,9 +22,20 @@ export { prisma };
  * on a slow resume. It is deliberately finite: a database that is genuinely
  * down should still fail the boot rather than hang forever.
  */
-const DEV_RETRY_DELAYS_MS = [
+const RETRY_DELAYS_MS = [
   1_000, 2_000, 4_000, 8_000, 15_000, 20_000, 25_000, 25_000, 20_000,
 ] as const;
+
+/**
+ * DNS is treated as transient too, and this is not theoretical.
+ *
+ * Prisma resolves through getaddrinfo, and a resolver that has cached a bad
+ * negative answer returns ENOTFOUND for one hostname while the record plainly
+ * exists — observed here as getaddrinfo failing 10/10 for the pooler host in
+ * the same second that a direct DNS query answered 5/5. Retrying rides out
+ * that window; failing immediately turns a resolver hiccup into an outage.
+ */
+const TRANSIENT_DNS_CODES = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ETIMEDOUT']);
 
 /**
  * Prisma codes that mean "the server did not answer", as opposed to "the
@@ -43,25 +53,33 @@ const TRANSIENT_CODES = new Set(['P1001', 'P1002', 'P1017']);
 function isTransient(error: unknown): boolean {
   const code = (error as { errorCode?: string; code?: string } | null)?.errorCode
     ?? (error as { code?: string } | null)?.code;
-  return typeof code === 'string' && TRANSIENT_CODES.has(code);
+  if (typeof code === 'string' && TRANSIENT_CODES.has(code)) return true;
+
+  // P1001 wraps the underlying cause in its message; a name-resolution failure
+  // there is a resolver problem, not a wrong hostname.
+  const message = (error as { message?: string } | null)?.message ?? '';
+  return [...TRANSIENT_DNS_CODES].some((dnsCode) => message.includes(dnsCode));
 }
 
 /**
  * Prisma connects lazily on first query. Doing it explicitly at boot means a
  * bad DATABASE_URL fails at startup rather than on a user's first request.
  *
- * In development that strictness is unhelpful against a serverless database:
- * `npm run dev` would die with P1001 simply because Neon had scaled to zero,
- * leaving the frontend running against nothing. So development retries a
- * *transient* failure for about a minute and a half while the instance
- * resumes. Production still fails fast on the first attempt — there, an
- * unreachable database is a reason not to accept traffic, and the platform's
- * own restart policy is the right retry mechanism.
+ * That strictness is unhelpful against a serverless database: the process
+ * would die with P1001 simply because Neon had scaled to zero, or because the
+ * local resolver briefly lost the hostname. So a *transient* failure is
+ * retried for about a minute and a half while the instance resumes.
+ *
+ * This applies in production as well as development. Retrying a transient
+ * fault is not the same as hiding a permanent one: a bad password (P1000) or
+ * an unknown database (P1003) still fails on the first attempt, because
+ * waiting cannot fix those. Only "the server did not answer" is waited on, and
+ * only for a bounded budget — after which the boot fails and the platform's
+ * own restart policy takes over.
  */
 export async function connectDatabase(): Promise<void> {
   const startedAt = Date.now();
-  // A single attempt everywhere except development.
-  const delays = isDevelopment ? DEV_RETRY_DELAYS_MS : [];
+  const delays = RETRY_DELAYS_MS;
 
   for (let attempt = 0; attempt <= delays.length; attempt += 1) {
     try {

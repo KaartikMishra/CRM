@@ -11,6 +11,7 @@
   ],
   "scripts": {
     "build:shared": "npm run build --workspace @rs/shared",
+    "build:database": "npm run build --workspace @rs/database",
     "db:generate": "npm run generate --workspace @rs/database",
     "db:migrate": "npm run migrate --workspace @rs/database",
     "db:seed": "npm run seed --workspace @rs/database",
@@ -22,7 +23,11 @@
     "dev:frontend": "npm run dev --workspace @rs/frontend",
     "build:frontend": "npm run build --workspace @rs/frontend",
     "test": "npm run test --workspace @rs/backend",
-    "test:watch": "npm run test:watch --workspace @rs/backend"
+    "test:watch": "npm run test:watch --workspace @rs/backend",
+    "build": "npm run build:shared && npm run build:database && npm run build:backend && npm run build:frontend",
+    "start": "npm run start --workspace @rs/backend",
+    "start:backend": "npm run start --workspace @rs/backend",
+    "start:frontend": "npm run start --workspace @rs/frontend"
   },
   "engines": {
     "node": ">=20"

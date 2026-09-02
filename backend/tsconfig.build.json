@@ -1,0 +1,13 @@
+{
+  /*
+    The production build.
+
+    Identical to tsconfig.json except that tests are not emitted: vitest runs
+    them from the TypeScript sources, and compiling them shipped fourteen files
+    importing vitest — a devDependency absent after `npm install --omit=dev` —
+    into the deployable artifact. Type-checking still covers them, through
+    tsconfig.json, which this file deliberately does not replace.
+  */
+  "extends": "./tsconfig.json",
+  "exclude": ["src/**/__tests__/**", "src/**/*.test.ts"]
+}
