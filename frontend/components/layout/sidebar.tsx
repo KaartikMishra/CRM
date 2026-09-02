@@ -6,16 +6,19 @@ import { useState } from 'react';
 import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Logo } from './logo';
-import { NAV_ITEMS } from './nav-items';
+import type { NavItem } from './nav-items';
+import { navIcon } from './nav-icons';
 
 /**
  * Navigation for the whole CRM.
  *
- * Future modules appear so the shape of the product is legible, but they are
- * inert and say so — a link that looks live and does nothing is worse than an
- * honest "Soon" (§54).
+ * The items are decided on the server from the signed-in person's resolved
+ * permissions and passed in — a module they cannot reach never reaches the
+ * browser at all (§11). Among the items they *can* reach, an unbuilt module
+ * stays inert and says "Soon", because a link that looks live and does nothing
+ * is worse than an honest label (§54).
  */
-export function Sidebar() {
+export function Sidebar({ items }: { items: NavItem[] }) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
 
@@ -34,9 +37,9 @@ export function Sidebar() {
 
       <nav className="flex-1 overflow-y-auto p-3" aria-label="Main">
         <ul className="flex flex-col gap-0.5">
-          {NAV_ITEMS.map((item) => {
+          {items.map((item) => {
             const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
-            const Icon = item.icon;
+            const Icon = navIcon(item.icon);
 
             if (!item.available) {
               return (

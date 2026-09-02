@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { notFound, redirect } from 'next/navigation';
+import { notFound } from 'next/navigation';
 import { ArrowLeft, Lock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -12,7 +12,9 @@ import { SalesOrderActions } from '@/components/sales/sales-order-actions';
 import { SalesItemList } from '@/components/sales/sales-item-list';
 import { SalesStatusBadge } from '@/components/sales/sales-status-badge';
 import { fetchSalesOrder } from '@/lib/sales-api';
-import { can, getCurrentUser } from '@/lib/current-user';
+import { can } from '@/lib/current-user';
+import { requireModule } from '@/lib/require-module';
+import { NoModuleAccess } from '@/components/common/no-module-access';
 import { formatCurrency, formatDate, formatDateTime, label } from '@/lib/format';
 
 type Params = Promise<{ id: string }>;
@@ -32,8 +34,9 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
  */
 export default async function SalesOrderDetailPage({ params }: { params: Params }) {
   const { id } = await params;
-  const user = await getCurrentUser();
-  if (!user) redirect('/login');
+  const access = await requireModule('SALES');
+  if (!access.allowed) return <NoModuleAccess module="SALES" />;
+  const user = access.user;
 
   const { result } = await fetchSalesOrder(id);
 

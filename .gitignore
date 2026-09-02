@@ -34,3 +34,6 @@ yarn-error.log*
 
 # test output
 coverage/
+
+# planning notes — hold working credentials, never commit
+planing.todo

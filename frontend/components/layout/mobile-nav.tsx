@@ -8,17 +8,18 @@ import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { cn } from '@/lib/utils';
 import { Logo } from './logo';
-import { NAV_ITEMS } from './nav-items';
+import type { NavItem } from './nav-items';
+import { navIcon } from './nav-icons';
 
 /**
  * Navigation below the desktop breakpoint.
  *
  * A drawer rather than a bottom bar, because the CRM will eventually carry
- * eight modules and a bottom bar stops working past four. Future modules are
- * listed but inert, exactly as in the sidebar — the shape of the product stays
- * legible without anything pretending to work.
+ * eight modules and a bottom bar stops working past four. It renders the same
+ * permission-filtered items the sidebar does, so the two never disagree about
+ * what this person can reach.
  */
-export function MobileNav() {
+export function MobileNav({ items }: { items: NavItem[] }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
 
@@ -44,9 +45,9 @@ export function MobileNav() {
 
         <nav className="flex-1 overflow-y-auto p-3" aria-label="Main">
           <ul className="flex flex-col gap-0.5">
-            {NAV_ITEMS.map((item) => {
+            {items.map((item) => {
               const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
-              const Icon = item.icon;
+              const Icon = navIcon(item.icon);
 
               if (!item.available) {
                 return (

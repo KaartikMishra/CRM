@@ -9,7 +9,9 @@ import { ErrorMessage } from '@/components/common/error-message';
 import { SalesFilters } from '@/components/sales/sales-filters';
 import { SalesOrderTable } from '@/components/sales/sales-order-table';
 import { fetchSalesCustomers, fetchSalesOrders } from '@/lib/sales-api';
-import { can, getCurrentUser } from '@/lib/current-user';
+import { can } from '@/lib/current-user';
+import { requireModule } from '@/lib/require-module';
+import { NoModuleAccess } from '@/components/common/no-module-access';
 
 export const metadata: Metadata = { title: 'Sales' };
 
@@ -20,7 +22,9 @@ const first = (v: string | string[] | undefined): string | undefined =>
 
 export default async function SalesListPage({ searchParams }: { searchParams: Search }) {
   const params = await searchParams;
-  const user = await getCurrentUser();
+  const access = await requireModule('SALES');
+  if (!access.allowed) return <NoModuleAccess module="SALES" />;
+  const user = access.user;
   const canCreate = can(user, 'SALES', 'CREATE');
 
   // Filters travel to the backend; nothing is filtered client-side.

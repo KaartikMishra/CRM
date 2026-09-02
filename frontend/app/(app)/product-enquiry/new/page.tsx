@@ -3,13 +3,16 @@ import { redirect } from 'next/navigation';
 import { PageHeader } from '@/components/common/page-header';
 import { CreateEnquiryForm } from '@/components/product-enquiry/create-enquiry-form';
 import { apiFetch } from '@/lib/api-server';
-import { can, getCurrentUser } from '@/lib/current-user';
+import { can } from '@/lib/current-user';
+import { requireModule } from '@/lib/require-module';
+import { NoModuleAccess } from '@/components/common/no-module-access';
 
 export const metadata: Metadata = { title: 'New Enquiry' };
 
 export default async function NewEnquiryPage() {
-  const user = await getCurrentUser();
-  if (!user) redirect('/login');
+  const access = await requireModule('PRODUCT_ENQUIRY');
+  if (!access.allowed) return <NoModuleAccess module="PRODUCT_ENQUIRY" />;
+  const user = access.user;
 
   // The UI hides what you may not do; the API refuses it regardless (§9).
   if (!can(user, 'PRODUCT_ENQUIRY', 'CREATE')) redirect('/product-enquiry');

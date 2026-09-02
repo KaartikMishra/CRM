@@ -10,7 +10,9 @@ import { EnquiryFilters } from '@/components/product-enquiry/enquiry-filters';
 import { EnquiryTable } from '@/components/product-enquiry/enquiry-table';
 import { apiFetch } from '@/lib/api-server';
 import { fetchEnquiries } from '@/lib/enquiry-api';
-import { can, getCurrentUser } from '@/lib/current-user';
+import { can } from '@/lib/current-user';
+import { requireModule } from '@/lib/require-module';
+import { NoModuleAccess } from '@/components/common/no-module-access';
 
 export const metadata: Metadata = { title: 'Product Enquiry' };
 
@@ -25,7 +27,9 @@ export default async function ProductEnquiryListPage({
   searchParams: Search;
 }) {
   const params = await searchParams;
-  const user = await getCurrentUser();
+  const access = await requireModule('PRODUCT_ENQUIRY');
+  if (!access.allowed) return <NoModuleAccess module="PRODUCT_ENQUIRY" />;
+  const user = access.user;
   const canCreate = can(user, 'PRODUCT_ENQUIRY', 'CREATE');
 
   // Filters travel to the backend; nothing is filtered client-side (§46).

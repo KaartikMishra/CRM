@@ -14,7 +14,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { NAV_ITEMS } from './nav-items';
+import { NAV_ITEMS, type NavItem } from './nav-items';
 import { LogoMark } from './logo';
 import { MobileNav } from './mobile-nav';
 
@@ -23,10 +23,18 @@ type Props = {
   employeeId: string;
   role: 'ADMIN' | 'USER';
   initials: string;
+  /** Permission-filtered; the mobile drawer renders exactly these. */
+  items: NavItem[];
   onSignOut: () => void;
 };
 
-/** Derived from the path, so it never disagrees with where you actually are. */
+/**
+ * Derived from the path, so it never disagrees with where you actually are.
+ *
+ * Matched against the full nav table rather than the filtered one: the crumb
+ * only names the page you are already on, and the page itself is what enforces
+ * access.
+ */
 function useCrumbs(): { label: string; href?: string }[] {
   const pathname = usePathname();
   const nav = NAV_ITEMS.find(
@@ -41,13 +49,13 @@ function useCrumbs(): { label: string; href?: string }[] {
   return [{ label: nav.label, href: nav.href }, { label: leaf }];
 }
 
-export function Topbar({ name, employeeId, role, initials, onSignOut }: Props) {
+export function Topbar({ name, employeeId, role, initials, items, onSignOut }: Props) {
   const crumbs = useCrumbs();
 
   return (
     <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-4 border-b border-line bg-surface/95 px-4 backdrop-blur sm:px-6">
       <div className="flex items-center gap-1 lg:hidden">
-        <MobileNav />
+        <MobileNav items={items} />
         <Link href="/dashboard" aria-label="RoyalStuffs CRM home">
           <LogoMark size={30} />
         </Link>

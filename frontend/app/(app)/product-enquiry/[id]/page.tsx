@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { notFound, redirect } from 'next/navigation';
+import { notFound } from 'next/navigation';
 import { ArrowLeft, Lock } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -14,7 +14,9 @@ import { ProductList } from '@/components/product-enquiry/product-list';
 import { SlaTimer } from '@/components/product-enquiry/sla-timer';
 import { apiFetch } from '@/lib/api-server';
 import { fetchEnquiry } from '@/lib/enquiry-api';
-import { can, getCurrentUser } from '@/lib/current-user';
+import { can } from '@/lib/current-user';
+import { requireModule } from '@/lib/require-module';
+import { NoModuleAccess } from '@/components/common/no-module-access';
 import { formatDateTime, label } from '@/lib/format';
 
 type Params = Promise<{ id: string }>;
@@ -34,8 +36,9 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
  */
 export default async function EnquiryDetailPage({ params }: { params: Params }) {
   const { id } = await params;
-  const user = await getCurrentUser();
-  if (!user) redirect('/login');
+  const access = await requireModule('PRODUCT_ENQUIRY');
+  if (!access.allowed) return <NoModuleAccess module="PRODUCT_ENQUIRY" />;
+  const user = access.user;
 
   // Independent of each other; see the note on the list page.
   const [{ result, serverTime }, assigneesResult] = await Promise.all([
