@@ -126,3 +126,24 @@ export const ENQUIRY_EVENT_TYPES = [
   'REOPENED',
 ] as const;
 export type EnquiryEventType = (typeof ENQUIRY_EVENT_TYPES)[number];
+
+/** Whether a purchase bill is on credit or was settled at purchase. */
+export const PURCHASE_BILL_TYPES = ['CREDIT', 'PAID_UP'] as const;
+export type PurchaseBillType = (typeof PURCHASE_BILL_TYPES)[number];
+
+/**
+ * A purchase bill's progress. Linear, like the Sales lifecycle: goods are
+ * received before the bill is closed, and there is no reopen.
+ */
+export const PURCHASE_BILL_STATUSES = ['OPEN', 'RECEIVED', 'CLOSED'] as const;
+export type PurchaseBillStatus = (typeof PURCHASE_BILL_STATUSES)[number];
+
+/**
+ * How far an order line's requirement has been met.
+ *
+ * Derived, never stored: it is a comparison between the quantity ordered and
+ * what inventory and procurement have supplied, so storing it would create a
+ * second answer that could drift from the arithmetic.
+ */
+export const FULFILLMENT_STATUSES = ['UNFULFILLED', 'PARTIAL', 'FULFILLED'] as const;
+export type FulfillmentStatus = (typeof FULFILLMENT_STATUSES)[number];

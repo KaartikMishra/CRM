@@ -134,6 +134,7 @@ export async function createChangeRequest(
           : {
               ...(input.type === 'EDIT' ? { itemId: input.itemId } : {}),
               productName: input.productName,
+              productId: input.productId ?? null,
               productImageId: input.productImageAssetId ?? null,
               quantity: input.quantity,
               price: new Prisma.Decimal(input.price),
@@ -190,6 +191,7 @@ async function review(
         status: true,
         itemId: true,
         productName: true,
+        productId: true,
         productImageId: true,
         quantity: true,
         price: true,
@@ -236,6 +238,7 @@ async function review(
           orderId,
           lineNo: await repo.nextLineNo(tx, orderId),
           productName: request.productName!,
+          productId: request.productId,
           productImageId: request.productImageId,
           quantity: request.quantity!,
           price: request.price!,
@@ -256,6 +259,10 @@ async function review(
           where: { id: item.id },
           data: {
             productName: request.productName!,
+            // Only when the request carried one. An edit that says nothing
+            // about the catalogue must not silently unlink an already-linked
+            // line — that would break procurement allocation invisibly.
+            ...(request.productId ? { productId: request.productId } : {}),
             productImageId: request.productImageId,
             quantity: request.quantity!,
             price: request.price!,

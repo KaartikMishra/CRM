@@ -6,3 +6,4 @@ export * from './enquiry.js';
 export * from './vendor-response.js';
 export * from './sales.js';
 export * from './user.js';
+export * from './procurement.js';

@@ -51,6 +51,19 @@ export const salesPriceSchema = amountSchema.refine(
 /** One product line, as it arrives from a form. */
 export const salesOrderItemInputSchema = z.object({
   productName: z.string().trim().min(1, 'Product name is required').max(200),
+  /**
+   * Optional link to the Product master.
+   *
+   * Optional on purpose, and it must stay that way: an order line is written
+   * from whatever the customer asked for, which is not always something in the
+   * catalogue yet. `productName` remains the label on the order either way.
+   *
+   * When it *is* supplied, procurement can match purchased stock to this line
+   * by identity rather than by spelling — which is the whole reason the field
+   * exists. Matching by name would let "Bottle" and "bottle " become two
+   * different requirements, or worse, silently the same one.
+   */
+  productId: cuidSchema.optional(),
   productImageAssetId: cuidSchema.optional(),
   quantity: salesQuantitySchema,
   price: salesPriceSchema,
@@ -138,6 +151,8 @@ export const createChangeRequestSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('ADD'),
     productName: z.string().trim().min(1, 'Product name is required').max(200),
+    /** Optional catalogue link, exactly as on a line created with the order. */
+    productId: cuidSchema.optional(),
     productImageAssetId: cuidSchema.optional(),
     quantity: salesQuantitySchema,
     price: salesPriceSchema,
@@ -146,6 +161,7 @@ export const createChangeRequestSchema = z.discriminatedUnion('type', [
     type: z.literal('EDIT'),
     itemId: cuidSchema,
     productName: z.string().trim().min(1, 'Product name is required').max(200),
+    productId: cuidSchema.optional(),
     productImageAssetId: cuidSchema.nullable().optional(),
     quantity: salesQuantitySchema,
     price: salesPriceSchema,

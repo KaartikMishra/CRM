@@ -102,12 +102,17 @@ describe('the navigation table itself is unchanged', () => {
     expect(byHref.get('/users')).toBe('User Management');
   });
 
-  it('keeps the two live modules available and the five future ones not', () => {
+  it('keeps the three live modules available and the four future ones not', () => {
+    // Procurement joined Product Enquiry and Sales as a built module; the
+    // remaining four are still placeholders and must keep saying so.
     const byHref = new Map(NAV_ITEMS.map((i) => [i.href, i]));
     expect(byHref.get('/product-enquiry')?.available).toBe(true);
     expect(byHref.get('/sales')?.available).toBe(true);
-    expect(byHref.get('/procurement')?.available).toBe(false);
-    expect(byHref.get('/post-sales')?.available).toBe(false);
+    expect(byHref.get('/procurement')?.available).toBe(true);
+
+    for (const href of ['/dispatch', '/billing', '/vendor-invoices', '/post-sales']) {
+      expect(byHref.get(href)?.available, href).toBe(false);
+    }
   });
 
   it('gates every CRM item on a module, and Dashboard on none', () => {

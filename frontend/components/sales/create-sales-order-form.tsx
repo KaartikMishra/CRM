@@ -45,6 +45,8 @@ import { createSalesCustomerAction, createSalesOrderAction } from '@/app/(app)/s
 const today = (): string => new Date().toISOString().slice(0, 10);
 
 type ItemDraft = {
+  /** Optional catalogue link; free text stays valid when this is null. */
+  productId: string | null;
   key: string;
   productName: string;
   quantity: string;
@@ -62,6 +64,7 @@ type ItemDraft = {
  */
 const emptyItem = (key: string): ItemDraft => ({
   key,
+  productId: null,
   productName: '',
   quantity: '',
   price: '',
@@ -80,7 +83,12 @@ const emptyItem = (key: string): ItemDraft => ({
  * of their own; showing them live is a preview computed with the same exact
  * decimal helpers the server uses, never a value that gets submitted.
  */
-export function CreateSalesOrderForm() {
+export function CreateSalesOrderForm({
+  products = [],
+}: {
+  /** The catalogue, for the product suggestions. Empty is fine — free text still works. */
+  products?: { id: string; name: string }[];
+}) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const formId = useId();
@@ -156,6 +164,7 @@ export function CreateSalesOrderForm() {
       customerId: customer?.id ?? '',
       items: items.map((item) => ({
         productName: item.productName.trim(),
+        ...(item.productId ? { productId: item.productId } : {}),
         quantity: item.quantity.trim() === '' ? Number.NaN : Number(item.quantity),
         price: item.price.trim(),
         ...(item.imageAssetId ? { productImageAssetId: item.imageAssetId } : {}),
@@ -371,12 +380,35 @@ export function CreateSalesOrderForm() {
                 <div className="flex flex-col gap-4">
                   <div className="flex flex-col gap-1.5">
                     <Label htmlFor={`${formId}-name-${item.key}`}>Product name</Label>
+                    {/*
+                      A datalist rather than a select: the catalogue is a
+                      suggestion, not a constraint. Typing a product that does
+                      not exist yet still works exactly as before — the line is
+                      simply not linked, and procurement can attach it later.
+                      Picking a listed name captures its id, which is what lets
+                      purchased stock be matched to this line.
+                    */}
                     <Input
                       id={`${formId}-name-${item.key}`}
+                      list={`${formId}-products`}
                       value={item.productName}
-                      onChange={(e) => updateItem(item.key, { productName: e.target.value })}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        const match = products.find((p) => p.name === value);
+                        updateItem(item.key, { productName: value, productId: match?.id ?? null });
+                      }}
                       placeholder="Hammered copper bottle"
                     />
+                    {item.productId && (
+                      <p className="text-xs text-positive">In the catalogue — stock can be allocated to this line.</p>
+                    )}
+                    {index === 0 && (
+                      <datalist id={`${formId}-products`}>
+                        {products.map((p) => (
+                          <option key={p.id} value={p.name} />
+                        ))}
+                      </datalist>
+                    )}
                     {err(`items.${index}.productName`) && (
                       <p className="text-xs text-critical">{err(`items.${index}.productName`)}</p>
                     )}

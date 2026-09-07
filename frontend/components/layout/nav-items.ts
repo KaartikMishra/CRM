@@ -55,7 +55,7 @@ export const NAV_ITEMS: NavItem[] = [
     label: 'Purchase & Procurement',
     href: '/procurement',
     icon: 'procurement',
-    available: false,
+    available: true,
     module: 'PROCUREMENT',
   },
   {

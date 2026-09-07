@@ -13,6 +13,7 @@
 import bcrypt from 'bcrypt';
 import { randomUUID } from 'node:crypto';
 import type { CustomerType, Role } from '@rs/shared';
+import { normalizeProductName } from '@rs/shared';
 import { prisma } from '../../config/database.js';
 
 export const TEST_PREFIX = 'zz-test';
@@ -23,6 +24,8 @@ const created = {
   userIds: [] as string[],
   customerIds: [] as string[],
   vendorIds: [] as string[],
+  productIds: [] as string[],
+  purchaseBillIds: [] as string[],
 };
 
 const short = (): string => randomUUID().replace(/-/g, '').slice(0, 12);
@@ -95,6 +98,82 @@ export function trackEnquiry(id: string): string {
 export function trackSalesOrder(id: string): string {
   created.salesOrderIds.push(id);
   return id;
+}
+
+/** Registers a product created through the API so cleanup removes it. */
+export function trackProduct(id: string): string {
+  created.productIds.push(id);
+  return id;
+}
+
+/** Registers a purchase bill created through the API so cleanup removes it. */
+export function trackPurchaseBill(id: string): string {
+  created.purchaseBillIds.push(id);
+  return id;
+}
+
+/**
+ * A catalogue product with an opening stock level.
+ *
+ * Named with the shared prefix so an escaped row is obvious, and always given
+ * an InventoryItem so nothing downstream has to cope with a product that has
+ * no stock record.
+ */
+export async function makeProduct(onHand = 0): Promise<{ id: string; name: string }> {
+  const name = `${TEST_PREFIX}-product-${short()}`;
+  const product = await prisma.product.create({
+    data: {
+      name,
+      // Folded the same way the API folds it, so a fixture can collide with a
+      // catalogued product exactly as a real one would.
+      normalizedName: normalizeProductName(name),
+      inventory: { create: { onHand } },
+    },
+    select: { id: true, name: true },
+  });
+  created.productIds.push(product.id);
+  return product;
+}
+
+/** Sets stock directly, for arranging a shortage without going through the API. */
+export async function setInventory(productId: string, onHand: number): Promise<void> {
+  await prisma.inventoryItem.upsert({
+    where: { productId },
+    update: { onHand },
+    create: { productId, onHand },
+  });
+}
+
+/**
+ * Links a sales order line to a catalogue product.
+ *
+ * Raw SQL on purpose: `sales_order_money_guard` is a deferred constraint
+ * trigger that re-checks the parent order's payment invariants on any write to
+ * a line. Going through Prisma would drag unrelated columns into the statement
+ * on orders the fixtures deliberately leave part-paid.
+ */
+export async function linkOrderLineToProduct(
+  salesOrderItemId: string,
+  productId: string,
+): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "SalesOrderItem" SET "productId" = ${productId} WHERE "id" = ${salesOrderItemId}`;
+}
+
+/** A purchase bill payload with one line, as the create endpoint expects it. */
+export function purchaseBillPayload(
+  vendorId: string,
+  productId: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    billNumber: `${TEST_PREFIX}-BILL-${short()}`.toUpperCase(),
+    vendorId,
+    billType: 'CREDIT',
+    billDate: new Date().toISOString(),
+    items: [{ productName: `${TEST_PREFIX}-bill-line`, productId, orderedQty: 10, receivedQty: 10, rate: '100.00' }],
+    ...overrides,
+  };
 }
 
 /**
@@ -248,6 +327,21 @@ export async function cleanup(): Promise<void> {
     await prisma.auditLog.deleteMany({ where: { actorId: { in: created.userIds } } });
     await prisma.userModulePermission.deleteMany({ where: { userId: { in: created.userIds } } });
   }
+  // Purchase bills hold foreign keys to Vendor, Product and User, and their
+  // allocations to SalesOrderItem — so they must go before any of those.
+  if (created.purchaseBillIds.length) {
+    await prisma.purchaseBill.deleteMany({ where: { id: { in: created.purchaseBillIds } } });
+  }
+  if (created.userIds.length) {
+    await prisma.purchaseBill.deleteMany({ where: { createdById: { in: created.userIds } } });
+  }
+  if (created.productIds.length) {
+    // Allocations cascade from their bill item; anything still pointing at
+    // these products is removed with the bills above.
+    await prisma.purchaseBillItem.deleteMany({ where: { productId: { in: created.productIds } } });
+    await prisma.inventoryItem.deleteMany({ where: { productId: { in: created.productIds } } });
+    await prisma.product.deleteMany({ where: { id: { in: created.productIds } } });
+  }
   if (created.customerIds.length) {
     await prisma.customer.deleteMany({ where: { id: { in: created.customerIds } } });
   }
@@ -267,11 +361,13 @@ export async function cleanup(): Promise<void> {
   created.userIds.length = 0;
   created.customerIds.length = 0;
   created.vendorIds.length = 0;
+  created.productIds.length = 0;
+  created.purchaseBillIds.length = 0;
 }
 
 /** Guards against fixtures escaping — asserted at the end of each suite. */
 export async function residualTestRows(): Promise<number> {
-  const [users, customers, vendors, salesOrders] = await Promise.all([
+  const [users, customers, vendors, salesOrders, products] = await Promise.all([
     prisma.user.count({ where: { name: { startsWith: TEST_PREFIX } } }),
     prisma.customer.count({ where: { name: { startsWith: TEST_PREFIX } } }),
     prisma.vendor.count({ where: { name: { startsWith: TEST_PREFIX } } }),
@@ -280,6 +376,7 @@ export async function residualTestRows(): Promise<number> {
     prisma.salesOrder.count({
       where: { items: { some: { productName: { startsWith: TEST_PREFIX } } } },
     }),
+    prisma.product.count({ where: { name: { startsWith: TEST_PREFIX } } }),
   ]);
-  return users + customers + vendors + salesOrders;
+  return users + customers + vendors + salesOrders + products;
 }
