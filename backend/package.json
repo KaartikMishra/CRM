@@ -2,7 +2,7 @@
   "name": "@rs/backend",
   "version": "0.1.0",
   "private": true,
-  "description": "Express API \u2014 owns all business logic and is the only tier that talks to @rs/database",
+  "description": "Express API — owns all business logic and is the only tier that talks to @rs/database",
   "type": "module",
   "main": "./dist/server.js",
   "scripts": {
@@ -16,28 +16,30 @@
   "dependencies": {
     "@rs/database": "*",
     "@rs/shared": "*",
+    "bcrypt": "^6.0.0",
+    "cloudinary": "^2.5.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^5.1.0",
+    "express-rate-limit": "^7.4.1",
     "helmet": "^8.0.0",
+    "jose": "^5.9.6",
+    "multer": "^2.0.0",
     "pino": "^9.5.0",
     "pino-http": "^10.3.0",
-    "zod": "^3.23.8",
-    "bcrypt": "^6.0.0",
-    "jose": "^5.9.6",
-    "express-rate-limit": "^7.4.1",
-    "cloudinary": "^2.5.1",
-    "multer": "^2.0.0"
+    "ws": "^8.21.3",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/bcrypt": "^6.0.0",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
+    "@types/multer": "^1.4.12",
     "@types/node": "^22.9.0",
+    "@types/ws": "^8.18.1",
     "pino-pretty": "^13.0.0",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
-    "@types/bcrypt": "^6.0.0",
-    "vitest": "^4.1.11",
-    "@types/multer": "^1.4.12"
+    "vitest": "^4.1.11"
   }
 }

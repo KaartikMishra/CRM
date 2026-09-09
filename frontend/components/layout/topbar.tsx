@@ -17,6 +17,7 @@ import {
 import { NAV_ITEMS, type NavItem } from './nav-items';
 import { LogoMark } from './logo';
 import { MobileNav } from './mobile-nav';
+import { NotificationBell } from '@/components/notifications/notification-bell';
 
 type Props = {
   name: string;
@@ -87,6 +88,8 @@ export function Topbar({ name, employeeId, role, initials, items, onSignOut }: P
             Find an enquiry
           </Link>
         </Button>
+
+        <NotificationBell />
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

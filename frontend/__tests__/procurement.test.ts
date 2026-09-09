@@ -29,6 +29,8 @@ import type { SalesRequirementRow, ShortageRow } from '@rs/shared';
 import { normalizeProductName } from '@rs/shared';
 import { displayName, rowKey } from '@/components/procurement/shortage-board';
 import { shiftDay, todayInIST } from '@/components/procurement/sales-board';
+import { mergeNotification, retryDelay } from '@/components/notifications/notification-provider';
+import { relativeTime } from '@/components/notifications/notification-bell';
 import { NAV_ITEMS, visibleNavItems } from '@/components/layout/nav-items';
 import { navIcon } from '@/components/layout/nav-icons';
 import { VENDOR_PAGE_LIMIT } from '@/lib/procurement-api';
@@ -1256,5 +1258,90 @@ describe('the History row is wired to the fulfilment dialog', () => {
     expect(salesBoardSource).toContain('<FulfillmentDetailDialog');
     expect(salesBoardSource).toContain('open={detailFor !== null}');
     expect(salesBoardSource).toContain('setDetailFor(null)');
+  });
+});
+
+/**
+ * Notification client behaviour.
+ *
+ * Pure-logic, matching this suite's existing style: the reconnect and merge
+ * rules are where a real-time feature silently goes wrong, and both are
+ * ordinary functions that can be tested without a DOM or a socket.
+ */
+describe('notification list merging', () => {
+  const make = (id: string, createdAt = '2026-09-08T10:00:00.000Z') => ({
+    id,
+    type: 'ENQUIRY_ASSIGNED' as const,
+    title: 'New enquiry assigned',
+    body: 'ENQ-1 has been assigned to you',
+    href: '/product-enquiry/e1',
+    entityType: 'ProductEnquiry',
+    entityId: 'e1',
+    readAt: null,
+    createdAt,
+  });
+
+  it('adds an arriving notification to the front', () => {
+    const list = [make('a')];
+    expect(mergeNotification(list, make('b')).map((n) => n.id)).toEqual(['b', 'a']);
+  });
+
+  it('ignores one it already has', () => {
+    // The real case: the socket delivers a row, then a reconnect refetch
+    // returns the same row. It must appear once.
+    const list = [make('a'), make('b')];
+    expect(mergeNotification(list, make('a'))).toHaveLength(2);
+    expect(mergeNotification(list, make('a'))).toBe(list);
+  });
+
+  it('never mutates the list it was given', () => {
+    const list = [make('a')];
+    const before = [...list];
+    mergeNotification(list, make('b'));
+    expect(list).toEqual(before);
+  });
+});
+
+describe('reconnect backoff', () => {
+  it('grows with each failed attempt', () => {
+    const first = retryDelay(0);
+    const later = retryDelay(5);
+    expect(later).toBeGreaterThan(first);
+  });
+
+  it('never waits longer than the cap', () => {
+    // A tab left open through a long outage must still retry promptly when
+    // the network returns, not after an hour of doubling.
+    for (const attempt of [10, 20, 50]) {
+      expect(retryDelay(attempt)).toBeLessThanOrEqual(30_000);
+    }
+  });
+
+  it('never retries instantly', () => {
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      expect(retryDelay(attempt)).toBeGreaterThan(0);
+    }
+  });
+
+  it('jitters, so many tabs do not reconnect in lockstep', () => {
+    const samples = new Set(Array.from({ length: 20 }, () => retryDelay(4)));
+    expect(samples.size).toBeGreaterThan(1);
+  });
+});
+
+describe('relative timestamps', () => {
+  const base = Date.parse('2026-09-08T12:00:00.000Z');
+  const ago = (ms: number) => new Date(base - ms).toISOString();
+
+  it('reads naturally at each scale', () => {
+    expect(relativeTime(ago(5_000), base)).toBe('just now');
+    expect(relativeTime(ago(120_000), base)).toBe('2 min ago');
+    expect(relativeTime(ago(3 * 3_600_000), base)).toBe('3 hr ago');
+    expect(relativeTime(ago(24 * 3_600_000), base)).toBe('yesterday');
+    expect(relativeTime(ago(3 * 24 * 3_600_000), base)).toBe('3 days ago');
+  });
+
+  it('does not show a negative age for a clock skewed slightly ahead', () => {
+    expect(relativeTime(ago(-5_000), base)).toBe('just now');
   });
 });

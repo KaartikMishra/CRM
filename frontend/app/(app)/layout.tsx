@@ -5,6 +5,7 @@ import { visibleNavItems } from '@/components/layout/nav-items';
 import { getCurrentUser, initials } from '@/lib/current-user';
 import { accessibleModules } from '@/lib/module-access';
 import { signOutAction } from './actions';
+import { NotificationProvider } from '@/components/notifications/notification-provider';
 
 /**
  * The authenticated shell.
@@ -24,7 +25,15 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   const items = visibleNavItems(accessibleModules(user), user.role === 'ADMIN');
 
+  /*
+    Told to the client rather than derived: BACKEND_URL is server-only, and
+    window.location is wrong whenever the API answers on a different host. One
+    variable the deployment sets, defaulting to same-origin for development.
+  */
+  const wsUrl = process.env.NEXT_PUBLIC_WS_URL ?? '';
+
   return (
+    <NotificationProvider wsUrl={wsUrl}>
     <div className="flex min-h-screen">
       <Sidebar items={items} />
       <div className="flex min-w-0 flex-1 flex-col">
@@ -39,5 +48,6 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">{children}</main>
       </div>
     </div>
+    </NotificationProvider>
   );
 }

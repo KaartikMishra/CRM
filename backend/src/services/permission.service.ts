@@ -92,3 +92,45 @@ export async function effectivePermissions(
     })),
   );
 }
+
+/**
+ * Everyone who can currently do one thing — the reverse of the question above.
+ *
+ * Needed because a notification has to be addressed. "Tell procurement" means
+ * nothing until it resolves to a list of people, and the only honest source
+ * for that list is the same two-layer rule every request already obeys.
+ *
+ * The override table alone is the wrong answer, and quietly so. Absent rows
+ * mean "inherit the role default", and most people have no rows at all — an
+ * administrator holds PROCUREMENT because ADMIN does, not because a row says
+ * so. Querying only overrides would therefore address a notice to nobody while
+ * appearing to work. So the set is:
+ *
+ *   (people whose role allows it, minus those revoked by an override)
+ *     ∪ (people whose role denies it, but who were granted it by an override)
+ *
+ * Two queries regardless of how many users exist, resolved in memory. Inactive
+ * users are excluded here rather than by the caller: someone who cannot sign
+ * in cannot act on what they are told.
+ */
+export async function usersWithPermission(
+  module: AppModule,
+  action: PermissionAction,
+): Promise<{ id: string; role: Role }[]> {
+  const [users, overrides] = await Promise.all([
+    prisma.user.findMany({
+      where: { isActive: true },
+      select: { id: true, role: true },
+    }),
+    prisma.userModulePermission.findMany({
+      where: { module, action },
+      select: { userId: true, allowed: true },
+    }),
+  ]);
+
+  // An override is authoritative when present — including when it says false,
+  // which is how one person's access is revoked without changing their role.
+  const overrideByUser = new Map(overrides.map((o) => [o.userId, o.allowed]));
+
+  return users.filter((user) => overrideByUser.get(user.id) ?? roleDefault(user.role, module, action));
+}

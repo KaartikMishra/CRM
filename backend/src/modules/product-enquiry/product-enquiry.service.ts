@@ -18,6 +18,7 @@ import type {
 import { databaseNow, prisma } from '../../config/database.js';
 import { env } from '../../config/env.js';
 import { AppError } from '../../utils/AppError.js';
+import * as notification from '../notification/notification.service.js';
 import type { AuthenticatedUser } from '../../middleware/requireAuth.js';
 import {
   canEditEnquiry,
@@ -105,7 +106,7 @@ export async function createEnquiry(
   actor: AuthenticatedUser,
   input: CreateEnquiryInput,
 ): Promise<EnquiryDetail> {
-  const { id, now } = await prisma.$transaction(async (tx) => {
+  const { id, now, assignedToId } = await prisma.$transaction(async (tx) => {
     const at = await databaseNow(tx);
 
     await assertAssigneeIsUsable(tx, input.assignedToId);
@@ -170,8 +171,21 @@ export async function createEnquiry(
       },
     ]);
 
-    return { id: enquiry.id, now: at };
+    // Written inside the transaction that creates the enquiry, so a rolled-back
+    // creation cannot leave somebody told about an enquiry that never existed.
+    // Only the Towards user is told; an enquiry is one person's queue.
+    await notification.persist(
+      tx,
+      [input.assignedToId],
+      notification.enquiryAssignedDraft(enquiryNo, enquiry.id),
+    );
+
+    return { id: enquiry.id, now: at, assignedToId: input.assignedToId };
   }, TX_OPTIONS);
+
+  // After commit, never before: delivery is best-effort and must not be able
+  // to fail an enquiry that has already been created.
+  await notification.deliver([assignedToId], 'ENQUIRY_ASSIGNED', id);
 
   return detailAfterCommit(id, now);
 }
@@ -288,7 +302,7 @@ export async function assignEnquiry(
   id: string,
   input: ReassignEnquiryInput,
 ): Promise<EnquiryDetail> {
-  const now = await prisma.$transaction(async (tx) => {
+  const { at: now, notify } = await prisma.$transaction(async (tx) => {
     const at = await databaseNow(tx);
 
     await repo.lockEnquiry(tx, id);
@@ -303,7 +317,8 @@ export async function assignEnquiry(
     // §29 — assigning to the current holder is a no-op, so a retry adds no
     // second REASSIGNED event.
     if (enquiry.assignedToId === input.assignedToId) {
-      return at;
+      // Nothing changed, so nobody is told. A retry must not re-notify.
+      return { at, notify: false as const };
     }
 
     await tx.productEnquiry.update({
@@ -321,8 +336,26 @@ export async function assignEnquiry(
       ...(input.note ? { metadata: { note: input.note } } : {}),
     });
 
-    return at;
+    // findForPolicy selects only what the policy checks need, so the human
+    // number is read here rather than widening that query for every caller.
+    const { enquiryNo } = await tx.productEnquiry.findUniqueOrThrow({
+      where: { id },
+      select: { enquiryNo: true },
+    });
+
+    // Only the new holder is told — reassignment moves one person's queue.
+    await notification.persist(
+      tx,
+      [input.assignedToId],
+      notification.enquiryAssignedDraft(enquiryNo, id),
+    );
+
+    return { at, notify: true as const };
   }, TX_OPTIONS);
+
+  if (notify) {
+    await notification.deliver([input.assignedToId], 'ENQUIRY_ASSIGNED', id);
+  }
 
   return detailAfterCommit(id, now);
 }

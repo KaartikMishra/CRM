@@ -6,14 +6,20 @@
  */
 
 import type { Server } from 'node:http';
+import type { WebSocketServer } from 'ws';
 import { connectDatabase, disconnectDatabase } from './config/database.js';
 import { corsAllowlist } from './config/cors.js';
 import { env } from './config/env.js';
 import { logger } from './config/logger.js';
 import { createApp } from './app.js';
+import { attachWebSocketServer, stopWebSocketServer } from './realtime/ws-server.js';
+import { purgeExpired } from './modules/notification/notification.service.js';
 
 /** How long a shutdown may take before the process is killed anyway. */
 const SHUTDOWN_TIMEOUT_MS = 10_000;
+
+/** How often expired notifications are swept. Daily is ample for a 30-day window. */
+const RETENTION_SWEEP_MS = 24 * 60 * 60 * 1000;
 
 async function start(): Promise<void> {
   // Fail before binding a port if the database is unreachable.
@@ -35,7 +41,18 @@ async function start(): Promise<void> {
     throw error;
   });
 
-  registerShutdownHandlers(server);
+  // The notification socket shares this listener rather than opening a second
+  // port: one thing for a proxy to forward, one thing for a firewall to allow.
+  const wss = attachWebSocketServer(server);
+
+  // Notifications are kept for a fixed window. Swept once at boot so a process
+  // that was down over a boundary still catches up, then daily. `unref` so a
+  // pending timer never holds the process open during shutdown.
+  void purgeExpired();
+  const retention = setInterval(() => void purgeExpired(), RETENTION_SWEEP_MS);
+  retention.unref();
+
+  registerShutdownHandlers(server, wss);
 }
 
 /**
@@ -43,7 +60,7 @@ async function start(): Promise<void> {
  * then release the database. A request that is mid-transaction when a deploy
  * happens should complete rather than leave a half-written enquiry.
  */
-function registerShutdownHandlers(server: Server): void {
+function registerShutdownHandlers(server: Server, wss: WebSocketServer | null = null): void {
   let shuttingDown = false;
 
   const shutdown = (signal: string): void => {
@@ -57,6 +74,10 @@ function registerShutdownHandlers(server: Server): void {
       process.exit(1);
     }, SHUTDOWN_TIMEOUT_MS);
     forceExit.unref();
+
+    // Sockets first: an open WebSocket keeps the HTTP server from closing,
+    // so `server.close` would otherwise wait for the shutdown timeout.
+    void stopWebSocketServer(wss);
 
     server.close((error) => {
       void (async () => {

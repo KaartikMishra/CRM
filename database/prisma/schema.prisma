@@ -81,6 +81,7 @@ model User {
   reviewedSalesChanges  SalesItemChangeRequest[] @relation("SalesChangeReviewedBy")
   createdPurchaseBills  PurchaseBill[]           @relation("PurchaseBillCreatedBy")
   purchaseAllocations   PurchaseAllocation[]     @relation("AllocationBy")
+  notifications         Notification[]
 
   @@index([role, isActive])
 }
@@ -903,4 +904,58 @@ model PurchaseAllocation {
   /// stock to the same line is an edit, not a new row.
   @@unique([purchaseBillItemId, salesOrderItemId])
   @@index([salesOrderItemId])
+}
+
+// ---------------------------------------------------------------------------
+//  Notifications
+// ---------------------------------------------------------------------------
+
+/// What happened. One shared type rather than a per-module enum: a
+/// notification is the same kind of thing whichever module raised it, and the
+/// recipient's bell does not care where it came from.
+enum NotificationType {
+  ENQUIRY_ASSIGNED
+  SALES_ORDER_CREATED
+}
+
+/// One thing somebody should know about, addressed to one person.
+///
+/// The row is the record; the WebSocket is only how it arrives quickly. A
+/// notification that was never delivered because the recipient was offline is
+/// still here when they return, which is why persistence happens inside the
+/// business transaction and delivery happens after it commits.
+model Notification {
+  id          String           @id @default(cuid())
+  recipientId String
+  type        NotificationType
+
+  title String
+  body  String
+  /// Where clicking it goes. Stored rather than derived from type+entityId, so
+  /// an old notification keeps working if routing later changes.
+  href  String
+
+  /// What it is about. Plain strings, not a relation: Prisma cannot model a
+  /// polymorphic foreign key, and a real column per entity type would grow
+  /// with every future notification kind.
+  entityType String
+  entityId   String
+
+  /// Seen and cleared are different states, and neither implies the other:
+  /// reading a notification does not remove it, and Clear All does not
+  /// pretend the person read what it hides.
+  readAt      DateTime?
+  dismissedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  recipient User @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+
+  /// A retried request cannot raise the same notice twice for one person. The
+  /// service treats the resulting P2002 as success rather than an error.
+  @@unique([recipientId, type, entityId])
+  /// The bell's own query: this person's undismissed notices, newest first.
+  @@index([recipientId, dismissedAt, createdAt])
+  /// Retention sweeps by age across every recipient.
+  @@index([createdAt])
 }

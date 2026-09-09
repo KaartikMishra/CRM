@@ -147,3 +147,17 @@ export type PurchaseBillStatus = (typeof PURCHASE_BILL_STATUSES)[number];
  */
 export const FULFILLMENT_STATUSES = ['UNFULFILLED', 'PARTIAL', 'FULFILLED'] as const;
 export type FulfillmentStatus = (typeof FULFILLMENT_STATUSES)[number];
+
+// ---------------------------------------------------------------------------
+//  Notifications
+// ---------------------------------------------------------------------------
+
+/**
+ * What a notification is about.
+ *
+ * One shared list rather than a type per module: the recipient's bell treats
+ * them identically, and splitting them would only push the union back together
+ * at every call site.
+ */
+export const NOTIFICATION_TYPES = ['ENQUIRY_ASSIGNED', 'SALES_ORDER_CREATED'] as const;
+export type NotificationType = (typeof NOTIFICATION_TYPES)[number];

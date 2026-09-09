@@ -24,6 +24,7 @@ import {
 } from '@rs/shared';
 import { databaseNow, prisma } from '../../config/database.js';
 import { AppError } from '../../utils/AppError.js';
+import * as notification from '../notification/notification.service.js';
 import type { AuthenticatedUser } from '../../middleware/requireAuth.js';
 import {
   canCloseOrder,
@@ -135,6 +136,19 @@ export async function createSalesOrder(
     }
   }
 
+  // Resolved before the transaction so the permission queries are not holding
+  // it open. The list is a snapshot of who can act on procurement right now;
+  // a permission changed mid-request is a race nobody can observe.
+  const recipients = await notification.procurementRecipients();
+
+  // What the order is for, in one line. The first product plus a count of the
+  // rest — enough to recognise the order without opening it, and short enough
+  // for a dropdown row.
+  const first = input.items[0];
+  const summary = first
+    ? `${first.productName} × ${first.quantity}${input.items.length > 1 ? ` +${input.items.length - 1} more` : ''}`
+    : 'no lines';
+
   const { id, now } = await prisma.$transaction(async (tx) => {
     const at = await databaseNow(tx);
 
@@ -166,8 +180,21 @@ export async function createSalesOrder(
       select: { id: true },
     });
 
+    // Persisted with the order itself: if the order rolls back — including at
+    // COMMIT, where sales_order_money_guard fires — these rows go with it.
+    await notification.persist(
+      tx,
+      recipients,
+      notification.salesOrderCreatedDraft(input.orderId, summary, order.id),
+    );
+
     return { id: order.id, now: at };
   }, TX_OPTIONS);
+
+  // Only now. The money guard is DEFERRABLE INITIALLY DEFERRED, so a
+  // transaction can look successful inside the callback and still throw at
+  // commit — emitting there could announce an order that never existed.
+  await notification.deliver(recipients, 'SALES_ORDER_CREATED', id);
 
   return detailAfterCommit(id, now);
 }
