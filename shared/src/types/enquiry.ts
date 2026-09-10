@@ -49,6 +49,7 @@ export type CustomerRef = {
 export type CustomerContactRef = CustomerRef & {
   phone: string | null;
   email: string | null;
+  address: string | null;
 };
 
 export type VendorRef = {
@@ -165,7 +166,12 @@ export type EnquirySummary = {
 export type EnquiryDetail = {
   id: string;
   enquiryNo: string;
-  customer: CustomerRef;
+  /**
+   * Contact details travel with the detail payload, not with list rows: the
+   * detail page is where someone decides to ring or write to the customer.
+   * Summaries keep the bare CustomerRef.
+   */
+  customer: CustomerContactRef;
   source: EnquirySource;
   sourceDetail: string | null;
   status: EnquiryStatus;
@@ -192,6 +198,7 @@ export type FullSubmitBlocker = {
 export type CustomerView = CustomerRef & {
   phone: string | null;
   email: string | null;
+  address: string | null;
   createdAt: IsoDateTime;
 };
 

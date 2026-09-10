@@ -21,13 +21,33 @@ export const customerEmailSchema = z
   .toLowerCase()
   .email('Enter a valid email address');
 
+/**
+ * A postal address, kept deliberately unstructured.
+ *
+ * Addresses are written the way the customer gives them — house names, floors,
+ * landmarks, "opposite the temple" — and imposing line/city/postcode fields
+ * would only invite them to be filled in wrongly. Trimmed and length-capped;
+ * nothing else is assumed about the shape.
+ */
+export const customerAddressSchema = z
+  .string()
+  .trim()
+  .max(500, 'Keep the address under 500 characters');
+
 export const createCustomerSchema = z.object({
   name: z.string().trim().min(2, 'Customer name is required').max(160),
   type: z.enum(CUSTOMER_TYPES, {
     errorMap: () => ({ message: 'Choose a customer type' }),
   }),
+  /**
+   * All three stay optional on the wire so no existing customer record and no
+   * existing caller becomes invalid. Where a form needs one of them — both
+   * add-customer dialogs require a phone — that is enforced at the form, which
+   * is the layer that knows what it is asking for.
+   */
   phone: customerPhoneSchema.optional(),
   email: customerEmailSchema.optional(),
+  address: customerAddressSchema.optional(),
 });
 
 export const customerSearchSchema = z.object({

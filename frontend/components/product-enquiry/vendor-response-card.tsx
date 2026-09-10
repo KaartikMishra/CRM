@@ -24,9 +24,38 @@ export function VendorResponseCard({ response }: { response: VendorResponseView 
   return (
     <div className="rounded-md border border-line bg-surface p-3.5">
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-medium text-ink">{response.vendor.name}</p>
-          <p className="mt-0.5 text-xs text-muted">Recorded by {response.createdBy.name}</p>
+        <div className="flex min-w-0 items-start gap-3">
+          {/*
+            §32 — the vendor's own photograph of what they are offering, which is
+            a different thing from the customer's product image and is stored
+            separately. Rendered only when one exists: a response without a photo
+            keeps exactly the layout it had before.
+
+            The href is the Cloudinary secure URL the API already returned. No
+            credential is involved — the API secret stays server-side, and the
+            browser only ever sees this public delivery URL.
+          */}
+          {response.image && (
+            <a
+              href={response.image.secureUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="shrink-0"
+              title="Open the full-size image"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={response.image.secureUrl}
+                alt={`Product offered by ${response.vendor.name}`}
+                loading="lazy"
+                className="size-12 rounded-sm border border-line object-cover"
+              />
+            </a>
+          )}
+          <div className="min-w-0">
+            <p className="truncate text-sm font-medium text-ink">{response.vendor.name}</p>
+            <p className="mt-0.5 text-xs text-muted">Recorded by {response.createdBy.name}</p>
+          </div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
           {response.sameDay && <Badge variant="positive">Same Day</Badge>}

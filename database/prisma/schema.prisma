@@ -119,6 +119,9 @@ model Customer {
   type      CustomerType
   phone     String?
   email     String?
+  /// Where to deliver or invoice. Optional and free-text: an address is written
+  /// the way the customer gives it, and every existing row predates this field.
+  address   String?
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
 

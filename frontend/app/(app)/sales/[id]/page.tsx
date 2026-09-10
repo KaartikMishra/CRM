@@ -95,6 +95,16 @@ export default async function SalesOrderDetailPage({ params }: { params: Params 
       ),
     },
     {
+      label: 'Address',
+      // Free text as the customer gave it, so newlines are kept rather than
+      // collapsed — an address typed over three lines should read as three.
+      value: order.customer.address ? (
+        <span className="whitespace-pre-line">{order.customer.address}</span>
+      ) : (
+        <span className="text-faint">Not recorded</span>
+      ),
+    },
+    {
       label: 'Products',
       value: `${order.money.activeItemCount} ${order.money.activeItemCount === 1 ? 'line' : 'lines'}`,
     },

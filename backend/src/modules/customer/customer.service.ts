@@ -17,6 +17,7 @@ const view = {
   type: true,
   phone: true,
   email: true,
+  address: true,
   createdAt: true,
 } as const;
 
@@ -26,6 +27,7 @@ type Row = {
   type: CustomerView['type'];
   phone: string | null;
   email: string | null;
+  address: string | null;
   createdAt: Date;
 };
 
@@ -35,6 +37,7 @@ const toView = (row: Row): CustomerView => ({
   type: row.type,
   phone: row.phone,
   email: row.email,
+  address: row.address,
   createdAt: row.createdAt.toISOString(),
 });
 
@@ -63,6 +66,9 @@ export async function createCustomer(input: CreateCustomerInput): Promise<Custom
       type: input.type,
       phone: input.phone ?? null,
       email: input.email ?? null,
+      // Blank optional fields are stored as NULL, never as an empty string, so
+      // "not recorded" has exactly one representation in the column.
+      address: input.address ?? null,
     },
     select: view,
   });

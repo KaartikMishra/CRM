@@ -8,6 +8,7 @@ import {
   CUSTOMER_TYPES,
   MAX_ITEMS_PER_SALES_ORDER,
   createSalesOrderSchema,
+  customerAddressSchema,
   customerEmailSchema,
   customerPhoneSchema,
   isValidAmount,
@@ -36,6 +37,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
+import { Textarea } from '@/components/ui/textarea';
 import { ErrorMessage } from '@/components/common/error-message';
 import { EntityPicker, type PickerOption } from '@/components/product-enquiry/entity-picker';
 import { ImageUploadField } from '@/components/product-enquiry/image-upload-field';
@@ -111,6 +113,7 @@ export function CreateSalesOrderForm({
     useState<(typeof CUSTOMER_TYPES)[number]>('RETAIL');
   const [newCustomerPhone, setNewCustomerPhone] = useState('');
   const [newCustomerEmail, setNewCustomerEmail] = useState('');
+  const [newCustomerAddress, setNewCustomerAddress] = useState('');
   const [creatingCustomer, setCreatingCustomer] = useState(false);
   const [customerErrors, setCustomerErrors] = useState<Record<string, string>>({});
 
@@ -121,7 +124,10 @@ export function CreateSalesOrderForm({
   const phoneOk = customerPhoneSchema.safeParse(newCustomerPhone).success;
   const emailOk =
     newCustomerEmail.trim() === '' || customerEmailSchema.safeParse(newCustomerEmail).success;
-  const customerReady = nameOk && phoneOk && emailOk;
+  const addressOk =
+    newCustomerAddress.trim() === '' ||
+    customerAddressSchema.safeParse(newCustomerAddress).success;
+  const customerReady = nameOk && phoneOk && emailOk && addressOk;
 
   const atCap = items.length >= MAX_ITEMS_PER_SALES_ORDER;
 
@@ -223,6 +229,7 @@ export function CreateSalesOrderForm({
         'Enter a valid phone number';
     }
     if (!emailOk) errors.email = 'Enter a valid email address';
+    if (!addressOk) errors.address = 'Keep the address under 500 characters';
     setCustomerErrors(errors);
     if (Object.keys(errors).length > 0) return;
 
@@ -236,6 +243,7 @@ export function CreateSalesOrderForm({
         // an empty string would fail its format check rather than mean "none".
         ...(newCustomerPhone.trim() ? { phone: newCustomerPhone.trim() } : {}),
         ...(newCustomerEmail.trim() ? { email: newCustomerEmail.trim() } : {}),
+        ...(newCustomerAddress.trim() ? { address: newCustomerAddress.trim() } : {}),
       });
       setCreatingCustomer(false);
 
@@ -254,6 +262,7 @@ export function CreateSalesOrderForm({
       setNewCustomerName('');
       setNewCustomerPhone('');
       setNewCustomerEmail('');
+      setNewCustomerAddress('');
       setCustomerErrors({});
       toast.success('Customer added');
     });
@@ -623,6 +632,20 @@ export function CreateSalesOrderForm({
                   <p className="text-xs text-critical">{customerErrors.email}</p>
                 )}
               </div>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="newCustomerAddress">Address</Label>
+              <Textarea
+                id="newCustomerAddress"
+                value={newCustomerAddress}
+                onChange={(e) => setNewCustomerAddress(e.target.value)}
+                placeholder="Optional"
+                rows={2}
+              />
+              {customerErrors.address && (
+                <p className="text-xs text-critical">{customerErrors.address}</p>
+              )}
             </div>
           </div>
 

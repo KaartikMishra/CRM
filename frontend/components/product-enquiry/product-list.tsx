@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react';
 import { ImageIcon, Loader2, Plus, Store } from 'lucide-react';
 import { toast } from 'sonner';
 import {
+  DIMENSION_UNITS,
   PRODUCT_MATCH_TYPES,
   WEIGHT_UNITS,
   createVendorResponseSchema,
@@ -60,6 +61,14 @@ export function ProductList({ enquiryId, products, canRespond }: Props) {
   const [deliveryDays, setDeliveryDays] = useState('');
   const [weightValue, setWeightValue] = useState('');
   const [weightUnit, setWeightUnit] = useState<(typeof WEIGHT_UNITS)[number]>('KG');
+  // §20 — structured length/width/height, never free text. Held as strings so a
+  // half-typed value is not coerced to NaN mid-keystroke; converted once on
+  // submit, exactly as the enquiry create form does it.
+  const [dimLength, setDimLength] = useState('');
+  const [dimWidth, setDimWidth] = useState('');
+  const [dimHeight, setDimHeight] = useState('');
+  const [dimensionUnit, setDimensionUnit] =
+    useState<(typeof DIMENSION_UNITS)[number]>('CM');
   const [notes, setNotes] = useState('');
   const [sameDay, setSameDay] = useState(false);
   // SIMILAR_PRODUCT first, matching the enum order and the historical default.
@@ -81,6 +90,10 @@ export function ProductList({ enquiryId, products, canRespond }: Props) {
     setRate('');
     setDeliveryDays('');
     setWeightValue('');
+    setDimLength('');
+    setDimWidth('');
+    setDimHeight('');
+    setDimensionUnit('CM');
     setNotes('');
     setSameDay(false);
     setMatchType('SIMILAR_PRODUCT');
@@ -92,6 +105,22 @@ export function ProductList({ enquiryId, products, canRespond }: Props) {
     if (!responseFor) return;
 
     const weight = weightValue.trim() === '' ? undefined : Number(weightValue);
+
+    // A dimension is only meaningful as a complete set, so it is sent when all
+    // three sides are present and omitted otherwise — dimensions stay optional,
+    // and a partly-filled set never reaches the API as a malformed object. Zod
+    // then rejects zero or negative values on each side.
+    const num = (v: string): number | undefined => {
+      if (v.trim() === '') return undefined;
+      const parsed = Number(v);
+      return Number.isFinite(parsed) ? parsed : Number.NaN;
+    };
+    const length = num(dimLength);
+    const width = num(dimWidth);
+    const height = num(dimHeight);
+    const anyDimension = [length, width, height].some((v) => v !== undefined);
+    const allDimensions = [length, width, height].every((v) => v !== undefined);
+
     const candidate = {
       vendorId: vendor?.id ?? '',
       matchType,
@@ -103,10 +132,27 @@ export function ProductList({ enquiryId, products, canRespond }: Props) {
       ...(weight !== undefined && Number.isFinite(weight)
         ? { weight: { value: weight, unit: weightUnit } }
         : {}),
+      ...(allDimensions
+        ? {
+            dimension: {
+              length: length as number,
+              width: width as number,
+              height: height as number,
+              unit: dimensionUnit,
+            },
+          }
+        : {}),
       ...(notes.trim() ? { notes: notes.trim() } : {}),
       // §32 — kept separate from the customer's own product image.
       ...(imageAssetId ? { imageAssetId } : {}),
     };
+
+    // Caught before Zod, which never sees a partial set and so could not
+    // explain this one. Silently dropping two typed sides would be worse.
+    if (anyDimension && !allDimensions) {
+      setErrors({ dimension: 'Enter length, width and height, or leave all three blank' });
+      return;
+    }
 
     const parsed = createVendorResponseSchema.safeParse(candidate);
     if (!parsed.success) {
@@ -370,6 +416,68 @@ export function ProductList({ enquiryId, products, canRespond }: Props) {
                     </SelectContent>
                   </Select>
                 </div>
+              </div>
+
+              {/*
+                §20 — three sides plus a unit, matching the enquiry create form
+                so the two read the same way. Optional: all three or none.
+              */}
+              <div className="flex flex-col gap-1.5">
+                <Label>Dimensions</Label>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input
+                    inputMode="decimal"
+                    value={dimLength}
+                    onChange={(e) => setDimLength(e.target.value)}
+                    placeholder="Length"
+                    aria-label="Length"
+                    className="w-24 tabular"
+                  />
+                  <Input
+                    inputMode="decimal"
+                    value={dimWidth}
+                    onChange={(e) => setDimWidth(e.target.value)}
+                    placeholder="Width"
+                    aria-label="Width"
+                    className="w-24 tabular"
+                  />
+                  <Input
+                    inputMode="decimal"
+                    value={dimHeight}
+                    onChange={(e) => setDimHeight(e.target.value)}
+                    placeholder="Height"
+                    aria-label="Height"
+                    className="w-24 tabular"
+                  />
+                  <Select
+                    value={dimensionUnit}
+                    onValueChange={(v) => setDimensionUnit(v as typeof dimensionUnit)}
+                  >
+                    <SelectTrigger className="w-24" aria-label="Dimension unit">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {DIMENSION_UNITS.map((u) => (
+                        <SelectItem key={u} value={u}>
+                          {u.toLowerCase()}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {errors.dimension ||
+                errors['dimension.length'] ||
+                errors['dimension.width'] ||
+                errors['dimension.height'] ? (
+                  <p className="text-xs text-critical">
+                    {errors.dimension ??
+                      errors['dimension.length'] ??
+                      errors['dimension.width'] ??
+                      errors['dimension.height']}
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted">Optional — fill all three or leave blank.</p>
+                )}
               </div>
 
               <div className="flex flex-col gap-1.5">

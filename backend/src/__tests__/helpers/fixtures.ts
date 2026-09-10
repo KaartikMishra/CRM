@@ -307,54 +307,180 @@ export async function backdateEnquiry(id: string, minutesAgo: number): Promise<v
   });
 }
 
+/**
+ * Runs one cleanup step, remembering a failure instead of abandoning the rest.
+ *
+ * `cleanup()` used to be a plain chain of awaits, so the first delete that threw
+ * skipped every delete after it. A transient Neon drop during one suite's
+ * teardown therefore left its customer, vendor and users behind — and because
+ * `residualTestRows()` counts globally, every later suite failed its afterAll on
+ * rows it never created. One connection blip became sixteen file failures.
+ *
+ * Collecting the error rather than propagating it immediately means teardown
+ * always attempts everything it was going to attempt. The first failure is
+ * re-thrown once the sweep is done, so a genuinely broken cleanup still fails
+ * the suite loudly — it simply no longer takes the following suites with it.
+ */
+async function step(failures: unknown[], run: () => Promise<unknown>): Promise<void> {
+  try {
+    await run();
+  } catch (error) {
+    failures.push(error);
+  }
+}
+
+/**
+ * Removes anything still carrying the test prefix, whether or not it was tracked.
+ *
+ * Tracking happens *after* the create resolves:
+ *
+ *     const user = await prisma.user.create(...)   // may commit, then the
+ *     created.userIds.push(user.id)                // connection dies here
+ *
+ * If the server commits the insert and the connection drops before the client
+ * sees the result, the row exists and no id was ever recorded — so an id-based
+ * cleanup cannot reach it, and it survives as a permanent orphan. The same
+ * applies to rows the API creates when the response is lost in flight.
+ *
+ * The sweep closes that hole by asking the database what is test-owned instead
+ * of trusting an in-memory list. Scope is deliberately narrow: only rows whose
+ * name carries TEST_PREFIX, or rows belonging to one of those, are touched, so
+ * real CRM data is unreachable from here by construction. Order follows the
+ * foreign keys, exactly as the tracked deletes above do.
+ *
+ * This is safe only because `vitest.config.ts` sets `fileParallelism: false` —
+ * suites share one database and run one at a time, so no other suite's fixtures
+ * can be in flight while this runs. Enabling parallelism would break that.
+ */
+async function sweepTestOwnedRows(failures: unknown[]): Promise<void> {
+  const owned = { name: { startsWith: TEST_PREFIX } };
+  const ownedName = { startsWith: TEST_PREFIX };
+
+  // Enquiries first: their products, vendor responses, events and delay records
+  // all cascade from them.
+  await step(failures, () =>
+    prisma.productEnquiry.deleteMany({
+      where: { OR: [{ customer: owned }, { createdBy: owned }, { assignedTo: owned }] },
+    }),
+  );
+  // Vendor -> VendorResponse is Restrict, so any response still pointing at a
+  // test vendor has to go before the vendor itself can.
+  await step(failures, () => prisma.vendorResponse.deleteMany({ where: { vendor: owned } }));
+  // Items, change requests and allocations cascade from the order.
+  await step(failures, () =>
+    prisma.salesOrder.deleteMany({
+      where: {
+        OR: [
+          { customer: owned },
+          { createdBy: owned },
+          { items: { some: { productName: ownedName } } },
+        ],
+      },
+    }),
+  );
+  // Bill items and their allocations cascade from the bill.
+  await step(failures, () =>
+    prisma.purchaseBill.deleteMany({ where: { OR: [{ vendor: owned }, { createdBy: owned }] } }),
+  );
+  await step(failures, () => prisma.purchaseBillItem.deleteMany({ where: { product: owned } }));
+  await step(failures, () => prisma.inventoryItem.deleteMany({ where: { product: owned } }));
+  await step(failures, () => prisma.product.deleteMany({ where: owned }));
+  await step(failures, () => prisma.auditLog.deleteMany({ where: { actor: owned } }));
+  await step(failures, () => prisma.userModulePermission.deleteMany({ where: { user: owned } }));
+  // MediaAsset -> uploadedBy is Restrict, so an asset a test user uploaded would
+  // otherwise pin that user in place. Every image reference to it is SetNull.
+  await step(failures, () => prisma.mediaAsset.deleteMany({ where: { uploadedBy: owned } }));
+  await step(failures, () => prisma.customer.deleteMany({ where: owned }));
+  await step(failures, () => prisma.vendor.deleteMany({ where: owned }));
+  await step(failures, () => prisma.user.deleteMany({ where: owned }));
+}
+
 export async function cleanup(): Promise<void> {
+  const failures: unknown[] = [];
+
   if (created.enquiryIds.length) {
-    await prisma.productEnquiry.deleteMany({ where: { id: { in: created.enquiryIds } } });
+    await step(failures, () =>
+      prisma.productEnquiry.deleteMany({ where: { id: { in: created.enquiryIds } } }),
+    );
   }
   // Sales orders hold foreign keys to Customer and User, so they must go before
   // either of those or the deletes below fail on a constraint.
   if (created.salesOrderIds.length) {
-    await prisma.salesOrder.deleteMany({ where: { id: { in: created.salesOrderIds } } });
+    await step(failures, () =>
+      prisma.salesOrder.deleteMany({ where: { id: { in: created.salesOrderIds } } }),
+    );
   }
   // Anything the API created for these users that we did not track by id.
   if (created.userIds.length) {
-    await prisma.productEnquiry.deleteMany({
-      where: { OR: [{ createdById: { in: created.userIds } }, { assignedToId: { in: created.userIds } }] },
-    });
-    await prisma.salesOrder.deleteMany({
-      where: { OR: [{ createdById: { in: created.userIds } }, { closedById: { in: created.userIds } }] },
-    });
-    await prisma.auditLog.deleteMany({ where: { actorId: { in: created.userIds } } });
-    await prisma.userModulePermission.deleteMany({ where: { userId: { in: created.userIds } } });
+    await step(failures, () =>
+      prisma.productEnquiry.deleteMany({
+        where: {
+          OR: [{ createdById: { in: created.userIds } }, { assignedToId: { in: created.userIds } }],
+        },
+      }),
+    );
+    await step(failures, () =>
+      prisma.salesOrder.deleteMany({
+        where: {
+          OR: [{ createdById: { in: created.userIds } }, { closedById: { in: created.userIds } }],
+        },
+      }),
+    );
+    await step(failures, () =>
+      prisma.auditLog.deleteMany({ where: { actorId: { in: created.userIds } } }),
+    );
+    await step(failures, () =>
+      prisma.userModulePermission.deleteMany({ where: { userId: { in: created.userIds } } }),
+    );
   }
   // Purchase bills hold foreign keys to Vendor, Product and User, and their
   // allocations to SalesOrderItem — so they must go before any of those.
   if (created.purchaseBillIds.length) {
-    await prisma.purchaseBill.deleteMany({ where: { id: { in: created.purchaseBillIds } } });
+    await step(failures, () =>
+      prisma.purchaseBill.deleteMany({ where: { id: { in: created.purchaseBillIds } } }),
+    );
   }
   if (created.userIds.length) {
-    await prisma.purchaseBill.deleteMany({ where: { createdById: { in: created.userIds } } });
+    await step(failures, () =>
+      prisma.purchaseBill.deleteMany({ where: { createdById: { in: created.userIds } } }),
+    );
   }
   if (created.productIds.length) {
     // Allocations cascade from their bill item; anything still pointing at
     // these products is removed with the bills above.
-    await prisma.purchaseBillItem.deleteMany({ where: { productId: { in: created.productIds } } });
-    await prisma.inventoryItem.deleteMany({ where: { productId: { in: created.productIds } } });
-    await prisma.product.deleteMany({ where: { id: { in: created.productIds } } });
+    await step(failures, () =>
+      prisma.purchaseBillItem.deleteMany({ where: { productId: { in: created.productIds } } }),
+    );
+    await step(failures, () =>
+      prisma.inventoryItem.deleteMany({ where: { productId: { in: created.productIds } } }),
+    );
+    await step(failures, () =>
+      prisma.product.deleteMany({ where: { id: { in: created.productIds } } }),
+    );
   }
   if (created.customerIds.length) {
-    await prisma.customer.deleteMany({ where: { id: { in: created.customerIds } } });
+    await step(failures, () =>
+      prisma.customer.deleteMany({ where: { id: { in: created.customerIds } } }),
+    );
   }
   if (created.vendorIds.length) {
     // Vendor -> VendorResponse is Restrict, so a vendor still referenced by any
     // response cannot be removed. Clear those responses first; they belong to
     // enquiries this suite created, which are already gone or going.
-    await prisma.vendorResponse.deleteMany({ where: { vendorId: { in: created.vendorIds } } });
-    await prisma.vendor.deleteMany({ where: { id: { in: created.vendorIds } } });
+    await step(failures, () =>
+      prisma.vendorResponse.deleteMany({ where: { vendorId: { in: created.vendorIds } } }),
+    );
+    await step(failures, () =>
+      prisma.vendor.deleteMany({ where: { id: { in: created.vendorIds } } }),
+    );
   }
   if (created.userIds.length) {
-    await prisma.user.deleteMany({ where: { id: { in: created.userIds } } });
+    await step(failures, () => prisma.user.deleteMany({ where: { id: { in: created.userIds } } }));
   }
+
+  // Catches whatever the id lists never learned about — a row that committed
+  // while its create call was failing, or one the API made for a lost response.
+  await sweepTestOwnedRows(failures);
 
   created.enquiryIds.length = 0;
   created.salesOrderIds.length = 0;
@@ -363,6 +489,13 @@ export async function cleanup(): Promise<void> {
   created.vendorIds.length = 0;
   created.productIds.length = 0;
   created.purchaseBillIds.length = 0;
+
+  // Teardown attempted everything; now report. Surfacing the first failure keeps
+  // a broken cleanup as visible as it was before, while the suites that follow
+  // start from a database this one actually finished tidying.
+  if (failures.length) {
+    throw failures[0];
+  }
 }
 
 /** Guards against fixtures escaping — asserted at the end of each suite. */

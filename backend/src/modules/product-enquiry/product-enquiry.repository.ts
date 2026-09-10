@@ -13,6 +13,7 @@
 import { Prisma } from '@rs/database';
 import { prisma } from '../../config/database.js';
 import type {
+  CustomerContactRef,
   CustomerRef,
   DelayRecordView,
   DimensionView,
@@ -35,6 +36,13 @@ import { isBreached } from './enquiry-sla.service.js';
 
 const userRef = { id: true, name: true, employeeId: true, role: true } as const;
 const customerRef = { id: true, name: true, type: true } as const;
+/** Detail only — a list row has no use for contact details. */
+const customerContactRef = {
+  ...customerRef,
+  phone: true,
+  email: true,
+  address: true,
+} as const;
 const mediaRef = { id: true, secureUrl: true, publicId: true } as const;
 
 const slaFields = {
@@ -73,7 +81,7 @@ const detailSelect = {
   closedAt: true,
   updatedAt: true,
   ...slaFields,
-  customer: { select: customerRef },
+  customer: { select: customerContactRef },
   assignedTo: { select: userRef },
   createdBy: { select: userRef },
   closedBy: { select: userRef },
@@ -265,7 +273,7 @@ function toDetail(row: DetailRow, now: Date): EnquiryDetail {
   return {
     id: row.id,
     enquiryNo: row.enquiryNo,
-    customer: row.customer as CustomerRef,
+    customer: row.customer as CustomerContactRef,
     source: row.source,
     sourceDetail: row.sourceDetail,
     status: row.status,

@@ -135,6 +135,7 @@ export async function createSalesCustomerAction(input: {
   type: string;
   phone?: string;
   email?: string;
+  address?: string;
 }): Promise<ActionResult<{ customer: { id: string; name: string; type: string } }>> {
   return call('/api/customers', { method: 'POST', body: JSON.stringify(input) });
 }

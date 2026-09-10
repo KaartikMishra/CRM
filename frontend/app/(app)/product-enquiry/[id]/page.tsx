@@ -73,6 +73,39 @@ export default async function EnquiryDetailPage({ params }: { params: Params }) 
     { label: 'Customer', value: enquiry.customer.name },
     { label: 'Customer type', value: label(enquiry.customer.type) },
     {
+      label: 'Phone',
+      value: enquiry.customer.phone ? (
+        <a href={`tel:${enquiry.customer.phone}`} className="tabular text-accent hover:underline">
+          {enquiry.customer.phone}
+        </a>
+      ) : (
+        <span className="text-faint">Not recorded</span>
+      ),
+    },
+    {
+      label: 'Email',
+      value: enquiry.customer.email ? (
+        <a
+          href={`mailto:${enquiry.customer.email}`}
+          className="break-all text-accent hover:underline"
+        >
+          {enquiry.customer.email}
+        </a>
+      ) : (
+        <span className="text-faint">Not recorded</span>
+      ),
+    },
+    {
+      label: 'Address',
+      // Free text as the customer gave it, so newlines are kept rather than
+      // collapsed — an address typed over three lines should read as three.
+      value: enquiry.customer.address ? (
+        <span className="whitespace-pre-line">{enquiry.customer.address}</span>
+      ) : (
+        <span className="text-faint">Not recorded</span>
+      ),
+    },
+    {
       label: 'Source',
       value: enquiry.sourceDetail
         ? `${label(enquiry.source)} — ${enquiry.sourceDetail}`

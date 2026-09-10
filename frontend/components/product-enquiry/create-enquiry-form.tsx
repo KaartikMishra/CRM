@@ -11,6 +11,9 @@ import {
   MAX_PRODUCTS_PER_ENQUIRY,
   WEIGHT_UNITS,
   createEnquirySchema,
+  customerAddressSchema,
+  customerEmailSchema,
+  customerPhoneSchema,
   type CreateEnquiryInput,
 } from '@rs/shared';
 import { Button } from '@/components/ui/button';
@@ -34,6 +37,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
+import { Textarea } from '@/components/ui/textarea';
 import { ErrorMessage } from '@/components/common/error-message';
 import { label } from '@/lib/format';
 import { createCustomerAction, createEnquiryAction } from '@/app/(app)/product-enquiry/actions';
@@ -127,7 +131,24 @@ export function CreateEnquiryForm({
   const [newCustomerName, setNewCustomerName] = useState('');
   const [newCustomerType, setNewCustomerType] =
     useState<(typeof CUSTOMER_TYPES)[number]>('RETAIL');
+  const [newCustomerPhone, setNewCustomerPhone] = useState('');
+  const [newCustomerEmail, setNewCustomerEmail] = useState('');
+  const [newCustomerAddress, setNewCustomerAddress] = useState('');
   const [creatingCustomer, setCreatingCustomer] = useState(false);
+  const [customerErrors, setCustomerErrors] = useState<Record<string, string>>({});
+
+  // Validated with the same schemas the API uses, so the dialog refuses exactly
+  // what the server would. A phone number is required here — an enquiry worth
+  // following up is worth being able to call back — while email and address
+  // stay optional and are simply omitted when blank.
+  const nameOk = newCustomerName.trim().length >= 2;
+  const phoneOk = customerPhoneSchema.safeParse(newCustomerPhone).success;
+  const emailOk =
+    newCustomerEmail.trim() === '' || customerEmailSchema.safeParse(newCustomerEmail).success;
+  const addressOk =
+    newCustomerAddress.trim() === '' ||
+    customerAddressSchema.safeParse(newCustomerAddress).success;
+  const customerReady = nameOk && phoneOk && emailOk && addressOk;
 
   const atCap = products.length >= MAX_PRODUCTS_PER_ENQUIRY;
 
@@ -211,13 +232,29 @@ export function CreateEnquiryForm({
   }
 
   function createCustomer() {
-    if (newCustomerName.trim().length < 2) return;
+    const errors: Record<string, string> = {};
+    if (!nameOk) errors.name = 'Customer name is required';
+    if (!phoneOk) {
+      errors.phone =
+        customerPhoneSchema.safeParse(newCustomerPhone).error?.issues[0]?.message ??
+        'Enter a valid phone number';
+    }
+    if (!emailOk) errors.email = 'Enter a valid email address';
+    if (!addressOk) errors.address = 'Keep the address under 500 characters';
+    setCustomerErrors(errors);
+    if (Object.keys(errors).length > 0) return;
+
     setCreatingCustomer(true);
 
     startTransition(async () => {
       const result = await createCustomerAction({
         name: newCustomerName.trim(),
         type: newCustomerType,
+        phone: newCustomerPhone.trim(),
+        // Omitted entirely when blank: the schema treats these as optional, and
+        // an empty string would fail its format check rather than mean "none".
+        ...(newCustomerEmail.trim() ? { email: newCustomerEmail.trim() } : {}),
+        ...(newCustomerAddress.trim() ? { address: newCustomerAddress.trim() } : {}),
       });
       setCreatingCustomer(false);
 
@@ -226,9 +263,18 @@ export function CreateEnquiryForm({
         return;
       }
 
-      setCustomer({ id: result.data.customer.id, label: result.data.customer.name });
+      setCustomer({
+        id: result.data.customer.id,
+        label: result.data.customer.name,
+        phone: newCustomerPhone.trim() || null,
+        email: newCustomerEmail.trim() || null,
+      });
       setCustomerDialogOpen(false);
       setNewCustomerName('');
+      setNewCustomerPhone('');
+      setNewCustomerEmail('');
+      setNewCustomerAddress('');
+      setCustomerErrors({});
       toast.success('Customer added');
     });
   }
@@ -540,13 +586,58 @@ export function CreateEnquiryForm({
                 </SelectContent>
               </Select>
             </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="newCustomerPhone">Phone *</Label>
+                <Input
+                  id="newCustomerPhone"
+                  inputMode="tel"
+                  value={newCustomerPhone}
+                  onChange={(e) => setNewCustomerPhone(e.target.value)}
+                  placeholder="+91 98765 43210"
+                  className="tabular"
+                />
+                {customerErrors.phone && (
+                  <p className="text-xs text-critical">{customerErrors.phone}</p>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="newCustomerEmail">Email</Label>
+                <Input
+                  id="newCustomerEmail"
+                  type="email"
+                  value={newCustomerEmail}
+                  onChange={(e) => setNewCustomerEmail(e.target.value)}
+                  placeholder="Optional"
+                />
+                {customerErrors.email && (
+                  <p className="text-xs text-critical">{customerErrors.email}</p>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="newCustomerAddress">Address</Label>
+              <Textarea
+                id="newCustomerAddress"
+                value={newCustomerAddress}
+                onChange={(e) => setNewCustomerAddress(e.target.value)}
+                placeholder="Optional"
+                rows={2}
+              />
+              {customerErrors.address && (
+                <p className="text-xs text-critical">{customerErrors.address}</p>
+              )}
+            </div>
           </div>
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setCustomerDialogOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={createCustomer} disabled={creatingCustomer || newCustomerName.trim().length < 2}>
+            <Button onClick={createCustomer} disabled={creatingCustomer || !customerReady}>
               {creatingCustomer && <Loader2 className="size-4 animate-spin" />}
               Add customer
             </Button>

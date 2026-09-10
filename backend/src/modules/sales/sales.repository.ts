@@ -43,7 +43,7 @@ import { isOverdue } from './sales-efficiency.js';
 const userRef = { id: true, name: true, employeeId: true, role: true } as const;
 const customerRef = { id: true, name: true, type: true } as const;
 /** Detail only — a list row has no use for contact details. */
-const customerContactRef = { ...customerRef, phone: true, email: true } as const;
+const customerContactRef = { ...customerRef, phone: true, email: true, address: true } as const;
 const mediaRef = { id: true, secureUrl: true, publicId: true } as const;
 
 const itemSelect = {
