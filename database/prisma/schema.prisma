@@ -31,11 +31,17 @@ enum Role {
   USER
 }
 
-/// Pre-declared for all seven modules so future permissions need no migration.
+/// The CRM modules permissions are granted against.
+///
+/// The original seven were pre-declared so the later ones needed no migration.
+/// RS_PRODUCTS was decided after that set and therefore does need one: Postgres
+/// has no way to add an enum value without ALTER TYPE. Anything added here from
+/// now on carries the same cost.
 enum AppModule {
   PRODUCT_ENQUIRY
   SALES
   PROCUREMENT
+  RS_PRODUCTS
   PACKING_DISPATCH
   CUSTOMER_BILLING
   VENDOR_INVOICE
@@ -735,6 +741,11 @@ model Product {
   salesOrderItems     SalesOrderItem[]
   enquiryProducts     EnquiryProduct[]
   salesChangeRequests SalesItemChangeRequest[]
+  /// The RS Products bridge, from the other side. Prisma requires the opposite
+  /// field to exist; it is virtual and generates no column, constraint or index
+  /// on this table — the foreign key lives on RsProduct.productId. Nothing in
+  /// Procurement, Sales or Product Enquiry reads it.
+  rsProducts          RsProduct[]
 
   @@index([isActive, name])
 }
@@ -961,4 +972,254 @@ model Notification {
   @@index([recipientId, dismissedAt, createdAt])
   /// Retention sweeps by age across every recipient.
   @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+//  RS Products
+// ---------------------------------------------------------------------------
+
+/// Where a product came from, and therefore who owns its fields.
+///
+/// Sync writes only SHOPIFY rows. A MANUAL row is never updated or archived by
+/// a sync pass, which is what stops Shopify overwriting a product somebody
+/// created by hand in the CRM.
+enum ProductSource {
+  SHOPIFY
+  MANUAL
+}
+
+/// Mirrors Shopify's own product status. ARCHIVED is how a deleted Shopify
+/// product is recorded — see the note on RsProduct.
+enum ShopifyProductStatus {
+  ACTIVE
+  ARCHIVED
+  DRAFT
+  /// Visible by direct link but hidden from collections and search. Shopify
+  /// added it after this enum was first written, and the live catalogue holds
+  /// 23 of them — without this value those products cannot be stored at all.
+  /// Deliberately not folded into ACTIVE or DRAFT: it is neither, and
+  /// collapsing it would lose the distinction the storefront actually makes.
+  UNLISTED
+}
+
+/// The RS Products catalogue — intended to become the central Product Master.
+///
+/// Deliberately a separate table from `Product` rather than an extension of it.
+/// `Product.name` and `Product.normalizedName` are both globally unique, and a
+/// Shopify catalogue violates that on contact: variants routinely share a
+/// product title, and any Shopify title matching an existing CRM product would
+/// raise P2002 on the first sync. Relaxing those constraints would break the
+/// identity design Procurement's resolver depends on, so the replacement is
+/// built alongside and migrated onto deliberately, later.
+///
+/// Nothing here is written by a sync yet. Phase 2 is the data model only.
+model RsProduct {
+  id String @id @default(cuid())
+
+  source ProductSource @default(SHOPIFY)
+
+  /// Null for CRM-only products, which is why this cannot be the primary key.
+  /// Unique so one Shopify product maps to exactly one row — identity is the
+  /// Shopify id, never the title.
+  shopifyProductId String? @unique
+
+  /// Not unique, and that is the point: Shopify titles legitimately repeat, and
+  /// enforcing uniqueness here would make sync fail on a real catalogue.
+  title       String
+  description String?
+
+  status      ShopifyProductStatus @default(ACTIVE)
+  productType String?
+  vendor      String?
+
+  /// The temporary bridge to the legacy Product Master.
+  ///
+  /// Nullable and unused in this phase. It exists so the later controlled
+  /// migration has somewhere to land: a mapping can be populated and verified
+  /// before anything reads from it, rather than being invented at cutover.
+  /// SetNull so retiring a legacy product can never delete a catalogue row.
+  productId String?
+
+  /// Shopify's own updatedAt, kept apart from ours: `updatedAt` says when this
+  /// row changed, this says when the upstream product did. Sync compares the
+  /// latter and cannot use the former.
+  shopifyUpdatedAt DateTime?
+  /// When a sync pass last wrote this row. Null for MANUAL products.
+  syncedAt         DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  variants ShopifyVariant[]
+  images   RsProductImage[]
+  product  Product?         @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  /// The catalogue list: live products of one origin.
+  @@index([source, status])
+  /// Bridge lookups, and the later migration's own scan.
+  @@index([productId])
+  /// Search by name, which is a filter here rather than a unique constraint.
+  @@index([title])
+}
+
+/// One sellable variant of an RsProduct.
+///
+/// A product is not one variant: SKU, price and inventory are all variant-level
+/// in Shopify, so a product-level row could not carry them. CRM-only products
+/// get a single variant rather than a special case.
+model ShopifyVariant {
+  id          String @id @default(cuid())
+  rsProductId String
+
+  /// Null for a CRM-only variant. Unique because it is the webhook lookup key.
+  shopifyVariantId String? @unique
+
+  /// The only key `inventory_levels/update` carries — that webhook names no
+  /// product and no variant — so it is stored and uniquely indexed to make
+  /// that message resolvable at all.
+  shopifyInventoryItemId String? @unique
+
+  /// Indexed, never unique: Shopify does not guarantee SKU uniqueness, and
+  /// blank SKUs are ordinary. Several variants may hold null here.
+  sku   String?
+  title String?
+
+  price Decimal @db.Decimal(12, 2)
+  /// Shopify exposes cost on the inventory item rather than the variant, so
+  /// this is fetched separately under read_inventory. Stored here because it
+  /// describes the variant.
+  costPrice Decimal? @db.Decimal(12, 2)
+
+  // Weight as Shopify reports it, plus a normalised column so mixed units
+  // still sort and filter together — matching EnquiryProduct's convention.
+  weightValue   Decimal?    @db.Decimal(10, 3)
+  weightUnit    WeightUnit?
+  weightInGrams Decimal?    @db.Decimal(12, 3)
+
+  // Structured, never a free-text string. Shopify's REST product API carries no
+  // dimensions, so for a synced variant these arrive from metafields in a later
+  // phase; a CRM-only product may record them immediately. Volume derives from
+  // these rather than being stored.
+  lengthValue   Decimal?       @db.Decimal(10, 2)
+  widthValue    Decimal?       @db.Decimal(10, 2)
+  heightValue   Decimal?       @db.Decimal(10, 2)
+  dimensionUnit DimensionUnit?
+  lengthMm      Decimal?       @db.Decimal(12, 2)
+  widthMm       Decimal?       @db.Decimal(12, 2)
+  heightMm      Decimal?       @db.Decimal(12, 2)
+
+  /// Shopify's sellable quantity. Deliberately NOT InventoryItem.onHand, which
+  /// is Procurement's manually maintained warehouse count feeding
+  /// `received − allocated`. The two numbers mean different things, and writing
+  /// one into the other would silently change Requirement-vs-Stock arithmetic
+  /// in a shipped module.
+  inventoryQty Int @default(0)
+
+  /// When Shopify last changed this variant's inventory, as Shopify dated it.
+  ///
+  /// The guard against out-of-order webhooks. Shopify retries for up to four
+  /// hours and does not guarantee delivery order, so two inventory events can
+  /// arrive reversed — and without this the older quantity would win and stay
+  /// wrong until the next change.
+  ///
+  /// Deliberately Shopify's clock, not ours: `updatedAt` records when this row
+  /// changed, which says nothing about which event is newer. Null means no
+  /// inventory webhook has been seen yet, so the first one always applies.
+  inventoryUpdatedAt DateTime?
+
+  /// Stock as the CRM counts it, maintained by hand.
+  ///
+  /// Deliberately separate from `inventoryQty` above, which is Shopify's and is
+  /// overwritten by every sync pass and every inventory webhook. A manually
+  /// entered count kept in that column would be destroyed by the next delivery,
+  /// so it lives here where no Shopify writer ever reaches.
+  ///
+  /// Not null, defaulting to zero: every existing variant therefore starts at
+  /// zero without a backfill, which is exactly the intended starting point.
+  /// Never negative — the service refuses a negative value rather than
+  /// clamping it, matching how InventoryItem.onHand is guarded.
+  crmStockQty Int @default(0)
+
+  position Int @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  rsProduct RsProduct @relation(fields: [rsProductId], references: [id], onDelete: Cascade)
+
+  @@index([rsProductId, position])
+  @@index([sku])
+}
+
+/// A product image, referenced rather than stored.
+///
+/// Holds a Shopify CDN URL directly. MediaAsset is the wrong home for one: it
+/// requires a unique Cloudinary publicId and an uploading CRM user, and a
+/// Shopify URL has neither. Mirroring every image into Cloudinary would add
+/// cost, latency and a failure mode while Shopify remains the source of truth.
+///
+/// This is not a second upload mechanism — it stores no uploads. Images a
+/// person uploads for a CRM-only product go through the existing
+/// /api/uploads → MediaAsset path.
+model RsProductImage {
+  id          String @id @default(cuid())
+  rsProductId String
+
+  /// Null for an image that did not come from Shopify.
+  shopifyImageId String? @unique
+
+  url      String
+  altText  String?
+  position Int     @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  rsProduct RsProduct @relation(fields: [rsProductId], references: [id], onDelete: Cascade)
+
+  @@index([rsProductId, position])
+}
+
+/// Webhook idempotency, and nothing more.
+///
+/// Shopify retries a webhook for up to 48 hours, so duplicate delivery is
+/// expected rather than exceptional. The unique webhookId makes a replay a
+/// no-op: the second insert raises P2002, which the handler treats as "already
+/// handled" and acknowledges.
+///
+/// processedAt and error record the outcome so a failure is visible without a
+/// log search. Deliberately not a queue or a retry engine.
+model ShopifyWebhookEvent {
+  id String @id @default(cuid())
+
+  /// The X-Shopify-Webhook-Id header. The whole point of the table.
+  webhookId String @unique
+  topic     String
+
+  receivedAt  DateTime  @default(now())
+  processedAt DateTime?
+  /// Null when the event succeeded or is still in flight.
+  error       String?
+
+  /// When a worker took this event to process it.
+  ///
+  /// Without it, a row with `processedAt` and `error` both null is ambiguous:
+  /// it could be a delivery being handled right now, or one whose process died
+  /// mid-handler. Treating both as "somebody has it" loses the second kind
+  /// permanently once Shopify stops retrying.
+  ///
+  /// Stamped when the claim is taken and re-stamped on each reclaim, so age is
+  /// measured from the last attempt rather than from first arrival. A claim
+  /// older than the stale threshold is assumed abandoned and may be taken over;
+  /// a recent one is left alone.
+  claimedAt DateTime?
+
+  /// How many times processing has been attempted, for diagnosis and to stop a
+  /// permanently failing event being retried without limit.
+  attempts Int @default(0)
+
+  /// Recent deliveries of one topic, for diagnosis.
+  @@index([topic, receivedAt])
+  /// The recovery sweep's own query: unfinished events, oldest claim first.
+  @@index([processedAt, claimedAt])
 }

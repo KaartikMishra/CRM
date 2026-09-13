@@ -25,14 +25,20 @@ const ALL: ActionSet = { VIEW: true, CREATE: true, EDIT: true, DELETE: true, ASS
  * records the person actually owns. Reassigning Towards is ASSIGN, and is
  * ADMIN-only.
  *
- * The six later modules deny USER by default. That is not a business rule about
+ * The later modules deny USER by default. That is not a business rule about
  * them — it is the safe default until their requirements arrive.
+ *
+ * Every module must appear under ADMIN, and not merely as a convention:
+ * effectivePermissions below derives the entire module list from the keys of
+ * this entry. A module omitted here is absent from /api/auth/me, and therefore
+ * from the sidebar, hasModule and requireModule — for administrators too.
  */
 const ROLE_DEFAULTS: Record<Role, ModuleMatrix> = {
   ADMIN: {
     PRODUCT_ENQUIRY: ALL,
     SALES: ALL,
     PROCUREMENT: ALL,
+    RS_PRODUCTS: ALL,
     PACKING_DISPATCH: ALL,
     CUSTOMER_BILLING: ALL,
     VENDOR_INVOICE: ALL,

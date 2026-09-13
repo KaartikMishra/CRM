@@ -1,0 +1,22 @@
+-- =============================================================================
+--  ShopifyVariant gains inventoryUpdatedAt.
+--
+--  The guard against out-of-order inventory webhooks. Shopify retries a webhook
+--  for up to four hours and does not guarantee delivery order, so two
+--  inventory_levels/update events for one variant can arrive reversed. Without
+--  a Shopify-side timestamp to compare, the older quantity would overwrite the
+--  newer and stay wrong until the next change.
+--
+--  Nullable with no default and no backfill: null means "no inventory webhook
+--  has been seen for this variant yet", which is true of all 569 rows synced in
+--  Phase 5, and makes the first webhook for each variant always apply.
+--
+--  Purely additive. One nullable column on one RS Products table. No existing
+--  column is altered, no constraint changes, and Product, InventoryItem,
+--  SalesOrder, PurchaseBill and ProductEnquiry are untouched.
+--
+--  No DROP, TRUNCATE, DELETE, INSERT or UPDATE.
+-- =============================================================================
+
+-- AlterTable
+ALTER TABLE "ShopifyVariant" ADD COLUMN     "inventoryUpdatedAt" TIMESTAMP(3);

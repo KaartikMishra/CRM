@@ -1,0 +1,25 @@
+-- =============================================================================
+--  ShopifyVariant gains crmStockQty.
+--
+--  Stock as the CRM counts it, kept apart from Shopify's own figure.
+--
+--  `inventoryQty` on this table is Shopify-derived: the catalogue sync writes it
+--  from productVariant.inventoryQuantity, and every inventory_levels/update
+--  webhook overwrites it. A hand-entered count stored there would survive only
+--  until the next delivery. This column exists so CRM stock has a home that no
+--  Shopify writer touches.
+--
+--  NOT NULL with DEFAULT 0, which is the whole backfill: all 569 existing
+--  variants take zero as the column is added, which is the intended starting
+--  point. No UPDATE statement is needed or issued, and `inventoryQty` is left
+--  exactly as Shopify set it.
+--
+--  Purely additive. One column on one RS Products table. InventoryItem,
+--  Product, SalesOrder, PurchaseBill and ProductEnquiry are untouched, and no
+--  procurement stock movement is created.
+--
+--  No DROP, TRUNCATE, DELETE, INSERT or UPDATE.
+-- =============================================================================
+
+-- AlterTable
+ALTER TABLE "ShopifyVariant" ADD COLUMN     "crmStockQty" INTEGER NOT NULL DEFAULT 0;

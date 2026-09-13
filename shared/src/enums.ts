@@ -13,6 +13,7 @@ export const APP_MODULES = [
   'PRODUCT_ENQUIRY',
   'SALES',
   'PROCUREMENT',
+  'RS_PRODUCTS',
   'PACKING_DISPATCH',
   'CUSTOMER_BILLING',
   'VENDOR_INVOICE',
@@ -52,6 +53,19 @@ export type EnquiryProductStatus = (typeof ENQUIRY_PRODUCT_STATUSES)[number];
 
 export const WEIGHT_UNITS = ['G', 'KG', 'LB'] as const;
 export type WeightUnit = (typeof WEIGHT_UNITS)[number];
+
+/**
+ * Where an RS Product came from, and therefore who owns its fields.
+ *
+ * Sync writes only SHOPIFY rows, so a MANUAL product can never be overwritten
+ * or archived by a sync pass.
+ */
+export const PRODUCT_SOURCES = ['SHOPIFY', 'MANUAL'] as const;
+export type ProductSource = (typeof PRODUCT_SOURCES)[number];
+
+/** Mirrors Shopify's own product status. A deleted product becomes ARCHIVED. */
+export const SHOPIFY_PRODUCT_STATUSES = ['ACTIVE', 'ARCHIVED', 'DRAFT', 'UNLISTED'] as const;
+export type ShopifyProductStatus = (typeof SHOPIFY_PRODUCT_STATUSES)[number];
 
 export const DIMENSION_UNITS = ['MM', 'CM', 'IN', 'FT'] as const;
 export type DimensionUnit = (typeof DIMENSION_UNITS)[number];

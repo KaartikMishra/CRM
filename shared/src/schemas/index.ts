@@ -7,4 +7,5 @@ export * from './vendor-response.js';
 export * from './sales.js';
 export * from './user.js';
 export * from './procurement.js';
+export * from './rs-product.js';
 export * from './notification.js';

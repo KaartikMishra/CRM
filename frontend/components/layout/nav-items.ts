@@ -19,6 +19,7 @@ export type NavIconKey =
   | 'product-enquiry'
   | 'sales'
   | 'procurement'
+  | 'rs-products'
   | 'dispatch'
   | 'billing'
   | 'vendor-invoices'
@@ -57,6 +58,13 @@ export const NAV_ITEMS: NavItem[] = [
     icon: 'procurement',
     available: true,
     module: 'PROCUREMENT',
+  },
+  {
+    label: 'RS Products',
+    href: '/rs-products',
+    icon: 'rs-products',
+    available: true,
+    module: 'RS_PRODUCTS',
   },
   {
     label: 'Packing & Dispatch',

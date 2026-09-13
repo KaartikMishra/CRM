@@ -24,6 +24,15 @@ const REDACTED_PATHS = [
   '*.api_secret',
   '*.password',
   '*.passwordHash',
+  // Shopify. The integration already keeps these out of every log call it
+  // makes; these paths are the backstop for a future `log.info({ payload })`.
+  'SHOPIFY_CLIENT_SECRET',
+  'access_token',
+  '*.access_token',
+  'accessToken',
+  '*.accessToken',
+  'req.headers["x-shopify-access-token"]',
+  'req.headers["x-shopify-hmac-sha256"]',
 ];
 
 export const logger = pino({

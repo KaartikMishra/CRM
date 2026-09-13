@@ -16,6 +16,7 @@ import { notFound } from './middleware/notFound.js';
 import { requestId } from './middleware/requestId.js';
 import { requestLogger } from './middleware/requestLogger.js';
 import { apiRouter } from './routes/index.js';
+import { shopifyWebhookRoutes } from './modules/rs-product/rs-product.webhook.routes.js';
 
 export function createApp(): Express {
   const app = express();
@@ -40,15 +41,27 @@ export function createApp(): Express {
   app.use(cors(corsOptions));
   app.use(requestLogger);
 
-  // 3. Body parsing. The limit is generous for JSON but far below an image:
+  // 3. Shopify webhooks, mounted *before* the JSON parser.
+  //
+  //    Their authenticity is an HMAC over the exact bytes Shopify sent, so the
+  //    body must reach the handler unparsed: express.json would consume it and
+  //    a re-serialised copy would not match the signature. This router applies
+  //    its own express.raw and no session middleware — Shopify presents no CRM
+  //    session, and the HMAC is the authentication.
+  //
+  //    Every other route is unaffected: the path is specific, and the parsers
+  //    below still run for everything else.
+  app.use('/api/rs-products/webhooks', shopifyWebhookRoutes);
+
+  // 4. Body parsing. The limit is generous for JSON but far below an image:
   //    uploads go browser-to-Cloudinary, never through this process.
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
-  // 4. Routes.
+  // 5. Routes.
   app.use('/api', apiRouter);
 
-  // 5. Unmatched paths become AppErrors, then every failure meets one handler.
+  // 6. Unmatched paths become AppErrors, then every failure meets one handler.
   app.use(notFound);
   app.use(errorHandler);
 

@@ -16,6 +16,19 @@ const nextConfig: NextConfig = {
   // This tier renders UI and holds the session. It never reaches the database,
   // so nothing here should ever resolve Prisma.
   serverExternalPackages: [],
+
+  /*
+    RS Products shows Shopify's own product photography, which is served from
+    Shopify's CDN. next/image refuses an unconfigured remote host outright —
+    loudly, not silently — so the host is declared here.
+
+    Images only: this grants no credential and reaches no API. The alternative,
+    proxying 2,231 images through our backend, would add cost and a failure
+    mode for no benefit while Shopify remains the source of truth.
+  */
+  images: {
+    remotePatterns: [{ protocol: 'https', hostname: 'cdn.shopify.com', pathname: '/**' }],
+  },
 };
 
 export default nextConfig;

@@ -74,7 +74,7 @@ export const SESSION_JWT_AUDIENCE = 'royalstuffs-crm-api';
 export const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
 
 /**
- * Display names for the seven CRM modules.
+ * Display names for the CRM modules.
  *
  * The sidebar and the administrator's module-access grid must call a module the
  * same thing, so the label lives beside the enum rather than being retyped in
@@ -84,6 +84,7 @@ export const APP_MODULE_LABELS = {
   PRODUCT_ENQUIRY: 'Product Enquiry',
   SALES: 'Sales',
   PROCUREMENT: 'Purchase & Procurement',
+  RS_PRODUCTS: 'RS Products',
   PACKING_DISPATCH: 'Packing & Dispatch',
   CUSTOMER_BILLING: 'Customer Billing',
   VENDOR_INVOICE: 'Vendor Invoices',

@@ -80,12 +80,13 @@ describe('the icon registry', () => {
 });
 
 describe('the navigation table itself is unchanged', () => {
-  it('still lists all nine destinations in order', () => {
+  it('still lists all ten destinations in order', () => {
     expect(NAV_ITEMS.map((i) => i.href)).toEqual([
       '/dashboard',
       '/product-enquiry',
       '/sales',
       '/procurement',
+      '/rs-products',
       '/dispatch',
       '/billing',
       '/vendor-invoices',
@@ -102,13 +103,14 @@ describe('the navigation table itself is unchanged', () => {
     expect(byHref.get('/users')).toBe('User Management');
   });
 
-  it('keeps the three live modules available and the four future ones not', () => {
-    // Procurement joined Product Enquiry and Sales as a built module; the
-    // remaining four are still placeholders and must keep saying so.
+  it('keeps the four live modules available and the four future ones not', () => {
+    // RS Products joined Product Enquiry, Sales and Procurement as a built
+    // module; the remaining four are still placeholders and must keep saying so.
     const byHref = new Map(NAV_ITEMS.map((i) => [i.href, i]));
     expect(byHref.get('/product-enquiry')?.available).toBe(true);
     expect(byHref.get('/sales')?.available).toBe(true);
     expect(byHref.get('/procurement')?.available).toBe(true);
+    expect(byHref.get('/rs-products')?.available).toBe(true);
 
     for (const href of ['/dispatch', '/billing', '/vendor-invoices', '/post-sales']) {
       expect(byHref.get(href)?.available, href).toBe(false);
@@ -129,7 +131,7 @@ describe('module visibility is unchanged by the fix', () => {
 
   it('shows an administrator everything, including User Management', () => {
     const hrefs = visibleNavItems([...APP_MODULES], true).map((i) => i.href);
-    expect(hrefs).toHaveLength(9);
+    expect(hrefs).toHaveLength(10);
     expect(hrefs).toContain('/users');
   });
 

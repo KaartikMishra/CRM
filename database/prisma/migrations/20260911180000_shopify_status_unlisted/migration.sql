@@ -1,0 +1,21 @@
+-- =============================================================================
+--  ShopifyProductStatus gains UNLISTED.
+--
+--  Shopify returns UNLISTED for a product that is reachable by direct link but
+--  hidden from collections and search. The live catalogue holds 23 of them, and
+--  without this value every one of those products would fail to insert.
+--
+--  It is deliberately not folded into ACTIVE or DRAFT: it is neither, and
+--  collapsing it would discard a distinction the storefront actually makes.
+--
+--  ALTER TYPE ... ADD VALUE stands alone. Postgres cannot use a new enum value
+--  in the same transaction that adds it — nothing here writes one, because no
+--  RsProduct row exists yet.
+--
+--  Purely additive. No existing value is renamed or removed, so every row
+--  already stored keeps its meaning. No table is altered, and Product and
+--  InventoryItem are untouched.
+-- =============================================================================
+
+-- AlterEnum
+ALTER TYPE "ShopifyProductStatus" ADD VALUE 'UNLISTED';

@@ -60,6 +60,60 @@ const envSchema = z.object({
   /** Largest image accepted, in megabytes. */
   UPLOAD_MAX_MB: z.coerce.number().int().min(1).max(25).default(5),
 
+  /**
+   * Shopify — RS Products' external product source. Backend only.
+   *
+   * All four are optional together, following CLOUDINARY_URL above: the API
+   * boots without them and the Shopify connection reports that it is not
+   * configured, rather than a missing integration stopping the whole CRM.
+   * `shopifyConfigured()` below is the single place that decides.
+   *
+   * SHOPIFY_CLIENT_SECRET is a credential. It is read here, used only to
+   * request an access token server-side, and never logged, returned in a
+   * response, or given a NEXT_PUBLIC_ equivalent.
+   */
+  SHOPIFY_STORE_DOMAIN: z
+    .preprocess(
+      (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+      z
+        .string()
+        .regex(
+          /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/,
+          'SHOPIFY_STORE_DOMAIN must look like your-store.myshopify.com (no protocol, no trailing slash)',
+        )
+        .optional(),
+    )
+    .optional(),
+
+  SHOPIFY_CLIENT_ID: z
+    .preprocess(
+      (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+      z.string().min(1).optional(),
+    )
+    .optional(),
+
+  SHOPIFY_CLIENT_SECRET: z
+    .preprocess(
+      (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+      z.string().min(1).optional(),
+    )
+    .optional(),
+
+  /**
+   * Pinned rather than defaulted to "latest": a Shopify version change alters
+   * response shapes, and that should be a deliberate edit with a test run, not
+   * something that happens on its own quarterly.
+   */
+  SHOPIFY_API_VERSION: z
+    .preprocess(
+      (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+      z
+        .string()
+        .regex(/^\d{4}-\d{2}$/, 'SHOPIFY_API_VERSION must look like 2026-07')
+        .optional(),
+    )
+    .default('2026-07'),
+
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 });
 
@@ -81,3 +135,15 @@ export const env = parsed.data;
 export const isProduction = env.NODE_ENV === 'production';
 export const isDevelopment = env.NODE_ENV === 'development';
 export const isTest = env.NODE_ENV === 'test';
+
+/**
+ * Whether the Shopify integration has everything it needs.
+ *
+ * All three credentials are required together — a store domain without a
+ * client id cannot authenticate, and a partial configuration is a mistake
+ * rather than a mode. Callers check this before attempting a connection so the
+ * failure is "not configured" rather than an authentication error.
+ */
+export function shopifyConfigured(): boolean {
+  return Boolean(env.SHOPIFY_STORE_DOMAIN && env.SHOPIFY_CLIENT_ID && env.SHOPIFY_CLIENT_SECRET);
+}

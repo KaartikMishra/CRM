@@ -8,6 +8,7 @@ import {
   Package,
   Receipt,
   ShoppingCart,
+  Tags,
   Users,
   type LucideIcon,
 } from 'lucide-react';
@@ -29,6 +30,7 @@ const ICONS: Record<NavIconKey, LucideIcon> = {
   'product-enquiry': ClipboardList,
   sales: ShoppingCart,
   procurement: Boxes,
+  'rs-products': Tags,
   dispatch: Package,
   billing: Receipt,
   'vendor-invoices': FileText,
