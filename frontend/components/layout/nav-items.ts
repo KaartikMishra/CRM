@@ -84,7 +84,7 @@ export const NAV_ITEMS: NavItem[] = [
     label: 'Vendor Invoices',
     href: '/vendor-invoices',
     icon: 'vendor-invoices',
-    available: false,
+    available: true,
     module: 'VENDOR_INVOICE',
   },
   {

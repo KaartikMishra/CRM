@@ -141,19 +141,76 @@ model Customer {
 /// §37 — a reusable entity, never re-created per enquiry.
 model Vendor {
   id            String   @id @default(cuid())
+  /// The supplier's own name, and the one thing always required.
+  ///
+  /// Unique, deliberately: Procurement resolves a vendor by name when a bill is
+  /// typed up, and two suppliers sharing a name would make that ambiguous. Two
+  /// real firms with the same name are distinguished in the name itself —
+  /// "Devansh (Moradabad)" — which is what the existing module already assumes.
   name          String   @unique
   contactPerson String?
   phone         String?
   email         String?
   city          String?
+
+  /// The trading name, where it differs from the person dealt with.
+  companyName String?
+  /// The full postal address. `city` above predates it and is kept: existing
+  /// rows use it, and Product Enquiry reads it.
+  address     String?
+  /// A second contact number. `phone` remains the primary/WhatsApp one.
+  altPhone    String?
+
   isActive      Boolean  @default(true)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  responses     VendorResponse[]
-  purchaseBills PurchaseBill[]
+  responses      VendorResponse[]
+  purchaseBills  PurchaseBill[]
+  productMappings VendorProductMapping[]
 
   @@index([isActive, name])
+}
+
+/// Which vendor supplies which product, and at what rate today.
+///
+/// Deliberately points at RsProduct rather than the legacy Product master: RS
+/// Products is the canonical catalogue going forward, and this module is new
+/// enough to have no history tying it to the old one.
+///
+/// The rate here is the *current* agreed price — what a buyer would expect to
+/// pay now. It is not history: what a purchase actually cost lives on
+/// PurchaseBillItem.rate and is never rewritten when this changes. The two
+/// answer different questions, and conflating them would silently rewrite the
+/// past every time a supplier quoted a new price.
+///
+/// Many-to-many in both directions: one product may have several suppliers, and
+/// one supplier several products.
+model VendorProductMapping {
+  id          String @id @default(cuid())
+  vendorId    String
+  rsProductId String
+
+  /// Per unit, NUMERIC so no floating point touches money — matching how every
+  /// other rate in this CRM is stored.
+  currentRate Decimal @db.Decimal(12, 2)
+
+  /// Retired mappings stay for reference; they simply stop being offered.
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  vendor    Vendor    @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  rsProduct RsProduct @relation(fields: [rsProductId], references: [id], onDelete: Cascade)
+
+  /// One row per pair, regardless of state. A pair is one relationship whose
+  /// rate and status change over time, so re-mapping an archived pair
+  /// reactivates that row and keeps its history rather than creating a second.
+  @@unique([vendorId, rsProductId])
+  /// The mapping table's own queries: by vendor, and by product.
+  @@index([vendorId, isActive])
+  @@index([rsProductId, isActive])
 }
 
 /// §5 / §6 — one Cloudinary object. URL and public ID only; never binary data.
@@ -1053,6 +1110,9 @@ model RsProduct {
   variants ShopifyVariant[]
   images   RsProductImage[]
   product  Product?         @relation(fields: [productId], references: [id], onDelete: SetNull)
+  /// Which vendors supply this product, and at what current rate. Virtual —
+  /// the foreign key lives on VendorProductMapping.
+  vendorMappings VendorProductMapping[]
 
   /// The catalogue list: live products of one origin.
   @@index([source, status])

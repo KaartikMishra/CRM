@@ -211,8 +211,14 @@ describe('repository-wide credential audit', () => {
 
   it('has no Shopify credential in any client-side file', () => {
     // Server-side only: no NEXT_PUBLIC_ variable, and no secret in the bundle.
+    //
+    // Test files are excluded, and deliberately: a test that asserts a string
+    // is absent must name that string, so scanning them would flag the audits
+    // themselves — including this one. What matters is the shipped bundle.
     const tracked = git('ls-files', 'frontend').split('\n').filter(Boolean);
-    const clientFiles = tracked.filter((f) => f.endsWith('.tsx') || f.endsWith('.ts'));
+    const clientFiles = tracked.filter(
+      (f) => (f.endsWith('.tsx') || f.endsWith('.ts')) && !f.includes('__tests__'),
+    );
 
     for (const file of clientFiles) {
       const contents = readFileSync(resolve(repoRoot, file), 'utf8');
@@ -253,9 +259,11 @@ describe('repository-wide credential audit', () => {
     // Client credentials is server-to-server: no redirect, no callback, no
     // Allowed Redirection URL. A callback appearing here would mean the flow
     // changed without the design changing.
+    // Test files excluded for the same reason as the credential scan above:
+    // naming the forbidden path is how a test forbids it.
     const backend = git('ls-files', 'backend/src')
       .split('\n')
-      .filter((f) => f.endsWith('.ts'));
+      .filter((f) => f.endsWith('.ts') && !f.includes('__tests__'));
 
     for (const file of backend) {
       const contents = readFileSync(resolve(repoRoot, file), 'utf8').toLowerCase();

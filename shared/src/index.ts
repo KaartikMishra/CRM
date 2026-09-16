@@ -17,6 +17,7 @@ export * from './types/enquiry.js';
 export * from './types/sales.js';
 export * from './types/procurement.js';
 export * from './types/rs-product.js';
+export * from './types/vendor-invoice.js';
 export * from './types/notification.js';
 export * from './utils/units.js';
 export * from './utils/money.js';

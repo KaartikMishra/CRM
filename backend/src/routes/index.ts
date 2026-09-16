@@ -17,6 +17,7 @@ import { rsProductRoutes } from '../modules/rs-product/rs-product.routes.js';
 import { salesRoutes } from '../modules/sales/sales.routes.js';
 import { uploadRoutes } from '../modules/upload/upload.routes.js';
 import { userRoutes } from '../modules/user/user.routes.js';
+import { vendorInvoiceRoutes } from '../modules/vendor-invoice/vendor-invoice.routes.js';
 import { vendorRoutes } from '../modules/vendor/vendor.routes.js';
 
 export const apiRouter = Router();
@@ -30,5 +31,6 @@ apiRouter.use('/rs-products', rsProductRoutes);
 apiRouter.use('/notifications', notificationRoutes);
 apiRouter.use('/customers', customerRoutes);
 apiRouter.use('/vendors', vendorRoutes);
+apiRouter.use('/vendor-invoices', vendorInvoiceRoutes);
 apiRouter.use('/uploads', uploadRoutes);
 apiRouter.use('/users', userRoutes);

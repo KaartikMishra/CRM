@@ -103,16 +103,18 @@ describe('the navigation table itself is unchanged', () => {
     expect(byHref.get('/users')).toBe('User Management');
   });
 
-  it('keeps the four live modules available and the four future ones not', () => {
-    // RS Products joined Product Enquiry, Sales and Procurement as a built
-    // module; the remaining four are still placeholders and must keep saying so.
+  it('keeps the five live modules available and the three future ones not', () => {
+    // Vendor Invoices joined Product Enquiry, Sales, Procurement and RS
+    // Products as a built module; the remaining three are still placeholders
+    // and must keep saying so.
     const byHref = new Map(NAV_ITEMS.map((i) => [i.href, i]));
     expect(byHref.get('/product-enquiry')?.available).toBe(true);
     expect(byHref.get('/sales')?.available).toBe(true);
     expect(byHref.get('/procurement')?.available).toBe(true);
     expect(byHref.get('/rs-products')?.available).toBe(true);
+    expect(byHref.get('/vendor-invoices')?.available).toBe(true);
 
-    for (const href of ['/dispatch', '/billing', '/vendor-invoices', '/post-sales']) {
+    for (const href of ['/dispatch', '/billing', '/post-sales']) {
       expect(byHref.get(href)?.available, href).toBe(false);
     }
   });
