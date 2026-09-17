@@ -241,7 +241,11 @@ describe('repository-wide credential audit', () => {
   });
 
   it('declares no NEXT_PUBLIC Shopify variable in .env.example', () => {
-    const example = readFileSync(resolve(repoRoot, '.env.example'), 'utf8');
+    // Line endings are normalised before the assertion below. The repository
+    // stores this file with LF, but git checks it out with CRLF on Windows
+    // (core.autocrlf), so asserting a literal "\n" would fail on a Windows
+    // checkout only — a property of the clone, never of the file's contents.
+    const example = readFileSync(resolve(repoRoot, '.env.example'), 'utf8').replace(/\r\n/g, '\n');
     expect(example).not.toContain('NEXT_PUBLIC_SHOPIFY');
     // The names are documented; the values are blank.
     expect(example).toContain('SHOPIFY_CLIENT_SECRET=\n');

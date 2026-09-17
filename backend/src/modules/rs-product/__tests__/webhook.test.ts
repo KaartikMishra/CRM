@@ -21,6 +21,51 @@ import {
   findStaleWebhooks,
 } from '../rs-product.webhook.service.js';
 
+/**
+ * Test-only Shopify configuration, for this suite alone.
+ *
+ * Two things here need a configured store, and neither is a credential.
+ *
+ *   - A webhook authenticates by HMAC alone, so `sign()` below and the app's
+ *     verifier have to agree on `SHOPIFY_CLIENT_SECRET`. The real variable is
+ *     optional by design, so a checkout without Shopify set up leaves it
+ *     undefined and `createHmac` throws before a delivery is even sent.
+ *   - The inventory handler re-reads the aggregate quantity from Shopify, and
+ *     `getAccessToken()` refuses outright unless `shopifyConfigured()` is true.
+ *     Without that, every inventory event is ignored as AGGREGATE_UNAVAILABLE.
+ *
+ * `stubAggregate()` intercepts both the token request and the GraphQL call, so
+ * the fake store domain is never actually contacted. The values are `zz-test`
+ * strings in a test file, exactly as the neighbouring Shopify suites do it.
+ *
+ * Scoped to this file on purpose, rather than set for every suite: the
+ * connection-route suite asserts against a store that is *not* configured, and
+ * a global fake would send it at a domain that does not exist.
+ */
+const TEST_SHOPIFY = vi.hoisted(() => ({
+  SHOPIFY_STORE_DOMAIN: 'test-store.myshopify.com',
+  SHOPIFY_CLIENT_ID: 'zz-test-shopify-client-id',
+  SHOPIFY_CLIENT_SECRET: 'zz-test-shopify-webhook-signing-secret',
+}));
+
+/**
+ * Only the Shopify fields are replaced. Everything else — DATABASE_URL,
+ * AUTH_SECRET, the upload limits — comes from the real validated env, because
+ * this suite runs the actual Express app against the actual database.
+ *
+ * The HMAC verification itself is untouched: it still computes the digest and
+ * still compares it timing-safely, and the forged- and missing-signature tests
+ * below still expect a 401.
+ */
+vi.mock('../../../config/env.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../config/env.js')>();
+  return {
+    ...actual,
+    env: { ...actual.env, ...TEST_SHOPIFY },
+    shopifyConfigured: () => true,
+  };
+});
+
 /** A product id well outside anything Shopify would issue for this store. */
 const TEST_PRODUCT_ID = 900000000001;
 const TEST_VARIANT_ID = 900000000101;
