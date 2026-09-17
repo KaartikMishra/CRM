@@ -106,6 +106,20 @@ export default async function EnquiryDetailPage({ params }: { params: Params }) 
       ),
     },
     {
+      label: 'State',
+      value: enquiry.customer.state ?? <span className="text-faint">Not recorded</span>,
+    },
+    {
+      label: 'GST Number',
+      // Tabular, like the phone number: a fifteen-character identifier is read
+      // character by character, and proportional digits make that harder.
+      value: enquiry.customer.gstNumber ? (
+        <span className="tabular">{enquiry.customer.gstNumber}</span>
+      ) : (
+        <span className="text-faint">Not recorded</span>
+      ),
+    },
+    {
       label: 'Source',
       value: enquiry.sourceDetail
         ? `${label(enquiry.source)} — ${enquiry.sourceDetail}`

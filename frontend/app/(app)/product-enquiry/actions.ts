@@ -143,6 +143,8 @@ export async function createCustomerAction(input: {
   phone?: string;
   email?: string;
   address?: string;
+  state?: string;
+  gstNumber?: string;
 }): Promise<ActionResult<{ customer: { id: string; name: string; type: string } }>> {
   return call('/api/customers', { method: 'POST', body: JSON.stringify(input) });
 }

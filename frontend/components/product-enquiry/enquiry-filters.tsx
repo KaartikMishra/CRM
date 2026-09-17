@@ -62,7 +62,7 @@ export function EnquiryFilters({ assignees }: { assignees: Assignee[] }) {
         <Input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search enquiry no, customer, product"
+          placeholder="Search enquiry no, phone, email, customer or product"
           aria-label="Search enquiries"
           className="pl-9"
         />

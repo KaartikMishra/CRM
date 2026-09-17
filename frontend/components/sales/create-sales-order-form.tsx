@@ -6,11 +6,14 @@ import { Loader2, Mail, Phone, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   CUSTOMER_TYPES,
+  INDIA_STATES,
   MAX_ITEMS_PER_SALES_ORDER,
   createSalesOrderSchema,
   customerAddressSchema,
   customerEmailSchema,
+  customerGstSchema,
   customerPhoneSchema,
+  customerStateSchema,
   isValidAmount,
   lineTotal,
   subtractAmount,
@@ -122,12 +125,16 @@ export function CreateSalesOrderForm() {
   const [newCustomerPhone, setNewCustomerPhone] = useState('');
   const [newCustomerEmail, setNewCustomerEmail] = useState('');
   const [newCustomerAddress, setNewCustomerAddress] = useState('');
+  /** Empty means "not recorded", and is what makes the Select show its placeholder. */
+  const [newCustomerState, setNewCustomerState] = useState('');
+  const [newCustomerGst, setNewCustomerGst] = useState('');
   const [creatingCustomer, setCreatingCustomer] = useState(false);
   const [customerErrors, setCustomerErrors] = useState<Record<string, string>>({});
 
   // Validated with the same schemas the API uses, so the dialog refuses exactly
   // what the server would. Phone is required here — an order that needs chasing
-  // is far easier to chase with a number on it — while email stays optional.
+  // is far easier to chase with a number on it — while email, address, state and
+  // GST number stay optional.
   const nameOk = newCustomerName.trim().length >= 2;
   const phoneOk = customerPhoneSchema.safeParse(newCustomerPhone).success;
   const emailOk =
@@ -135,7 +142,13 @@ export function CreateSalesOrderForm() {
   const addressOk =
     newCustomerAddress.trim() === '' ||
     customerAddressSchema.safeParse(newCustomerAddress).success;
-  const customerReady = nameOk && phoneOk && emailOk && addressOk;
+  // The dropdown can only offer the 28 names the schema accepts, so this holds
+  // by construction; it is checked anyway so the rule lives in one place and a
+  // future change to the options cannot quietly diverge from the server.
+  const stateOk = newCustomerState === '' || customerStateSchema.safeParse(newCustomerState).success;
+  const gstOk =
+    newCustomerGst.trim() === '' || customerGstSchema.safeParse(newCustomerGst).success;
+  const customerReady = nameOk && phoneOk && emailOk && addressOk && stateOk && gstOk;
 
   const atCap = items.length >= MAX_ITEMS_PER_SALES_ORDER;
 
@@ -242,6 +255,12 @@ export function CreateSalesOrderForm() {
     }
     if (!emailOk) errors.email = 'Enter a valid email address';
     if (!addressOk) errors.address = 'Keep the address under 500 characters';
+    if (!stateOk) errors.state = 'Choose a state';
+    if (!gstOk) {
+      errors.gstNumber =
+        customerGstSchema.safeParse(newCustomerGst).error?.issues[0]?.message ??
+        'Enter a valid 15-character GSTIN';
+    }
     setCustomerErrors(errors);
     if (Object.keys(errors).length > 0) return;
 
@@ -256,6 +275,10 @@ export function CreateSalesOrderForm() {
         ...(newCustomerPhone.trim() ? { phone: newCustomerPhone.trim() } : {}),
         ...(newCustomerEmail.trim() ? { email: newCustomerEmail.trim() } : {}),
         ...(newCustomerAddress.trim() ? { address: newCustomerAddress.trim() } : {}),
+        ...(newCustomerState ? { state: newCustomerState } : {}),
+        // Sent as typed; the shared schema trims and uppercases it server-side,
+        // so the canonical casing is decided in exactly one place.
+        ...(newCustomerGst.trim() ? { gstNumber: newCustomerGst.trim() } : {}),
       });
       setCreatingCustomer(false);
 
@@ -275,6 +298,8 @@ export function CreateSalesOrderForm() {
       setNewCustomerPhone('');
       setNewCustomerEmail('');
       setNewCustomerAddress('');
+      setNewCustomerState('');
+      setNewCustomerGst('');
       setCustomerErrors({});
       toast.success('Customer added');
     });
@@ -685,6 +710,45 @@ export function CreateSalesOrderForm() {
                 />
                 {customerErrors.email && (
                   <p className="text-xs text-critical">{customerErrors.email}</p>
+                )}
+              </div>
+            </div>
+
+            {/* Both optional: the state is needed for GST-relevant billing, and
+                a retail customer has no GSTIN at all. */}
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="newCustomerState">State</Label>
+                <Select value={newCustomerState} onValueChange={setNewCustomerState}>
+                  <SelectTrigger id="newCustomerState">
+                    <SelectValue placeholder="Select state" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {INDIA_STATES.map((s) => (
+                      <SelectItem key={s} value={s}>
+                        {s}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {customerErrors.state && (
+                  <p className="text-xs text-critical">{customerErrors.state}</p>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="newCustomerGst">GST Number (optional)</Label>
+                <Input
+                  id="newCustomerGst"
+                  value={newCustomerGst}
+                  onChange={(e) => setNewCustomerGst(e.target.value)}
+                  placeholder="Optional"
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="tabular"
+                />
+                {customerErrors.gstNumber && (
+                  <p className="text-xs text-critical">{customerErrors.gstNumber}</p>
                 )}
               </div>
             </div>

@@ -62,7 +62,7 @@ export function SalesFilters({ customers }: { customers: Customer[] }) {
         <Input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search order ID, product, customer"
+          placeholder="Search order ID, phone, email, customer or product"
           aria-label="Search sales orders"
           className="pl-9"
         />

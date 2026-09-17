@@ -18,6 +18,8 @@ const view = {
   phone: true,
   email: true,
   address: true,
+  state: true,
+  gstNumber: true,
   createdAt: true,
 } as const;
 
@@ -28,6 +30,8 @@ type Row = {
   phone: string | null;
   email: string | null;
   address: string | null;
+  state: string | null;
+  gstNumber: string | null;
   createdAt: Date;
 };
 
@@ -38,6 +42,8 @@ const toView = (row: Row): CustomerView => ({
   phone: row.phone,
   email: row.email,
   address: row.address,
+  state: row.state,
+  gstNumber: row.gstNumber,
   createdAt: row.createdAt.toISOString(),
 });
 
@@ -69,6 +75,11 @@ export async function createCustomer(input: CreateCustomerInput): Promise<Custom
       // Blank optional fields are stored as NULL, never as an empty string, so
       // "not recorded" has exactly one representation in the column.
       address: input.address ?? null,
+      // Both arrive already normalised by the shared schema — the state as one
+      // of the 28 official names, the GSTIN trimmed and uppercased — so there
+      // is nothing left to clean up here.
+      state: input.state ?? null,
+      gstNumber: input.gstNumber ?? null,
     },
     select: view,
   });

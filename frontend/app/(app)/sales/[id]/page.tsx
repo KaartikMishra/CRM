@@ -105,6 +105,20 @@ export default async function SalesOrderDetailPage({ params }: { params: Params 
       ),
     },
     {
+      label: 'State',
+      value: order.customer.state ?? <span className="text-faint">Not recorded</span>,
+    },
+    {
+      label: 'GST Number',
+      // Tabular, like the phone number: a fifteen-character identifier is read
+      // character by character, and proportional digits make that harder.
+      value: order.customer.gstNumber ? (
+        <span className="tabular">{order.customer.gstNumber}</span>
+      ) : (
+        <span className="text-faint">Not recorded</span>
+      ),
+    },
+    {
       label: 'Products',
       value: `${order.money.activeItemCount} ${order.money.activeItemCount === 1 ? 'line' : 'lines'}`,
     },

@@ -74,6 +74,67 @@ export const SESSION_JWT_AUDIENCE = 'royalstuffs-crm-api';
 export const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
 
 /**
+ * The 28 States of India, as the customer's State dropdown offers them.
+ *
+ * The official name is both the label and the stored value, so the column reads
+ * exactly as the dropdown shows and no lookup table or code map is needed.
+ *
+ * Union Territories are deliberately excluded: this is the 28 States and
+ * nothing else. Delhi, Jammu & Kashmir, Chandigarh, Puducherry, Ladakh and the
+ * island territories are therefore not offered — a decision, not an omission.
+ *
+ * It lives here rather than in `enums.ts` because that file is reserved for
+ * values paired with a Prisma enum ("add a member here and in schema.prisma
+ * together, never in one alone"), and `Customer.state` is a plain nullable
+ * String by design.
+ */
+export const INDIA_STATES = [
+  'Andhra Pradesh',
+  'Arunachal Pradesh',
+  'Assam',
+  'Bihar',
+  'Chhattisgarh',
+  'Goa',
+  'Gujarat',
+  'Haryana',
+  'Himachal Pradesh',
+  'Jharkhand',
+  'Karnataka',
+  'Kerala',
+  'Madhya Pradesh',
+  'Maharashtra',
+  'Manipur',
+  'Meghalaya',
+  'Mizoram',
+  'Nagaland',
+  'Odisha',
+  'Punjab',
+  'Rajasthan',
+  'Sikkim',
+  'Tamil Nadu',
+  'Telangana',
+  'Tripura',
+  'Uttar Pradesh',
+  'Uttarakhand',
+  'West Bengal',
+] as const;
+
+export type IndiaState = (typeof INDIA_STATES)[number];
+
+/**
+ * GSTIN shape: a 15-character identifier built as
+ * `<2-digit state code><10-character PAN><entity code>Z<check character>`.
+ *
+ * Structure only. The check character is **not** verified arithmetically, and
+ * the leading state code is **not** cross-checked against `Customer.state` —
+ * both would be stricter rules than "a well-formed GSTIN", and a number that
+ * fails either is far more likely to be a legitimate edge case than a typo we
+ * are entitled to reject.
+ */
+export const GSTIN_LENGTH = 15;
+export const GSTIN_PATTERN = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][A-Z0-9]Z[A-Z0-9]$/;
+
+/**
  * Display names for the CRM modules.
  *
  * The sidebar and the administrator's module-access grid must call a module the

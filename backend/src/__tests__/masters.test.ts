@@ -115,6 +115,130 @@ describe('customers', () => {
     });
     expect(badEmail.status).toBe(422);
   });
+
+  /**
+   * State and GST number arrived after customers already existed, so every
+   * case below is really about one guarantee: both fields are optional, and
+   * their absence has to stay as valid as their presence.
+   */
+  describe('state and GST number', () => {
+    const create = (body: Record<string, unknown>) =>
+      api<{ customer: CustomerView }>('POST', '/api/customers', { token, body });
+
+    const base = { type: 'RETAIL' as const, phone: '+91 98765 43210' };
+
+    it('persists and returns both', async () => {
+      const res = await create({
+        ...base,
+        name: `${TEST_PREFIX}-state-gst`,
+        state: 'Maharashtra',
+        gstNumber: '27AAPFU0939F1ZV',
+      });
+
+      expect(res.status).toBe(201);
+      const customer = res.body.data!.customer;
+      created.customers.push(customer.id);
+      expect(customer.state).toBe('Maharashtra');
+      expect(customer.gstNumber).toBe('27AAPFU0939F1ZV');
+
+      // Read back through the search endpoint: what was stored, not what was echoed.
+      const found = await api<{ customers: CustomerView[] }>(
+        'GET',
+        `/api/customers?q=${TEST_PREFIX}-state-gst`,
+        { token },
+      );
+      const row = found.body.data!.customers.find((c) => c.id === customer.id);
+      expect(row?.state).toBe('Maharashtra');
+      expect(row?.gstNumber).toBe('27AAPFU0939F1ZV');
+    });
+
+    it('accepts a state with no GST number', async () => {
+      const res = await create({
+        ...base,
+        name: `${TEST_PREFIX}-state-only`,
+        state: 'Maharashtra',
+      });
+
+      expect(res.status).toBe(201);
+      created.customers.push(res.body.data!.customer.id);
+      expect(res.body.data!.customer.state).toBe('Maharashtra');
+      // Omitted means NULL, exactly as it already does for phone, email and address.
+      expect(res.body.data!.customer.gstNumber).toBeNull();
+    });
+
+    it('accepts neither', async () => {
+      const res = await create({ ...base, name: `${TEST_PREFIX}-no-state-gst` });
+
+      expect(res.status).toBe(201);
+      created.customers.push(res.body.data!.customer.id);
+      expect(res.body.data!.customer.state).toBeNull();
+      expect(res.body.data!.customer.gstNumber).toBeNull();
+    });
+
+    it('stores a GST number typed in lower case in upper case', async () => {
+      const res = await create({
+        ...base,
+        name: `${TEST_PREFIX}-gst-lower`,
+        gstNumber: '27aapfu0939f1zv',
+      });
+
+      expect(res.status).toBe(201);
+      created.customers.push(res.body.data!.customer.id);
+      expect(res.body.data!.customer.gstNumber).toBe('27AAPFU0939F1ZV');
+    });
+
+    it('rejects a state outside the 28 States of India', async () => {
+      // A Union Territory is the honest case here: real place, deliberately not
+      // on the list, so it proves the list is closed rather than merely typo-proof.
+      const ut = await create({ ...base, name: `${TEST_PREFIX}-bad-state`, state: 'Delhi' });
+      expect(ut.status).toBe(422);
+
+      const casing = await create({
+        ...base,
+        name: `${TEST_PREFIX}-bad-state`,
+        state: 'maharashtra',
+      });
+      expect(casing.status).toBe(422);
+    });
+
+    it('rejects a malformed GST number', async () => {
+      const short = await create({
+        ...base,
+        name: `${TEST_PREFIX}-bad-gst`,
+        gstNumber: 'ABC123',
+      });
+      expect(short.status).toBe(422);
+
+      // Structurally wrong in one character: the fixed 'Z' is missing.
+      const wrongShape = await create({
+        ...base,
+        name: `${TEST_PREFIX}-bad-gst`,
+        gstNumber: '27AAPFU0939F1XV',
+      });
+      expect(wrongShape.status).toBe(422);
+    });
+
+    it('reads back a customer created before the fields existed', async () => {
+      // The fixture writes a row the way every pre-migration row looks: no
+      // state, no GST number, both columns NULL.
+      const legacy = await makeCustomer();
+
+      const res = await api<{ customers: CustomerView[] }>(
+        'GET',
+        `/api/customers?q=${legacy.name}`,
+        { token },
+      );
+
+      expect(res.status).toBe(200);
+      const row = res.body.data!.customers.find((c) => c.id === legacy.id);
+      expect(row).toBeDefined();
+      expect(row!.state).toBeNull();
+      expect(row!.gstNumber).toBeNull();
+      // The rest of the record is untouched by the new columns.
+      expect(row!.name).toBe(legacy.name);
+      expect(row!.type).toBe('RETAIL');
+    });
+  });
 });
 
 describe('vendors', () => {

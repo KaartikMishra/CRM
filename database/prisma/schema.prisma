@@ -128,6 +128,20 @@ model Customer {
   /// Where to deliver or invoice. Optional and free-text: an address is written
   /// the way the customer gives it, and every existing row predates this field.
   address   String?
+  /// One of the 28 States of India, stored as the official name.
+  ///
+  /// Plain text rather than a Postgres enum: the list is a fixed reference list
+  /// that @rs/shared already owns (INDIA_STATES) and validates at the edge, and
+  /// an enum would only make correcting that list expensive — a value cannot be
+  /// dropped from a Postgres enum. Optional; every existing row predates it.
+  state     String?
+  /// The customer's GSTIN, where they are registered.
+  ///
+  /// Optional by business rule — a retail customer has none — and stored
+  /// uppercase. Not unique: the same GSTIN can legitimately appear on more
+  /// than one row. Structure is checked at the edge; the database enforces no
+  /// checksum and no cross-check against `state`.
+  gstNumber String?
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
 

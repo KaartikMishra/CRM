@@ -42,6 +42,8 @@ const customerContactRef = {
   phone: true,
   email: true,
   address: true,
+  state: true,
+  gstNumber: true,
 } as const;
 const mediaRef = { id: true, secureUrl: true, publicId: true } as const;
 
@@ -386,6 +388,8 @@ export async function list(query: EnquiryListQuery, now: Date): Promise<ListResu
     where.OR = [
       { enquiryNo: { contains: query.q, mode: 'insensitive' } },
       { customer: { name: { contains: query.q, mode: 'insensitive' } } },
+      { customer: { phone: { contains: query.q, mode: 'insensitive' } } },
+      { customer: { email: { contains: query.q, mode: 'insensitive' } } },
       { products: { some: { name: { contains: query.q, mode: 'insensitive' } } } },
     ];
   }

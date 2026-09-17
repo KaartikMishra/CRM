@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { GSTIN_PATTERN, INDIA_STATES } from '../constants/index.js';
 import { CUSTOMER_TYPES } from '../enums.js';
 import { cuidSchema } from './common.js';
 
@@ -34,20 +35,49 @@ export const customerAddressSchema = z
   .trim()
   .max(500, 'Keep the address under 500 characters');
 
+/**
+ * The customer's State, closed to the 28 States of India.
+ *
+ * A closed list rather than free text: a state typed by hand becomes "U.P.",
+ * "Uttar pradesh" and "UP" in three rows and stops being groupable. The list
+ * itself lives in `constants` so the dropdown and this rule read the same one.
+ */
+export const customerStateSchema = z.enum(INDIA_STATES, {
+  errorMap: () => ({ message: 'Choose a state' }),
+});
+
+/**
+ * A GSTIN, checked for structure and nothing more.
+ *
+ * Uppercased before the pattern runs, so a number typed in lower case is
+ * accepted and stored in the single canonical casing rather than being
+ * rejected for a difference that carries no meaning.
+ */
+export const customerGstSchema = z
+  .string()
+  .trim()
+  .toUpperCase()
+  .regex(GSTIN_PATTERN, 'Enter a valid 15-character GSTIN');
+
 export const createCustomerSchema = z.object({
   name: z.string().trim().min(2, 'Customer name is required').max(160),
   type: z.enum(CUSTOMER_TYPES, {
     errorMap: () => ({ message: 'Choose a customer type' }),
   }),
   /**
-   * All three stay optional on the wire so no existing customer record and no
+   * All five stay optional on the wire so no existing customer record and no
    * existing caller becomes invalid. Where a form needs one of them — both
    * add-customer dialogs require a phone — that is enforced at the form, which
    * is the layer that knows what it is asking for.
+   *
+   * `gstNumber` is optional by business rule rather than by compatibility: a
+   * retail customer has no GSTIN, so blank must always be a valid answer.
    */
   phone: customerPhoneSchema.optional(),
   email: customerEmailSchema.optional(),
   address: customerAddressSchema.optional(),
+  state: customerStateSchema.optional(),
+  gstNumber: customerGstSchema.optional(),
 });
 
 export const customerSearchSchema = z.object({

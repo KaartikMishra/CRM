@@ -43,7 +43,14 @@ import { isOverdue } from './sales-efficiency.js';
 const userRef = { id: true, name: true, employeeId: true, role: true } as const;
 const customerRef = { id: true, name: true, type: true } as const;
 /** Detail only — a list row has no use for contact details. */
-const customerContactRef = { ...customerRef, phone: true, email: true, address: true } as const;
+const customerContactRef = {
+  ...customerRef,
+  phone: true,
+  email: true,
+  address: true,
+  state: true,
+  gstNumber: true,
+} as const;
 const mediaRef = { id: true, secureUrl: true, publicId: true } as const;
 
 const itemSelect = {
@@ -409,6 +416,8 @@ export async function list(query: SalesOrderListQuery, now: Date): Promise<ListR
       { orderId: { contains: query.q, mode: 'insensitive' } },
       { items: { some: { productName: { contains: query.q, mode: 'insensitive' } } } },
       { customer: { name: { contains: query.q, mode: 'insensitive' } } },
+      { customer: { phone: { contains: query.q, mode: 'insensitive' } } },
+      { customer: { email: { contains: query.q, mode: 'insensitive' } } },
     ];
   }
 

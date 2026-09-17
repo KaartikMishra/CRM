@@ -50,6 +50,17 @@ export type CustomerContactRef = CustomerRef & {
   phone: string | null;
   email: string | null;
   address: string | null;
+  /**
+   * One of `INDIA_STATES`, or null where it was never recorded.
+   *
+   * Carried on the detail payload beside the address for the same reason the
+   * address is: whoever is looking at one enquiry or one order is the person
+   * who needs to know where it is going and how it will be billed. List rows
+   * still keep the bare `CustomerRef`.
+   */
+  state: string | null;
+  /** The GSTIN, uppercase, or null where the customer has none. */
+  gstNumber: string | null;
 };
 
 export type VendorRef = {
@@ -199,6 +210,10 @@ export type CustomerView = CustomerRef & {
   phone: string | null;
   email: string | null;
   address: string | null;
+  /** One of `INDIA_STATES`, or null where it was never recorded. */
+  state: string | null;
+  /** The GSTIN, uppercase, or null where the customer has none. */
+  gstNumber: string | null;
   createdAt: IsoDateTime;
 };
 
