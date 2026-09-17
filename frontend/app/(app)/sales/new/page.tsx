@@ -2,7 +2,6 @@ import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { PageHeader } from '@/components/common/page-header';
 import { CreateSalesOrderForm } from '@/components/sales/create-sales-order-form';
-import { fetchProducts } from '@/lib/procurement-api';
 import { can } from '@/lib/current-user';
 import { requireModule } from '@/lib/require-module';
 import { NoModuleAccess } from '@/components/common/no-module-access';
@@ -18,12 +17,15 @@ export default async function NewSalesOrderPage() {
   if (!can(user, 'SALES', 'CREATE')) redirect('/sales');
 
   /*
-    The catalogue, purely as suggestions for the product field. Failing to load
-    it must not block order entry, so fetchProducts returns [] on error and the
-    field falls back to plain free text — which is how every order was written
-    before the Product master existed.
+    No catalogue is preloaded any more.
+
+    The product field used to receive up to 200 legacy Products so a datalist
+    could suggest them. It now searches RS Products from the browser as somebody
+    types, which is both a larger catalogue (502 products, not 1) and a smaller
+    payload — the list arrives twenty rows at a time, only for what was actually
+    searched. Failing to search still cannot block order entry: the field falls
+    back to plain free text, exactly as before.
   */
-  const products = await fetchProducts();
 
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
@@ -32,7 +34,7 @@ export default async function NewSalesOrderPage() {
         title="New order"
         description="Record an order and its payment position. Totals are calculated for you and cannot be typed over."
       />
-      <CreateSalesOrderForm products={products} />
+      <CreateSalesOrderForm />
     </div>
   );
 }

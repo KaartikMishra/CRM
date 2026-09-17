@@ -38,6 +38,10 @@ import {
 } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
 import { Textarea } from '@/components/ui/textarea';
+import {
+  RsProductPicker,
+  type PickedProduct,
+} from '@/components/products/rs-product-picker';
 import { ErrorMessage } from '@/components/common/error-message';
 import { EntityPicker, type PickerOption } from '@/components/product-enquiry/entity-picker';
 import { ImageUploadField } from '@/components/product-enquiry/image-upload-field';
@@ -54,6 +58,14 @@ type ItemDraft = {
   quantity: string;
   price: string;
   imageAssetId: string | null;
+  /**
+   * The catalogue product this line was picked from, if any.
+   *
+   * Frontend-only: it supplies the label and the thumbnail, and is never sent
+   * to the API. `productId` on the submitted line stays null — that column
+   * points at the legacy Product master, which an RsProduct id is not.
+   */
+  rsProduct: PickedProduct | null;
 };
 
 /**
@@ -71,6 +83,7 @@ const emptyItem = (key: string): ItemDraft => ({
   quantity: '',
   price: '',
   imageAssetId: null,
+  rsProduct: null,
 });
 
 /**
@@ -85,12 +98,7 @@ const emptyItem = (key: string): ItemDraft => ({
  * of their own; showing them live is a preview computed with the same exact
  * decimal helpers the server uses, never a value that gets submitted.
  */
-export function CreateSalesOrderForm({
-  products = [],
-}: {
-  /** The catalogue, for the product suggestions. Empty is fine — free text still works. */
-  products?: { id: string; name: string }[];
-}) {
+export function CreateSalesOrderForm() {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const formId = useId();
@@ -170,6 +178,10 @@ export function CreateSalesOrderForm({
       customerId: customer?.id ?? '',
       items: items.map((item) => ({
         productName: item.productName.trim(),
+        // Fields are listed rather than spread, so `rsProduct` cannot reach the
+        // API by accident. `productId` is still only ever a legacy Product id —
+        // the catalogue picker does not set it, and must not: that column is a
+        // foreign key to a different table.
         ...(item.productId ? { productId: item.productId } : {}),
         quantity: item.quantity.trim() === '' ? Number.NaN : Number(item.quantity),
         price: item.price.trim(),
@@ -381,42 +393,85 @@ export function CreateSalesOrderForm({
               </div>
 
               <div className="grid gap-4 sm:grid-cols-[132px_1fr]">
-                <ImageUploadField
-                  value={item.imageAssetId}
-                  onChange={(assetId) => updateItem(item.key, { imageAssetId: assetId })}
-                />
+                <div className="flex flex-col gap-2">
+                  <ImageUploadField
+                    value={item.imageAssetId}
+                    onChange={(assetId) => updateItem(item.key, { imageAssetId: assetId })}
+                  />
+
+                  {/*
+                    The catalogue's own photograph, shown beside the upload
+                    rather than inside it: the uploaded image is the one that
+                    travels with the order, and replacing it with a picture the
+                    line does not carry would misrepresent what was saved.
+                    Nothing is uploaded or copied here — it is the existing
+                    Shopify CDN reference, displayed.
+                  */}
+                  {item.rsProduct?.imageUrl && (
+                    <figure className="flex flex-col gap-1">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={item.rsProduct.imageUrl}
+                        alt={item.rsProduct.title}
+                        loading="lazy"
+                        className="aspect-square w-full rounded-md border border-line object-cover"
+                      />
+                      <figcaption className="text-[11px] text-muted">Catalogue image</figcaption>
+                    </figure>
+                  )}
+                </div>
 
                 <div className="flex flex-col gap-4">
                   <div className="flex flex-col gap-1.5">
                     <Label htmlFor={`${formId}-name-${item.key}`}>Product name</Label>
                     {/*
-                      A datalist rather than a select: the catalogue is a
-                      suggestion, not a constraint. Typing a product that does
-                      not exist yet still works exactly as before — the line is
-                      simply not linked, and procurement can attach it later.
-                      Picking a listed name captures its id, which is what lets
-                      purchased stock be matched to this line.
+                      The catalogue is a suggestion, not a constraint. Searching
+                      RS Products copies the chosen title onto the line; typing
+                      a product that is not in the catalogue still works exactly
+                      as before, and the box below stays available for it.
+
+                      What is deliberately *not* done here: the RsProduct id is
+                      never written to `productId`. That column is a foreign key
+                      to the legacy Product master, and the two are different
+                      entities — putting a catalogue id there would either break
+                      the constraint or silently mean the wrong thing. The line
+                      is simply unlinked, which the schema has always allowed.
+                    */}
+                    <RsProductPicker
+                      id={`${formId}-name-${item.key}`}
+                      value={item.rsProduct}
+                      triggerLabel={item.productName}
+                      placeholder="Search products by name or SKU"
+                      onChange={(product) =>
+                        updateItem(item.key, {
+                          rsProduct: product,
+                          // The title becomes the line's label; the id is not
+                          // carried over — see above.
+                          productName: product?.title ?? '',
+                        })
+                      }
+                    />
+
+                    {/*
+                      The free-text fallback, kept because Sales has always
+                      allowed an off-catalogue line. Typing here clears any
+                      catalogue selection, so the label and the selected product
+                      can never disagree.
                     */}
                     <Input
-                      id={`${formId}-name-${item.key}`}
-                      list={`${formId}-products`}
+                      aria-label={`Or type a product name for line ${index + 1}`}
                       value={item.productName}
-                      onChange={(e) => {
-                        const value = e.target.value;
-                        const match = products.find((p) => p.name === value);
-                        updateItem(item.key, { productName: value, productId: match?.id ?? null });
-                      }}
-                      placeholder="Hammered copper bottle"
+                      onChange={(e) =>
+                        updateItem(item.key, { productName: e.target.value, rsProduct: null })
+                      }
+                      placeholder="…or type a product not in the catalogue"
                     />
-                    {item.productId && (
-                      <p className="text-xs text-positive">In the catalogue — stock can be allocated to this line.</p>
-                    )}
-                    {index === 0 && (
-                      <datalist id={`${formId}-products`}>
-                        {products.map((p) => (
-                          <option key={p.id} value={p.name} />
-                        ))}
-                      </datalist>
+
+                    {item.rsProduct && (
+                      <p className="text-xs text-muted">
+                        From the catalogue
+                        {item.rsProduct.sku ? ` · SKU ${item.rsProduct.sku}` : ''}
+                      </p>
                     )}
                     {err(`items.${index}.productName`) && (
                       <p className="text-xs text-critical">{err(`items.${index}.productName`)}</p>

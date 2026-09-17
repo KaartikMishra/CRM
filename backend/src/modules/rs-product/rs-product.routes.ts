@@ -1,10 +1,14 @@
 /**
  * The route table, and nothing else.
  *
- * Every route carries requireAuth and a requirePermission for RS_PRODUCTS. The
+ * Every route carries requireAuth and a permission check for RS_PRODUCTS. The
  * module denies USER by default, so a plain employee reaches this only once an
  * administrator grants it through the existing overrides screen — no second
  * permission mechanism is introduced here.
+ *
+ * The one exception is the catalogue list below, which also admits SALES:CREATE
+ * so the Sales order picker can search it. Every write still demands RS_PRODUCTS
+ * on its own; see the comment on that route.
  *
  * Literal paths are declared before any parameterised one, so `/product-types`
  * and `/shopify/...` are never read as product ids.
@@ -18,7 +22,7 @@ import {
   updateRsProductSchema,
 } from '@rs/shared';
 import { requireAuth } from '../../middleware/requireAuth.js';
-import { requirePermission } from '../../middleware/requirePermission.js';
+import { requireAnyPermission, requirePermission } from '../../middleware/requirePermission.js';
 import { validate } from '../../middleware/validate.js';
 import * as controller from './rs-product.controller.js';
 
@@ -26,9 +30,27 @@ export const rsProductRoutes = Router();
 
 rsProductRoutes.use(requireAuth);
 
+/**
+ * The catalogue list, and the search behind every product picker.
+ *
+ * Reachable with RS_PRODUCTS:VIEW *or* SALES:CREATE. Sales is a USER-default
+ * module and RS Products is not, so a salesperson writing an order could
+ * otherwise search nothing at all — the picker would return 403 and read as an
+ * empty catalogue. Widening this one read is narrower than granting every
+ * employee the RS Products module, which would also hand them the module page
+ * and its filters.
+ *
+ * Read-only, and deliberately only this route: create, edit and archive below
+ * still require RS_PRODUCTS on its own, so a salesperson can find a product and
+ * still cannot change the catalogue. The same widening already serves image
+ * upload — see upload.routes.ts.
+ *
+ * Each pair resolves through the usual per-user override mechanism, so a
+ * UserModulePermission row revoking either one still applies.
+ */
 rsProductRoutes.get(
   '/',
-  requirePermission('RS_PRODUCTS', 'VIEW'),
+  requireAnyPermission(['RS_PRODUCTS', 'VIEW'], ['SALES', 'CREATE']),
   validate({ query: rsProductListQuerySchema }),
   controller.list,
 );

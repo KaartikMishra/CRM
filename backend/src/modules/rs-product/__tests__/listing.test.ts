@@ -396,8 +396,19 @@ describe('access control', () => {
     expect((await api('POST', '/api/rs-products', { body: { title: 'x', price: '1.00' } })).status).toBe(401);
   });
 
-  it('refuses a plain USER without the module', async () => {
+  it('refuses a USER holding neither the module nor SALES:CREATE', async () => {
+    // The list also admits SALES:CREATE, so the Sales order picker can search
+    // the catalogue. A plain USER holds that by role default — denial therefore
+    // has to be asserted with it revoked, which is what the rule actually says.
+    await prisma.userModulePermission.create({
+      data: { userId: employee.id, module: 'SALES', action: 'CREATE', allowed: false },
+    });
+
     expect((await api('GET', '/api/rs-products', { token: employeeToken })).status).toBe(403);
+
+    await prisma.userModulePermission.deleteMany({
+      where: { userId: employee.id, module: 'SALES' },
+    });
   });
 
   it('lets VIEW read but not create', async () => {

@@ -52,6 +52,15 @@ const read = (path: string): string => readFileSync(resolve(root, path), 'utf8')
 const components = 'components/vendor-invoices';
 const actions = 'app/(app)/vendor-invoices/actions.ts';
 
+/**
+ * The product picker now lives outside this module.
+ *
+ * Sales searches the same catalogue, so one implementation serves both rather
+ * than each keeping a copy to drift apart. The assertions below still belong
+ * here: they pin what Vendor Invoices depends on that picker doing.
+ */
+const PICKER = 'components/products/rs-product-picker.tsx';
+
 // ---------------------------------------------------------------------------
 //  Display helpers
 // ---------------------------------------------------------------------------
@@ -379,7 +388,7 @@ describe('clearing a field never sends a value the schema rejects', () => {
 });
 
 describe('the product picker uses RsProduct, never the legacy master', () => {
-  const picker = read(`${components}/rs-product-picker.tsx`);
+  const picker = read(PICKER);
 
   it('searches the RS Products endpoint', () => {
     expect(picker).toContain('/api/proxy/rs-products');
@@ -491,8 +500,9 @@ describe('no business data is hardcoded', () => {
 
 describe('images are reused, never uploaded', () => {
   it('renders existing image references and offers no upload', () => {
-    for (const file of ['trade-table.tsx', 'mapping-table.tsx', 'rs-product-picker.tsx']) {
-      const source = read(`${components}/${file}`);
+    const files = [`${components}/trade-table.tsx`, `${components}/mapping-table.tsx`, PICKER];
+    for (const file of files) {
+      const source = read(file);
       expect(source, file).not.toContain('cloudinary');
       expect(source, file).not.toContain('/api/proxy/uploads');
       expect(source, file).not.toContain('<input type="file"');
@@ -550,7 +560,7 @@ describe('the session token never reaches the browser', () => {
   });
 
   it('routes the one client-side read through the proxy', () => {
-    const picker = read(`${components}/rs-product-picker.tsx`);
+    const picker = read(PICKER);
     expect(picker).toContain('/api/proxy/');
     expect(picker).not.toContain('BACKEND_URL');
     expect(picker).not.toContain('Authorization');
@@ -573,7 +583,7 @@ describe('loading, error and empty states exist everywhere', () => {
   });
 
   it('tells the picker apart from an empty catalogue when access is refused', () => {
-    const picker = read(`${components}/rs-product-picker.tsx`);
+    const picker = read(PICKER);
     expect(picker).toContain('denied');
     expect(picker).toContain('403');
   });

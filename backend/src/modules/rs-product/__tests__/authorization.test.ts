@@ -80,25 +80,76 @@ describe('permission resolution', () => {
     expect(res.status).toBe(200);
   });
 
-  it('denies a plain USER by default', async () => {
+  /**
+   * A plain USER holds SALES:CREATE by role default, and the catalogue list
+   * admits that capability so the Sales order picker can search — so the
+   * employee fixture reaches the list without any RS_PRODUCTS grant.
+   *
+   * Denial is therefore asserted against somebody holding neither capability,
+   * which is what the rule actually says. The tests below pin both halves.
+   */
+  it('denies a caller holding neither RS_PRODUCTS:VIEW nor SALES:CREATE', async () => {
+    await prisma.userModulePermission.createMany({
+      data: [
+        { userId: employee.id, module: 'RS_PRODUCTS', action: 'VIEW', allowed: false },
+        { userId: employee.id, module: 'SALES', action: 'CREATE', allowed: false },
+      ],
+    });
+
     const res = await api('GET', '/api/rs-products', { token: employeeToken });
     expect(res.status).toBe(403);
+
+    await prisma.userModulePermission.deleteMany({ where: { userId: employee.id } });
   });
 
-  it('admits that USER once an override grants VIEW', async () => {
-    await prisma.userModulePermission.create({
-      data: { userId: employee.id, module: 'RS_PRODUCTS', action: 'VIEW', allowed: true },
+  it('admits a USER on RS_PRODUCTS:VIEW alone, with Sales revoked', async () => {
+    // The Vendor Invoices path: somebody granted the catalogue but not Sales.
+    await prisma.userModulePermission.createMany({
+      data: [
+        { userId: employee.id, module: 'RS_PRODUCTS', action: 'VIEW', allowed: true },
+        { userId: employee.id, module: 'SALES', action: 'CREATE', allowed: false },
+      ],
     });
 
     const granted = await api<Listed>('GET', '/api/rs-products', { token: employeeToken });
     expect(granted.status).toBe(200);
 
-    await prisma.userModulePermission.deleteMany({
-      where: { userId: employee.id, module: 'RS_PRODUCTS', action: 'VIEW' },
+    await prisma.userModulePermission.deleteMany({ where: { userId: employee.id } });
+  });
+
+  it('admits a USER on SALES:CREATE alone, with RS Products revoked', async () => {
+    // The Sales picker path, and the reason this route was widened: a
+    // salesperson can search the catalogue without holding the module.
+    await prisma.userModulePermission.create({
+      data: { userId: employee.id, module: 'RS_PRODUCTS', action: 'VIEW', allowed: false },
     });
 
-    const revoked = await api('GET', '/api/rs-products', { token: employeeToken });
-    expect(revoked.status).toBe(403);
+    const res = await api<Listed>('GET', '/api/rs-products', { token: employeeToken });
+    expect(res.status).toBe(200);
+
+    await prisma.userModulePermission.deleteMany({ where: { userId: employee.id } });
+  });
+
+  it('still refuses every write to somebody holding only SALES:CREATE', async () => {
+    // The widening is read-only. A salesperson may find a product and still may
+    // not create, edit or archive one.
+    await prisma.userModulePermission.create({
+      data: { userId: employee.id, module: 'RS_PRODUCTS', action: 'VIEW', allowed: false },
+    });
+
+    const created = await api('POST', '/api/rs-products', {
+      token: employeeToken,
+      body: { title: 'zz-test-should-never-exist', price: '1.00' },
+    });
+    expect(created.status).toBe(403);
+
+    const edited = await api('PATCH', '/api/rs-products/clx0000000000000000000000', {
+      token: employeeToken,
+      body: { title: 'zz-test-nope' },
+    });
+    expect(edited.status).toBe(403);
+
+    await prisma.userModulePermission.deleteMany({ where: { userId: employee.id } });
   });
 
   it('reports the module in the permission matrix, including for an admin', async () => {

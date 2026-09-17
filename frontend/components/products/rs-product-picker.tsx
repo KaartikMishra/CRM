@@ -44,18 +44,39 @@ const DEBOUNCE_MS = 250;
  * session cookie server-side and attaches the bearer. No token reaches browser
  * JavaScript.
  *
- * Note the permission this depends on: `GET /api/rs-products` is guarded by
- * `RS_PRODUCTS:VIEW`. Somebody holding Vendor Invoices but not RS Products gets
- * the "no products" message rather than a silent empty box — see `denied`.
+ * Shared by Vendor Invoices and Sales, which is why it lives here rather than
+ * inside either module: one search path, one debounce, one place to fix a bug.
+ * What each caller does with the result differs — Vendor Invoices stores the
+ * RsProduct id on a mapping, Sales copies the title onto an order line and
+ * stores no id at all — so the picker reports the selection and decides
+ * nothing about how it is used.
+ *
+ * Note the permission this depends on: `GET /api/rs-products` admits
+ * `RS_PRODUCTS:VIEW` *or* `SALES:CREATE`. Anyone holding neither gets the
+ * explanatory message rather than a silent empty box — see `denied`.
  */
 export function RsProductPicker({
   value,
   onChange,
   disabled,
+  placeholder = 'Search the RS Products catalogue',
+  triggerLabel,
+  id,
 }: {
   value: PickedProduct | null;
   onChange: (product: PickedProduct | null) => void;
   disabled?: boolean;
+  /** Prompt shown on the closed trigger and in the search box. */
+  placeholder?: string;
+  /**
+   * What the trigger reads when nothing is picked from the catalogue.
+   *
+   * Sales passes the free text somebody typed instead, so an off-catalogue
+   * product still shows its own name rather than the placeholder.
+   */
+  triggerLabel?: string | null;
+  /** Ties the trigger to an external <Label>. */
+  id?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -68,13 +89,14 @@ export function RsProductPicker({
     if (!open) return;
     const controller = new AbortController();
 
-    const id = setTimeout(() => {
+    const timer = setTimeout(() => {
       startLoading(async () => {
         try {
           const params = new URLSearchParams({
             limit: String(PICKER_LIMIT),
-            // Active products first; an archived one is rarely what somebody is
-            // about to agree a price for.
+            // Active products only: neither a price agreement nor a sales line
+            // is usually written against something withdrawn from the
+            // catalogue.
             status: 'ACTIVE',
           });
           if (query) params.set('q', query);
@@ -113,24 +135,29 @@ export function RsProductPicker({
     }, DEBOUNCE_MS);
 
     return () => {
-      clearTimeout(id);
+      clearTimeout(timer);
       controller.abort();
     };
   }, [open, query]);
+
+  // What the closed trigger reads: the picked product, else whatever the caller
+  // says stands in its place (Sales passes typed free text), else the prompt.
+  const label = value?.title ?? (triggerLabel?.trim() ? triggerLabel : null);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button
           type="button"
+          id={id}
           variant="outline"
           role="combobox"
           aria-expanded={open}
           disabled={disabled}
           className="w-full justify-between font-normal"
         >
-          <span className={cn('truncate', !value && 'text-faint')}>
-            {value ? value.title : 'Search the RS Products catalogue'}
+          <span className={cn('truncate', !label && 'text-faint')}>
+            {label ?? placeholder}
           </span>
           <ChevronsUpDown className="size-4 shrink-0 text-muted" />
         </Button>
@@ -168,13 +195,19 @@ export function RsProductPicker({
 
             {!loading && !denied && !failed && options.length === 0 && (
               <CommandEmpty>
-                {query ? 'No products match that search.' : 'No products in the catalogue yet.'}
+                {query ? 'No products found' : 'No products in the catalogue yet.'}
               </CommandEmpty>
             )}
 
             {!loading && !denied && !failed && options.length > 0 && (
               <CommandGroup>
                 {options.map((product) => (
+                  /*
+                    Keyed and valued by the RsProduct id, never the SKU. Shopify
+                    permits duplicate SKUs and duplicate titles, so two rows can
+                    legitimately read alike — selecting one must still return
+                    that exact product.
+                  */
                   <CommandItem
                     key={product.id}
                     value={product.id}
@@ -190,14 +223,16 @@ export function RsProductPicker({
                       )}
                     />
                     <ProductThumb url={product.imageUrl} alt={product.title} />
-                    <span className="min-w-0 flex-1 truncate" title={product.title}>
-                      {product.title}
-                    </span>
-                    {product.sku && (
-                      <span className="shrink-0 font-mono text-[11px] text-muted">
-                        {product.sku}
+                    <span className="flex min-w-0 flex-1 flex-col">
+                      <span className="truncate" title={product.title}>
+                        {product.title}
                       </span>
-                    )}
+                      {/* Always shown, so a missing SKU reads as a fact rather
+                          than as a row that rendered wrong. */}
+                      <span className="truncate font-mono text-[11px] text-muted">
+                        SKU: {product.sku ?? 'Not available'}
+                      </span>
+                    </span>
                   </CommandItem>
                 ))}
               </CommandGroup>

@@ -19,7 +19,7 @@ import {
   createMappingAction,
   updateMappingAction,
 } from '@/app/(app)/vendor-invoices/actions';
-import { RsProductPicker, type PickedProduct } from './rs-product-picker';
+import { RsProductPicker, type PickedProduct } from '@/components/products/rs-product-picker';
 
 /**
  * Creating and editing a vendor↔product mapping.

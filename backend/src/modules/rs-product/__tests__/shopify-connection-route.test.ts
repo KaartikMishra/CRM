@@ -156,8 +156,19 @@ describe('the response body', () => {
 });
 
 describe('RS Products RBAC is unchanged by this phase', () => {
-  it('still denies a plain USER the product list', async () => {
+  it('still denies the product list to a USER with neither capability', async () => {
+    // The list now also admits SALES:CREATE, which a plain USER holds by role
+    // default, so that has to be revoked for this to assert what it means.
+    // Everything else about RS Products RBAC is unchanged.
+    await prisma.userModulePermission.create({
+      data: { userId: employee.id, module: 'SALES', action: 'CREATE', allowed: false },
+    });
+
     expect((await api('GET', '/api/rs-products', { token: employeeToken })).status).toBe(403);
+
+    await prisma.userModulePermission.deleteMany({
+      where: { userId: employee.id, module: 'SALES' },
+    });
   });
 
   it('still admits an administrator to the product list', async () => {
