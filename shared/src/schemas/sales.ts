@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import {
+  GST_RATES,
+  HSN_CODE_MAX_LENGTH,
   MAX_ITEMS_PER_SALES_ORDER,
   SALES_ORDER_ID_MAX_LENGTH,
   SALES_ORDER_ID_PATTERN,
@@ -67,6 +69,33 @@ export const salesOrderItemInputSchema = z.object({
   productImageAssetId: cuidSchema.optional(),
   quantity: salesQuantitySchema,
   price: salesPriceSchema,
+
+  /**
+   * The HSN code for this line, as typed.
+   *
+   * A string, and only ever a string: codes carry leading zeros and
+   * alphanumeric forms, so any numeric coercion would corrupt them. Length is
+   * the sole constraint — no format pattern, because a stricter rule would
+   * reject legitimate entries nobody has enumerated.
+   *
+   * Optional, and trimmed like every other text field here. An empty string
+   * therefore arrives as '' and is stored as such rather than being rejected;
+   * a caller that means "not recorded" omits the field.
+   */
+  hsnCode: z.string().trim().max(HSN_CODE_MAX_LENGTH).optional(),
+
+  /**
+   * The GST rate for this line — one of the six in GST_RATES.
+   *
+   * z.enum, so a seventh value cannot be introduced by a caller: anything
+   * outside the list fails validation on both tiers rather than reaching the
+   * column. 'NONE' and '0' are distinct members and neither is converted to a
+   * number.
+   *
+   * Optional. Omitting it leaves the line's rate unrecorded (null), which is
+   * distinct again from an explicit 'NONE'.
+   */
+  gstRate: z.enum(GST_RATES).optional(),
 });
 
 /** Exact sum of a set of line totals, in paise. Never a float. */

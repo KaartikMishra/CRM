@@ -24,6 +24,7 @@ import {
   subtractAmount,
   type CustomerContactRef,
   type CustomerRef,
+  type GstRate,
   type MediaRef,
   type SalesMoneyView,
   type SalesOrderDetail,
@@ -59,6 +60,13 @@ const itemSelect = {
   productName: true,
   quantity: true,
   price: true,
+  /**
+   * Recorded per line, and read back as recorded. Null on every line written
+   * before these existed, and on any line where nobody chose. Neither takes
+   * part in pricing.
+   */
+  hsnCode: true,
+  gstRate: true,
   status: true,
   approvedAt: true,
   createdAt: true,
@@ -238,7 +246,12 @@ function toItem(row: DetailRow['items'][number]): SalesOrderItemView {
     image: (row.productImage as MediaRef | null) ?? null,
     quantity: row.quantity,
     price: normaliseAmount(row.price.toString()),
+    // quantity × price. GST is deliberately not a term in it.
     lineTotal: totalOfLine(row),
+    hsnCode: row.hsnCode,
+    // Narrowed from the column's plain String: the shared z.enum is what
+    // guarantees only the six permitted values were ever written.
+    gstRate: (row.gstRate as GstRate | null) ?? null,
     status: row.status,
     proposedBy: row.proposedBy as UserRef,
     approvedBy: (row.approvedBy as UserRef | null) ?? null,

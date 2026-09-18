@@ -6,6 +6,9 @@ import { Loader2, Mail, Phone, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   CUSTOMER_TYPES,
+  GST_RATES,
+  GST_RATE_LABELS,
+  HSN_CODE_MAX_LENGTH,
   INDIA_STATES,
   MAX_ITEMS_PER_SALES_ORDER,
   createSalesOrderSchema,
@@ -19,6 +22,7 @@ import {
   subtractAmount,
   sumItemTotals,
   type CreateSalesOrderInput,
+  type GstRate,
 } from '@rs/shared';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -69,6 +73,18 @@ type ItemDraft = {
    * points at the legacy Product master, which an RsProduct id is not.
    */
   rsProduct: PickedProduct | null;
+
+  /** As typed. Text throughout: a leading zero must survive to the API. */
+  hsnCode: string;
+
+  /**
+   * The rate chosen for this line, always one of GST_RATES.
+   *
+   * Starts at 'NONE', which is a real answer rather than a placeholder — and
+   * deliberately not '0': "no GST applies" and "exempt, at zero percent" are
+   * different statements, and the form never turns one into the other.
+   */
+  gstRate: GstRate;
 };
 
 /**
@@ -87,6 +103,8 @@ const emptyItem = (key: string): ItemDraft => ({
   price: '',
   imageAssetId: null,
   rsProduct: null,
+  hsnCode: '',
+  gstRate: 'NONE',
 });
 
 /**
@@ -199,6 +217,13 @@ export function CreateSalesOrderForm() {
         quantity: item.quantity.trim() === '' ? Number.NaN : Number(item.quantity),
         price: item.price.trim(),
         ...(item.imageAssetId ? { productImageAssetId: item.imageAssetId } : {}),
+        // An untouched HSN box is omitted rather than sent as '': the schema's
+        // optional fields mean "absent", and a blank string would record an
+        // empty code where nobody entered one.
+        ...(item.hsnCode.trim() ? { hsnCode: item.hsnCode.trim() } : {}),
+        // Always sent, and always the stable string. 'NONE' travels as 'NONE'
+        // — never as 0, and never converted to a number.
+        gstRate: item.gstRate,
       })),
       paidAmount: paidAmount.trim() === '' ? '0' : paidAmount.trim(),
       orderDate,
@@ -501,6 +526,70 @@ export function CreateSalesOrderForm() {
                     {err(`items.${index}.productName`) && (
                       <p className="text-xs text-critical">{err(`items.${index}.productName`)}</p>
                     )}
+                  </div>
+
+                  {/*
+                    Tax details, kept on their own row above the figures.
+
+                    Neither takes part in any total: the line total below is
+                    quantity × price, exactly as it was before these existed.
+                    Selecting a rate records what the line should be taxed at;
+                    it does not compute tax anywhere in the CRM.
+                  */}
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="flex flex-col gap-1.5">
+                      <Label htmlFor={`${formId}-hsn-${item.key}`}>HSN Code</Label>
+                      <Input
+                        id={`${formId}-hsn-${item.key}`}
+                        value={item.hsnCode}
+                        onChange={(e) => updateItem(item.key, { hsnCode: e.target.value })}
+                        placeholder="7418"
+                        // Text, never numeric: inputMode="numeric" would invite
+                        // a number pad and a leading zero would not survive the
+                        // round trip. Codes like 7418AB are legitimate.
+                        maxLength={HSN_CODE_MAX_LENGTH}
+                        autoComplete="off"
+                      />
+                      {err(`items.${index}.hsnCode`) ? (
+                        <p className="text-xs text-critical">{err(`items.${index}.hsnCode`)}</p>
+                      ) : (
+                        <p className="text-xs text-muted">Optional.</p>
+                      )}
+                    </div>
+
+                    <div className="flex flex-col gap-1.5">
+                      <Label htmlFor={`${formId}-gst-${item.key}`}>GST</Label>
+                      <Select
+                        value={item.gstRate}
+                        onValueChange={(value) =>
+                          updateItem(item.key, { gstRate: value as GstRate })
+                        }
+                      >
+                        <SelectTrigger
+                          id={`${formId}-gst-${item.key}`}
+                          aria-label={`GST rate for product ${index + 1}`}
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {/*
+                            Driven by the shared constant, so the six options
+                            here are the six the API accepts. Adding a rate is
+                            one edit in @rs/shared, and this list follows.
+                          */}
+                          {GST_RATES.map((rate) => (
+                            <SelectItem key={rate} value={rate}>
+                              {GST_RATE_LABELS[rate]}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {err(`items.${index}.gstRate`) ? (
+                        <p className="text-xs text-critical">{err(`items.${index}.gstRate`)}</p>
+                      ) : (
+                        <p className="text-xs text-muted">Not added to the line total.</p>
+                      )}
+                    </div>
                   </div>
 
                   <div className="grid gap-4 sm:grid-cols-3">

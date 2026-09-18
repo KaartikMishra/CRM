@@ -7,6 +7,7 @@
  * database models, so the two tiers cannot drift.
  */
 
+import type { GstRate } from '../constants/index.js';
 import type {
   SalesChangeStatus,
   SalesChangeType,
@@ -31,8 +32,26 @@ export type SalesOrderItemView = {
   image: MediaRef | null;
   quantity: number;
   price: DecimalString;
-  /** quantity × price, derived by the API. */
+  /** quantity × price, derived by the API. GST is not part of it. */
   lineTotal: DecimalString;
+
+  /**
+   * The HSN code recorded on this line, or null where none was.
+   *
+   * A string, never a number. Null means nobody entered one — including every
+   * line written before the field existed.
+   */
+  hsnCode: string | null;
+
+  /**
+   * The GST rate recorded on this line: one of GST_RATES, or null.
+   *
+   * Three distinct states, and the UI must not merge them: null is "not
+   * recorded", 'NONE' is "no GST applies to this line", and '0' is "exempt, at
+   * zero percent". Stored and displayed only — no total is derived from it.
+   */
+  gstRate: GstRate | null;
+
   status: SalesItemStatus;
   /** Who put this line forward. */
   proposedBy: UserRef;

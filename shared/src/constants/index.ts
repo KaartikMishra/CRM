@@ -151,3 +151,55 @@ export const APP_MODULE_LABELS = {
   VENDOR_INVOICE: 'Vendor Invoices',
   POST_SALES: 'Post Sales & Grievance',
 } as const satisfies Record<string, string>;
+
+/**
+ * The GST rates a sales line may carry.
+ *
+ * Exactly six, and no seventh: the five statutory slabs plus `NONE`.
+ *
+ * `NONE` and `'0'` are different answers and must stay that way. "No GST
+ * decision has been recorded for this line" is not the same statement as "this
+ * line is exempt, taxed at zero percent" — the second is a tax position
+ * somebody took, and a bill has to be able to say which. Nothing in the CRM
+ * coerces one into the other, and neither is ever parsed into a number.
+ *
+ * Kept here rather than in `enums.ts` for the same reason as INDIA_STATES:
+ * that file is reserved for values paired with a Prisma enum, and
+ * `SalesOrderItem.gstRate` is a plain nullable String by design. Rates are set
+ * by policy and change; a Postgres enum would charge an ALTER TYPE migration
+ * for every revision.
+ *
+ * These are display and storage values only. No total, line or otherwise, is
+ * computed from them anywhere in the CRM.
+ */
+export const GST_RATES = ['NONE', '0', '5', '12', '18', '28'] as const;
+
+export type GstRate = (typeof GST_RATES)[number];
+
+/**
+ * What each rate is called in the UI.
+ *
+ * The slab descriptions come from the request and are shown verbatim, so a
+ * salesperson picks by meaning rather than by recalling which slab a product
+ * falls in. The label lives beside the values rather than being retyped in
+ * the form.
+ */
+export const GST_RATE_LABELS = {
+  NONE: 'None',
+  '0': '0% — Exempt items',
+  '5': '5% — Low-tax items',
+  '12': '12% — Some goods/services',
+  '18': '18% — Most goods/services',
+  '28': '28% — High-tax/luxury items',
+} as const satisfies Record<GstRate, string>;
+
+/**
+ * The longest HSN code the CRM will store.
+ *
+ * Generous on purpose. Indian HSN is 4, 6 or 8 digits, but the field accepts
+ * whatever the seller actually writes on the document — codes arrive with
+ * separators and suffixes — and inventing a stricter rule would reject
+ * legitimate entries. Length is the only constraint; there is no format
+ * pattern and no numeric coercion.
+ */
+export const HSN_CODE_MAX_LENGTH = 20;

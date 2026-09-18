@@ -171,6 +171,12 @@ export async function createSalesOrder(
             productImageId: item.productImageAssetId ?? null,
             quantity: item.quantity,
             price: new Prisma.Decimal(item.price),
+            // Recorded as chosen, and nothing is derived from either. An
+            // omitted field stays null rather than acquiring a default: "not
+            // recorded" is a different statement from an explicit 'NONE', and
+            // the line total is still quantity × price alone.
+            hsnCode: item.hsnCode ?? null,
+            gstRate: item.gstRate ?? null,
             status: 'ACTIVE' as const,
             proposedById: actor.id,
           })),

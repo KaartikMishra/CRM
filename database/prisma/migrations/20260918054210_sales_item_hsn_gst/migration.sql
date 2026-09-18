@@ -1,0 +1,35 @@
+-- =============================================================================
+--  Sales order lines: HSN code and GST rate.
+--
+--  Two nullable TEXT columns on SalesOrderItem, and nothing else.
+--
+--  Both are nullable with no default, deliberately. A default would make every
+--  line written before today claim a value somebody never entered, and would
+--  erase the difference between "no GST decision recorded" and an explicit
+--  choice. Existing rows therefore read NULL, which is the truth about them.
+--  No backfill is issued.
+--
+--  `hsnCode` is TEXT, never a numeric type: HSN codes carry leading zeros and
+--  alphanumeric forms, both of which an integer column would silently destroy.
+--
+--  `gstRate` is TEXT rather than a Postgres enum, following Customer.state:
+--  GST rates are set by policy and change, and an enum would charge an
+--  ALTER TYPE migration for every revision. The permitted values are the six
+--  in GST_RATES ('NONE','0','5','12','18','28'), enforced by the shared Zod
+--  schema on both tiers.
+--
+--  Nothing here touches money. The order total is sum(quantity * price),
+--  computed by the sales_order_money_guard trigger, which is not modified and
+--  does not read either column. No tax is calculated anywhere.
+--
+--  Purely additive. No existing column is altered or dropped, no constraint is
+--  changed, no index is added, and SalesOrder, SalesOrderItem's existing
+--  columns, Product, RsProduct, Procurement and Product Enquiry keep every row
+--  and relation they had.
+--
+--  No DROP, TRUNCATE, DELETE, INSERT or UPDATE.
+-- =============================================================================
+
+-- AlterTable
+ALTER TABLE "SalesOrderItem" ADD COLUMN     "gstRate" TEXT,
+ADD COLUMN     "hsnCode" TEXT;

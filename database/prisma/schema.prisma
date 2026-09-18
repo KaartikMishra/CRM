@@ -724,6 +724,40 @@ model SalesOrderItem {
   alreadyFulfilled Int @default(0)
   price          Decimal @db.Decimal(12, 2)
 
+  /**
+   * The HSN code as the seller records it, per line.
+   *
+   * TEXT, never a numeric type: codes carry leading zeros and alphanumeric
+   * forms ("7418AB"), both of which an integer column would silently destroy.
+   *
+   * Nullable with no default, so "never recorded" stays distinguishable from
+   * any recorded value. It lives on the line rather than on a product because
+   * the same product can be billed under a different code on a different
+   * order, and because the order is the document that must stay true to what
+   * was issued.
+   */
+  hsnCode String?
+
+  /**
+   * The GST rate chosen for this line, as one of GST_RATES in @rs/shared:
+   * 'NONE' | '0' | '5' | '12' | '18' | '28'.
+   *
+   * A plain nullable String rather than a Prisma enum, following
+   * Customer.state: GST rates are set by policy and change, and an enum would
+   * charge an ALTER TYPE migration for every revision. The shared z.enum is
+   * what restricts the value, on both tiers.
+   *
+   * 'NONE' and '0' are deliberately different values and are never conflated:
+   * "no GST decision recorded on this line" is not the same statement as "this
+   * line is taxed at zero percent". Both are distinct again from NULL, which
+   * means the line predates this field.
+   *
+   * Stored and displayed only. Nothing here enters a total: the order's money
+   * is sum(quantity * price), enforced by the sales_order_money_guard trigger,
+   * and this field does not appear in it.
+   */
+  gstRate String?
+
   status SalesItemStatus @default(ACTIVE)
 
   /// Who put this line forward. Always set, including for lines created with
