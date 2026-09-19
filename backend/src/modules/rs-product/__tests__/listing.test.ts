@@ -32,7 +32,7 @@ let adminToken: string;
 let employeeToken: string;
 
 /** What the legacy tables held before this suite ran. */
-let legacyBaseline: { product: number; inventoryItem: number; manualProducts: number };
+let legacyBaseline: { manualProducts: number };
 
 beforeAll(async () => {
   await startTestServer();
@@ -42,8 +42,6 @@ beforeAll(async () => {
   employeeToken = await mintToken(employee.id, { role: 'USER' });
 
   legacyBaseline = {
-    product: await prisma.product.count(),
-    inventoryItem: await prisma.inventoryItem.count(),
     manualProducts: await prisma.rsProduct.count({ where: { source: 'MANUAL' } }),
   };
 });
@@ -441,12 +439,4 @@ describe('the Shopify catalogue is unaffected by reading it', () => {
     expect(shopify).toBe(501);
   });
 
-  it('never touches the legacy Product master', async () => {
-    // Compared against what this suite started with rather than against zero:
-    // the database also holds rows created through the app by hand, and the
-    // claim being made is "RS Products changes nothing here", not "this table
-    // is empty".
-    expect(await prisma.product.count()).toBe(legacyBaseline.product);
-    expect(await prisma.inventoryItem.count()).toBe(legacyBaseline.inventoryItem);
-  });
 });

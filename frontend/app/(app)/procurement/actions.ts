@@ -2,18 +2,17 @@
 
 import { revalidatePath } from 'next/cache';
 import type {
-  AdjustInventoryInput,
   CreateAllocationInput,
-  CreateProductInput,
   CreatePurchaseBillInput,
   LinkOrderLineInput,
-  PutInCatalogueInput,
   SalesFulfillmentDetail,
-  LinkPurchaseItemInput,
+  MapPurchaseItemInput,
   RecordFulfillmentInput,
+  RequestProductChangeInput,
+  ReviewProductChangeInput,
+  ReviewPurchaseBillInput,
   SalesRequirementRow,
   OrderRequirementView,
-  ProductView,
   PurchaseBillDetail,
   PurchaseDelayInput,
   ReceiveItemInput,
@@ -109,34 +108,15 @@ export async function updateAllocationAction(
   );
 }
 
-export async function createProductAction(
-  input: CreateProductInput,
-): Promise<ActionResult<{ product: ProductView }>> {
-  return call('/api/procurement/products', { method: 'POST', body: JSON.stringify(input) }, '/procurement');
-}
-
-export async function adjustInventoryAction(
-  productId: string,
-  input: AdjustInventoryInput,
-): Promise<ActionResult<{ product: ProductView }>> {
-  return call(
-    `/api/procurement/products/${productId}/inventory`,
-    { method: 'POST', body: JSON.stringify(input) },
-    '/procurement',
-  );
-}
-
-/**
- * Attaches a free-text or legacy order line to a catalogue product, so
- * purchased stock can be matched to it. Writes only productId.
- */
-/**
- * Catalogues an order line's product and links the line in one call.
+/*
+ * `createProductAction`, `adjustInventoryAction`, `putInCatalogueAction` and
+ * `linkPurchaseItemAction` were all removed with the legacy Product master.
  *
- * The server decides whether that means creating a product or reusing one that
- * already represents it, so two people doing this at once end up on the same
- * catalogue entry rather than racing to create rivals.
+ * Procurement creates no products and maintains no stock count of its own — RS
+ * Products owns both — and there is no second identity left to link a line to.
+ * Their endpoints are gone from the API rather than merely hidden from the UI.
  */
+
 /**
  * One History row's fulfilment detail.
  *
@@ -148,15 +128,6 @@ export async function fulfillmentDetailAction(
 ): Promise<ActionResult<{ detail: SalesFulfillmentDetail }>> {
   return call(`/api/procurement/order-lines/${salesOrderItemId}/fulfillment-detail`, {
     method: 'GET',
-  });
-}
-
-export async function putInCatalogueAction(
-  input: PutInCatalogueInput,
-): Promise<ActionResult<{ order: OrderRequirementView }>> {
-  return call('/api/procurement/order-lines/put-in-catalogue', {
-    method: 'POST',
-    body: JSON.stringify(input),
   });
 }
 
@@ -182,16 +153,78 @@ export async function createVendorAction(input: {
   return call('/api/vendors', { method: 'POST', body: JSON.stringify(input) });
 }
 
-/** Reconciles a free-text purchase line with a catalogue product. */
-export async function linkPurchaseItemAction(
+/**
+ * Maps a purchase line to an RS Product — Procurement's canonical identity.
+ *
+ * The id comes from the shared RsProductPicker, which returns the exact product
+ * the person selected. Nothing here resolves a SKU or a name into a product:
+ * RS SKUs repeat and are often absent, so only an explicit selection is sent.
+ */
+export async function mapPurchaseItemAction(
   billId: string,
   itemId: string,
-  input: LinkPurchaseItemInput,
+  input: MapPurchaseItemInput,
 ): Promise<ActionResult> {
   return call(
-    `/api/procurement/bills/${billId}/items/${itemId}/link`,
+    `/api/procurement/bills/${billId}/items/${itemId}/rs-product`,
     { method: 'POST', body: JSON.stringify(input) },
     `/procurement/${billId}`,
+  );
+}
+
+/**
+ * Signs a recorded bill off, or refuses it.
+ *
+ * Needs PROCUREMENT ASSIGN, and the API refuses self-approval regardless of
+ * what anybody holds. This forwards the call and decides nothing itself.
+ */
+export async function reviewPurchaseBillAction(
+  billId: string,
+  decision: 'approve' | 'reject',
+  input: ReviewPurchaseBillInput,
+): Promise<ActionResult> {
+  return call(
+    `/api/procurement/bills/${billId}/${decision}`,
+    { method: 'POST', body: JSON.stringify(input) },
+    `/procurement/${billId}`,
+  );
+}
+
+/**
+ * Asks to move an already-mapped line to a different RS Product.
+ *
+ * A separate action from `mapPurchaseItemAction` above because it does a
+ * different thing: that one writes a mapping, this one records a request and
+ * writes nothing. The server decides which is permitted from the line's own
+ * state — sending a new product through the mapping action on a mapped line is
+ * refused there, so this is not a convention the UI could quietly break.
+ */
+export async function requestProductChangeAction(
+  billId: string,
+  itemId: string,
+  input: RequestProductChangeInput,
+): Promise<ActionResult> {
+  return call(
+    `/api/procurement/bills/${billId}/items/${itemId}/product-change`,
+    { method: 'POST', body: JSON.stringify(input) },
+    `/procurement/${billId}`,
+  );
+}
+
+/**
+ * Deciding a request. Needs PROCUREMENT ASSIGN, which the API enforces — this
+ * forwards the call verbatim and does not decide anything itself.
+ */
+export async function reviewProductChangeAction(
+  changeId: string,
+  decision: 'approve' | 'reject',
+  input: ReviewProductChangeInput,
+  billId?: string,
+): Promise<ActionResult> {
+  return call(
+    `/api/procurement/product-changes/${changeId}/${decision}`,
+    { method: 'POST', body: JSON.stringify(input) },
+    billId ? `/procurement/${billId}` : '/procurement',
   );
 }
 

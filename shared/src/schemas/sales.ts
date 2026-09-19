@@ -54,7 +54,12 @@ export const salesPriceSchema = amountSchema.refine(
 export const salesOrderItemInputSchema = z.object({
   productName: z.string().trim().min(1, 'Product name is required').max(200),
   /**
-   * Optional link to the Product master.
+   * The RS Product this line is for — the CRM's one product identity.
+   *
+   * An `RsProduct.id`, chosen from the RS Products picker. Never a
+   * ShopifyVariant id and never a SKU: mapping is product level, and an RS SKU
+   * is nullable and legitimately duplicated across products, so it identifies
+   * nothing and is search and display only.
    *
    * Optional on purpose, and it must stay that way: an order line is written
    * from whatever the customer asked for, which is not always something in the
@@ -65,7 +70,7 @@ export const salesOrderItemInputSchema = z.object({
    * exists. Matching by name would let "Bottle" and "bottle " become two
    * different requirements, or worse, silently the same one.
    */
-  productId: cuidSchema.optional(),
+  rsProductId: cuidSchema.optional(),
   productImageAssetId: cuidSchema.optional(),
   quantity: salesQuantitySchema,
   price: salesPriceSchema,
@@ -180,8 +185,8 @@ export const createChangeRequestSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('ADD'),
     productName: z.string().trim().min(1, 'Product name is required').max(200),
-    /** Optional catalogue link, exactly as on a line created with the order. */
-    productId: cuidSchema.optional(),
+    /** The RS Product, exactly as on a line created with the order. */
+    rsProductId: cuidSchema.optional(),
     productImageAssetId: cuidSchema.optional(),
     quantity: salesQuantitySchema,
     price: salesPriceSchema,
@@ -190,7 +195,7 @@ export const createChangeRequestSchema = z.discriminatedUnion('type', [
     type: z.literal('EDIT'),
     itemId: cuidSchema,
     productName: z.string().trim().min(1, 'Product name is required').max(200),
-    productId: cuidSchema.optional(),
+    rsProductId: cuidSchema.optional(),
     productImageAssetId: cuidSchema.nullable().optional(),
     quantity: salesQuantitySchema,
     price: salesPriceSchema,

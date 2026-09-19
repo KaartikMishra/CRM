@@ -64,8 +64,6 @@ export type RsProductView = {
   status: ShopifyProductStatus;
   productType: string | null;
   vendor: string | null;
-  /** The legacy Product Master bridge. Null until the later migration runs. */
-  productId: string | null;
   syncedAt: string | null;
   createdAt: string;
   updatedAt: string;

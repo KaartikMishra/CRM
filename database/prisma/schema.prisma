@@ -85,6 +85,9 @@ model User {
   approvedSalesItems SalesOrderItem[]      @relation("SalesItemApprovedBy")
   requestedSalesChanges SalesItemChangeRequest[] @relation("SalesChangeRequestedBy")
   reviewedSalesChanges  SalesItemChangeRequest[] @relation("SalesChangeReviewedBy")
+  requestedProductChanges PurchaseItemProductChange[] @relation("ProductChangeRequestedBy")
+  reviewedProductChanges  PurchaseItemProductChange[] @relation("ProductChangeReviewedBy")
+  reviewedPurchaseBills   PurchaseBill[]              @relation("PurchaseBillReviewedBy")
   createdPurchaseBills  PurchaseBill[]           @relation("PurchaseBillCreatedBy")
   purchaseAllocations   PurchaseAllocation[]     @relation("AllocationBy")
   notifications         Notification[]
@@ -368,10 +371,16 @@ model EnquiryProduct {
   lineNo    Int
 
   name     String
-  /// Catalogue link, added with Purchase & Procurement. Nullable for the same
-  /// reason as on SalesOrderItem: existing lines are untouched and `name`
-  /// stays the label the customer actually asked for.
-  productId String?
+  /*
+   * There is deliberately no catalogue link here.
+   *
+   * `productId -> Product` was added with Purchase & Procurement and never
+   * written: no schema accepted it, no service set it, and it stood at NULL on
+   * every row. It was removed with the legacy Product master rather than
+   * repointed at RsProduct — an enquiry is a question about goods a customer
+   * described, which is exactly why `name` is free text, and nothing in this
+   * module has ever needed a catalogue identity to answer it.
+   */
   imageId  String?
   quantity Int
 
@@ -400,13 +409,11 @@ model EnquiryProduct {
   updatedAt DateTime @updatedAt
 
   enquiry         ProductEnquiry   @relation(fields: [enquiryId], references: [id], onDelete: Cascade)
-  product         Product?         @relation(fields: [productId], references: [id])
   image           MediaAsset?      @relation(fields: [imageId], references: [id], onDelete: SetNull)
   vendorResponses VendorResponse[]
 
   @@unique([enquiryId, lineNo])
   @@index([enquiryId, status])
-  @@index([productId])
 }
 
 /// §39 — many of these per line. That is the heart of the module.
@@ -598,10 +605,10 @@ model SalesItemChangeRequest {
 
   // Proposed values: required for ADD and EDIT, unused by REMOVE.
   productName    String?
-  /// Optional catalogue link carried through a change request, so an approved
-  /// ADD or EDIT can set SalesOrderItem.productId. Nullable like every other
-  /// field here: a REMOVE request carries none of them.
-  productId      String?
+  /// The RS Product carried through a change request, so an approved ADD or
+  /// EDIT can set SalesOrderItem.rsProductId. Nullable like every other field
+  /// here: a REMOVE request carries none of them.
+  rsProductId    String?
   productImageId String?
   quantity       Int?
   price          Decimal? @db.Decimal(12, 2)
@@ -617,7 +624,7 @@ model SalesItemChangeRequest {
   order        SalesOrder      @relation(fields: [orderId], references: [id], onDelete: Cascade)
   /// Cascade: if the line is ever removed, its request history goes with it.
   item         SalesOrderItem? @relation(fields: [itemId], references: [id], onDelete: Cascade)
-  product      Product?        @relation(fields: [productId], references: [id])
+  rsProduct    RsProduct?      @relation(fields: [rsProductId], references: [id], onDelete: SetNull)
   productImage MediaAsset?     @relation("SalesChangeImage", fields: [productImageId], references: [id], onDelete: SetNull)
   requestedBy  User            @relation("SalesChangeRequestedBy", fields: [requestedById], references: [id])
   reviewedBy   User?           @relation("SalesChangeReviewedBy", fields: [reviewedById], references: [id])
@@ -697,10 +704,21 @@ model SalesOrderItem {
   lineNo  Int
 
   productName    String
-  /// Catalogue link, added with Purchase & Procurement. Nullable on purpose:
-  /// every line written before the Product master existed keeps working, and
-  /// productName remains the authoritative label on the order either way.
-  productId      String?
+  /**
+   * The RS Product this line is for — the CRM's one product identity.
+   *
+   * Replaced `productId`, which pointed at the legacy Product master. That
+   * column is gone: two product identities meant Sales and Procurement could
+   * not reconcile a requirement against purchased stock without a bridge
+   * between them, and the bridge was never populated. Allocation now compares
+   * this against `PurchaseBillItem.rsProductId` and nothing else.
+   *
+   * Product level, never variant. Nullable, because `productName` remains the
+   * authoritative label on the order and a line may legitimately name
+   * something nobody has mapped to the catalogue yet — such a line simply
+   * cannot take purchased stock until it is mapped.
+   */
+  rsProductId    String?
   productImageId String?
   quantity       Int
   /**
@@ -771,7 +789,7 @@ model SalesOrderItem {
   updatedAt DateTime @updatedAt
 
   order        SalesOrder  @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  product      Product?    @relation(fields: [productId], references: [id])
+  rsProduct    RsProduct?  @relation(fields: [rsProductId], references: [id], onDelete: SetNull)
   productImage MediaAsset? @relation("SalesItemImage", fields: [productImageId], references: [id], onDelete: SetNull)
   proposedBy   User        @relation("SalesItemProposedBy", fields: [proposedById], references: [id])
   approvedBy   User?       @relation("SalesItemApprovedBy", fields: [approvedById], references: [id])
@@ -780,7 +798,7 @@ model SalesOrderItem {
 
   @@unique([orderId, lineNo])
   @@index([orderId, status])
-  @@index([productId])
+  @@index([rsProductId])
 }
 
 /// §45 — generic trail for everything without an enquiry parent: logins, user
@@ -807,73 +825,6 @@ model AuditLog {
 //  Product master & inventory
 // ---------------------------------------------------------------------------
 
-/// The product catalogue, introduced with Purchase & Procurement.
-///
-/// Until this module, a product was a free-text string on an order line, so
-/// "Bottle" on one order had no relationship to "Bottle" on another. That is
-/// tolerable while a line is only ever read by a human, and impossible once
-/// stock has to be counted: a shortage is `required - on hand`, and neither
-/// side of that subtraction exists without a product identity.
-///
-/// The link from SalesOrderItem and EnquiryProduct is deliberately *nullable*.
-/// Every row written before this module keeps working untouched, and a line
-/// can still be typed as free text where no catalogue entry fits yet.
-model Product {
-  id   String @id @default(cuid())
-  /// The name as a person typed it. Unique on the raw string, which catches
-  /// only byte-identical spellings — `normalizedName` below is what actually
-  /// enforces one product per logical item.
-  name String @unique
-  /// `name` folded to lowercase with every space removed, so "Kansa Dinner
-  /// Set", "kansa dinner set" and "kansadinnerset" collapse to one key.
-  ///
-  /// Unique, and that is the point: it is the database, not the application,
-  /// that refuses the second insert, so two concurrent requests cannot both
-  /// pass a check-then-insert and create rival products with separate stock.
-  /// Derived on write and never displayed — `name` remains the label, and is
-  /// never rewritten to match.
-  normalizedName String @unique
-  /// Free-text, matching how the rest of the CRM treats descriptive fields.
-  description String?
-  /// Retired products stay for history; they simply stop being offered.
-  isActive Boolean @default(true)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  inventory           InventoryItem?
-  purchaseBillItems   PurchaseBillItem[]
-  salesOrderItems     SalesOrderItem[]
-  enquiryProducts     EnquiryProduct[]
-  salesChangeRequests SalesItemChangeRequest[]
-  /// The RS Products bridge, from the other side. Prisma requires the opposite
-  /// field to exist; it is virtual and generates no column, constraint or index
-  /// on this table — the foreign key lives on RsProduct.productId. Nothing in
-  /// Procurement, Sales or Product Enquiry reads it.
-  rsProducts          RsProduct[]
-
-  @@index([isActive, name])
-}
-
-/// What is physically on hand, one row per product.
-///
-/// Separate from Product because the catalogue entry is descriptive and this is
-/// operational: quantities change constantly and are written under a row lock,
-/// while the name and description are edited rarely. Keeping them apart means
-/// stock updates never contend with catalogue edits.
-model InventoryItem {
-  id        String @id @default(cuid())
-  productId String @unique
-
-  /// Physically in the warehouse. Never negative — a DB CHECK enforces it.
-  onHand Int @default(0)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
-}
-
 // ---------------------------------------------------------------------------
 //  Purchase & Procurement
 // ---------------------------------------------------------------------------
@@ -889,6 +840,24 @@ enum PurchaseBillStatus {
   OPEN
   RECEIVED
   CLOSED
+}
+
+/// Whether a recorded purchase bill has been signed off by an administrator.
+///
+/// A SEPARATE AXIS from PurchaseBillStatus above, deliberately, and not a value
+/// added to it. That enum tracks how much of the goods have arrived — it is
+/// derived from the lines by `receiveItem`, which recomputes it on every
+/// receipt. A PENDING_APPROVAL member there would be overwritten by the next
+/// receipt, and would also be unable to express the ordinary combination "fully
+/// received, still awaiting sign-off". Arrival and authorisation are
+/// independent facts about a bill and are stored independently.
+///
+/// Also distinct from ProductChangeStatus, which decides one proposed edit to
+/// one line. This decides whether the bill itself is trusted.
+enum BillApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
 }
 
 /// One bill from one vendor.
@@ -907,7 +876,30 @@ model PurchaseBill {
   vendorId   String
 
   billType PurchaseBillType
+  /// How much of the goods have arrived. Derived from the lines, never set by
+  /// hand — see `receiveItem`.
   status   PurchaseBillStatus @default(OPEN)
+
+  /// Whether an administrator has signed this bill off.
+  ///
+  /// Every newly recorded bill starts PENDING: recording one is procurement
+  /// work, trusting it is not. Until it is APPROVED the bill exists, keeps all
+  /// its figures and can be received against, but its stock cannot be allocated
+  /// to a customer order — allocation is the point at which a bill starts
+  /// committing goods to people, and that is what sign-off gates.
+  ///
+  /// Bills that predate this rule were backfilled to APPROVED by the migration
+  /// that added the column, so nothing that was already usable stopped being
+  /// usable. A `PENDING` default would otherwise have retro-suspended history.
+  approvalStatus BillApprovalStatus @default(PENDING)
+
+  /// Written together with reviewedAt when the bill is decided, the same
+  /// pairing SalesItemChangeRequest and PurchaseItemProductChange both use.
+  reviewedById String?
+  reviewedAt   DateTime?
+  /// Optional on approval; the only thing telling the recorder what to fix on a
+  /// rejection.
+  reviewNote   String?
 
   billDate DateTime
   /// When the goods were promised. A delay is measured against this.
@@ -930,10 +922,14 @@ model PurchaseBill {
   vendor    Vendor             @relation(fields: [vendorId], references: [id])
   billImage MediaAsset?        @relation("PurchaseBillImage", fields: [billImageId], references: [id], onDelete: SetNull)
   createdBy User               @relation("PurchaseBillCreatedBy", fields: [createdById], references: [id])
+  reviewedBy User?             @relation("PurchaseBillReviewedBy", fields: [reviewedById], references: [id])
   items     PurchaseBillItem[]
+  productChanges PurchaseItemProductChange[]
 
   @@unique([vendorId, billNumber])
   @@index([status, billDate])
+  /// The approval queue: pending bills, oldest first.
+  @@index([approvalStatus, billDate])
   @@index([vendorId])
   @@index([isDelayed, billDate])
 }
@@ -960,18 +956,26 @@ model PurchaseBillItem {
   productName String
 
   /**
-   * The catalogue link, optional at bill entry.
+   * The RS Product this line is for — the CRM's one product identity.
    *
-   * A bill is typed up from a piece of paper, often before anyone has decided
-   * which catalogue entry the goods correspond to — and sometimes the entry
-   * does not exist yet. Forcing the decision at entry time would make
-   * recording a bill impossible until the catalogue was curated.
+   * Replaced `productId`, which pointed at the legacy Product master and is
+   * gone. Allocation compares this against `SalesOrderItem.rsProductId`; with
+   * two identities it could compare neither without a bridge, and the bridge
+   * was never populated.
    *
-   * Allocation still requires it: stock can only be matched to a customer
-   * requirement by product identity, never by spelling. An unlinked line can
-   * therefore be recorded and received, but not allocated, until it is linked.
+   * Product level, never variant: the Procurement-facing RS Products API
+   * exposes stock as a product-level aggregate over the variants, so a variant
+   * key would name something Procurement neither sees nor needs. SKU is not an
+   * alternative either — nullable and legitimately duplicated across variants,
+   * it identifies nothing.
+   *
+   * Optional at bill entry. A bill is typed up from a piece of paper, often
+   * before anyone has decided what a line refers to, and forcing the decision
+   * then would make recording a bill impossible until the catalogue was
+   * curated. An unmapped line can be recorded and received; it cannot be
+   * allocated until somebody maps it.
    */
-  productId String?
+  rsProductId String?
 
   /// What was ordered, and what turned up. received <= ordered (CHECK).
   orderedQty Int
@@ -980,18 +984,118 @@ model PurchaseBillItem {
   /// Per unit, NUMERIC so no floating point touches money.
   rate Decimal @db.Decimal(12, 2)
 
+  /// How much of this line currently stands to the product's CRM stock.
+  ///
+  /// The whole of the stock model's idempotence lives in this one number. It is
+  /// not a quantity anyone enters or reads; it is a record of what this line has
+  /// already contributed, so every mutation can be expressed as a delta against
+  /// a recomputed target rather than as a repeated addition:
+  ///
+  ///   target = approved && mapped ? receivedQty − Σ allocations : 0
+  ///   delta  = target − stockedQty
+  ///
+  /// Receiving more, allocating, releasing an allocation, approving the bill and
+  /// re-sending the same request all reduce to that subtraction, so none of them
+  /// can double-count and a repeated call moves nothing. `receivedQty` alone
+  /// could not do this: adding it on every receipt would credit the cumulative
+  /// total again each time.
+  ///
+  /// Subtracting allocations is the business rule: stock already committed to a
+  /// customer requirement never enters free CRM stock, so a bill receiving 5
+  /// against a requirement of 1 contributes 4.
+  ///
+  /// Lines on bills that predate this column were backfilled to their current
+  /// target, so nothing was retroactively credited or withdrawn.
+  stockedQty Int @default(0)
+
   productImageId String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   bill         PurchaseBill         @relation(fields: [billId], references: [id], onDelete: Cascade)
-  product      Product?             @relation(fields: [productId], references: [id])
+  rsProduct    RsProduct?           @relation(fields: [rsProductId], references: [id], onDelete: SetNull)
   productImage MediaAsset?          @relation("PurchaseItemImage", fields: [productImageId], references: [id], onDelete: SetNull)
   allocations  PurchaseAllocation[]
+  /// Requests to move this line from one RS Product to another. Only an
+  /// approved one ever changes `rsProductId` above.
+  productChanges PurchaseItemProductChange[]
 
   @@unique([billId, lineNo])
-  @@index([productId])
+  @@index([rsProductId])
+}
+
+/// Where a mapped purchase line's RS Product may go, and who decided.
+///
+/// Three states and no way back: a decided request is a historical fact, so it
+/// is never reopened. A second attempt is a second request, which keeps the
+/// audit trail a list of what was actually asked rather than one row rewritten
+/// until it was approved.
+enum ProductChangeStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// A request to re-map an already-mapped purchase line to a different RS Product.
+///
+/// The asymmetry this model exists to express: giving an unmapped line its first
+/// RS Product is ordinary Procurement work and happens immediately, but *moving*
+/// a line that already names a product is not. By then the mapping has been read
+/// by the shortage board, may have been allocated against, and is what allocation
+/// compares identity on — so changing it silently would move stock between
+/// products behind everyone's back. An administrator decides instead.
+///
+/// Like SalesItemChangeRequest, which this deliberately mirrors rather than
+/// reinventing, a request is only ever a record of what somebody asked for. It
+/// creates nothing and edits nothing; it cannot move a mapping however long it
+/// sits pending. Only approval writes `PurchaseBillItem.rsProductId`, inside the
+/// same transaction and row lock every other procurement mutation uses.
+///
+/// Both ends of the move are stored, not just the destination. `fromRsProductId`
+/// is what the line said when the request was filed, and re-reading the line at
+/// approval time would answer a different question — if someone released the
+/// allocations and remapped in between, the request on file is no longer the one
+/// being approved, and the stored value is what makes that visible.
+model PurchaseItemProductChange {
+  id     String @id @default(cuid())
+  /// Denormalised from the item so pending requests can be listed for a bill
+  /// without joining through every line.
+  billId String
+  itemId String
+
+  /// The mapping as it stood when the request was filed. Never null: a line
+  /// with no RS Product is mapped directly and needs no approval at all.
+  fromRsProductId String
+  /// What the requester wants it to become. Checked against RsProduct at both
+  /// request and approval time — never a variant id, never a SKU.
+  toRsProductId   String
+
+  /// Why. Mandatory: an approver deciding whether goods were misidentified
+  /// cannot do it from two product titles alone.
+  reason String
+
+  status ProductChangeStatus @default(PENDING)
+
+  requestedById String
+  requestedAt   DateTime @default(now())
+
+  /// Written together with reviewedAt when the request is decided, the same
+  /// pairing SalesItemChangeRequest uses.
+  reviewedById String?
+  reviewedAt   DateTime?
+  reviewNote   String?
+
+  bill          PurchaseBill     @relation(fields: [billId], references: [id], onDelete: Cascade)
+  item          PurchaseBillItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  fromRsProduct RsProduct        @relation("ProductChangeFrom", fields: [fromRsProductId], references: [id])
+  toRsProduct   RsProduct        @relation("ProductChangeTo", fields: [toRsProductId], references: [id])
+  requestedBy   User             @relation("ProductChangeRequestedBy", fields: [requestedById], references: [id])
+  reviewedBy    User?            @relation("ProductChangeReviewedBy", fields: [reviewedById], references: [id])
+
+  @@index([status, requestedAt])
+  @@index([itemId, status])
+  @@index([billId, status])
 }
 
 /// Purchased stock assigned to one order line.
@@ -1137,13 +1241,16 @@ model RsProduct {
   productType String?
   vendor      String?
 
-  /// The temporary bridge to the legacy Product Master.
-  ///
-  /// Nullable and unused in this phase. It exists so the later controlled
-  /// migration has somewhere to land: a mapping can be populated and verified
-  /// before anything reads from it, rather than being invented at cutover.
-  /// SetNull so retiring a legacy product can never delete a catalogue row.
-  productId String?
+  /*
+   * The bridge to the legacy Product Master is gone.
+   *
+   * It existed so a controlled migration would have somewhere to land, and it
+   * was never populated — nought of five hundred and two rows. The migration
+   * happened without it: Sales, Procurement and allocation were moved onto
+   * RsProduct.id directly, so there is no second identity left to bridge to.
+   * Keeping the column would have been a foreign key to a table this schema no
+   * longer has any active reference to.
+   */
 
   /// Shopify's own updatedAt, kept apart from ours: `updatedAt` says when this
   /// row changed, this says when the upstream product did. Sync compares the
@@ -1157,15 +1264,28 @@ model RsProduct {
 
   variants ShopifyVariant[]
   images   RsProductImage[]
-  product  Product?         @relation(fields: [productId], references: [id], onDelete: SetNull)
   /// Which vendors supply this product, and at what current rate. Virtual —
   /// the foreign key lives on VendorProductMapping.
   vendorMappings VendorProductMapping[]
+  /*
+   * The three places the rest of the CRM names a product. All virtual: each
+   * foreign key lives on the other table, and nothing on this one changes.
+   *
+   * These are what make RsProduct the single product identity — a purchase
+   * line, an order line and a proposed change all point here, so allocation
+   * can compare two of them directly instead of through a translation.
+   */
+  purchaseBillItems   PurchaseBillItem[]
+  salesOrderItems     SalesOrderItem[]
+  salesChangeRequests SalesItemChangeRequest[]
+  /// Purchase-line re-mapping requests naming this product as the current
+  /// mapping, and as the proposed one. Two relations because a single request
+  /// references the product twice and Prisma cannot tell the ends apart.
+  productChangesFrom  PurchaseItemProductChange[] @relation("ProductChangeFrom")
+  productChangesTo    PurchaseItemProductChange[] @relation("ProductChangeTo")
 
   /// The catalogue list: live products of one origin.
   @@index([source, status])
-  /// Bridge lookups, and the later migration's own scan.
-  @@index([productId])
   /// Search by name, which is a filter here rather than a unique constraint.
   @@index([title])
 }

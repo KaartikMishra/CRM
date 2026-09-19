@@ -13,8 +13,9 @@
 import bcrypt from 'bcrypt';
 import { randomUUID } from 'node:crypto';
 import type { CustomerType, Role } from '@rs/shared';
-import { normalizeProductName } from '@rs/shared';
+
 import { prisma } from '../../config/database.js';
+import { reconcileLineStock } from '../../modules/procurement/procurement.service.js';
 
 export const TEST_PREFIX = 'zz-test';
 
@@ -24,7 +25,7 @@ const created = {
   userIds: [] as string[],
   customerIds: [] as string[],
   vendorIds: [] as string[],
-  productIds: [] as string[],
+  rsProductIds: [] as string[],
   purchaseBillIds: [] as string[],
 };
 
@@ -100,12 +101,6 @@ export function trackSalesOrder(id: string): string {
   return id;
 }
 
-/** Registers a product created through the API so cleanup removes it. */
-export function trackProduct(id: string): string {
-  created.productIds.push(id);
-  return id;
-}
-
 /** Registers a purchase bill created through the API so cleanup removes it. */
 export function trackPurchaseBill(id: string): string {
   created.purchaseBillIds.push(id);
@@ -113,57 +108,137 @@ export function trackPurchaseBill(id: string): string {
 }
 
 /**
- * A catalogue product with an opening stock level.
+ * Signs a test bill off, so its stock can be allocated.
  *
- * Named with the shared prefix so an escaped row is obvious, and always given
- * an InventoryItem so nothing downstream has to cope with a product that has
- * no stock record.
+ * Every newly recorded bill starts PENDING and cannot be allocated from until
+ * an administrator approves it. Suites whose subject is allocation arithmetic
+ * need an approved bill to work with, and would otherwise all fail on a rule
+ * they are not testing.
+ *
+ * A direct write rather than a call to the approve endpoint, and deliberately:
+ * the endpoint refuses self-approval, so a suite whose bills and whose admin are
+ * the same person could not use it. That refusal is a rule worth keeping intact
+ * and is asserted properly in purchase-bill-approval.test.ts; here it would only
+ * force every suite to invent a second user.
+ *
+ * `reviewedById` is left null, matching the shape the backfill migration used
+ * for bills that predate the rule — and permitted by bill_decided_has_reviewer
+ * for exactly that reason.
+ *
+ * The stock reconciliation is the service's OWN function, not a restatement of
+ * it. Approval is where a bill's surplus enters CRM stock, so a fixture that
+ * only flipped the status would leave every line claiming to owe stock it had
+ * never contributed — and the next allocation would then deduct against nothing
+ * and drive the product negative. Calling the real reconciler means this helper
+ * cannot drift from the rule it is standing in for.
  */
-export async function makeProduct(onHand = 0): Promise<{ id: string; name: string }> {
-  const name = `${TEST_PREFIX}-product-${short()}`;
-  const product = await prisma.product.create({
-    data: {
-      name,
-      // Folded the same way the API folds it, so a fixture can collide with a
-      // catalogued product exactly as a real one would.
-      normalizedName: normalizeProductName(name),
-      inventory: { create: { onHand } },
-    },
-    select: { id: true, name: true },
-  });
-  created.productIds.push(product.id);
-  return product;
-}
+export async function approvePurchaseBill(billId: string): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    await tx.purchaseBill.update({
+      where: { id: billId },
+      data: { approvalStatus: 'APPROVED' },
+    });
 
-/** Sets stock directly, for arranging a shortage without going through the API. */
-export async function setInventory(productId: string, onHand: number): Promise<void> {
-  await prisma.inventoryItem.upsert({
-    where: { productId },
-    update: { onHand },
-    create: { productId, onHand },
+    const lines = await tx.purchaseBillItem.findMany({
+      where: { billId },
+      select: { id: true },
+    });
+    for (const line of lines) {
+      await reconcileLineStock(tx, line.id);
+    }
   });
 }
 
 /**
- * Links a sales order line to a catalogue product.
+ * An RS Product — the CRM's one product identity — with one CRM-only variant.
+ *
+ * `MANUAL` rather than `SHOPIFY`, so nothing here pretends to have come from a
+ * store and no sync could claim it. One variant because that is what the real
+ * catalogue looks like: every one of its products has at least one, and CRM-only
+ * products get exactly one rather than a special case.
+ *
+ * `crmStockQty` sits on the variant because that is the only place it exists.
+ * Procurement reads the product-level sum of it and never the variant, which is
+ * precisely what a fixture with a known per-variant figure lets a test assert.
+ *
+ * `sku` is a parameter, and deliberately so: two fixtures may share one, because
+ * RS SKUs are not unique and a test needs to be able to build that situation.
+ */
+export async function makeRsProduct(
+  options: {
+    crmStockQty?: number;
+    /**
+     * Shopify's sellable quantity — RS Product Stock.
+     *
+     * Separate from `crmStockQty` above and defaulted separately, so a test can
+     * set the two to different values and prove they travel to the API as two
+     * different numbers. A single knob driving both would make the one bug this
+     * pair exists to catch — one figure being reported under the other's name —
+     * invisible, because both columns would agree.
+     */
+    inventoryQty?: number;
+    sku?: string | null;
+    title?: string;
+  } = {},
+): Promise<{ id: string; title: string; sku: string | null; variantId: string }> {
+  const title = options.title ?? `${TEST_PREFIX}-rs-${short()}`;
+  const product = await prisma.rsProduct.create({
+    data: {
+      source: 'MANUAL',
+      title,
+      status: 'ACTIVE',
+      variants: {
+        create: {
+          sku: options.sku ?? null,
+          price: '100.00',
+          crmStockQty: options.crmStockQty ?? 0,
+          inventoryQty: options.inventoryQty ?? 0,
+          position: 1,
+        },
+      },
+    },
+    select: { id: true, title: true, variants: { select: { id: true, sku: true } } },
+  });
+  created.rsProductIds.push(product.id);
+  return {
+    id: product.id,
+    title: product.title,
+    sku: product.variants[0]!.sku,
+    variantId: product.variants[0]!.id,
+  };
+}
+
+/** Sets a product's CRM stock directly, for arranging a scenario without the API. */
+export async function setCrmStock(rsProductId: string, crmStockQty: number): Promise<void> {
+  await prisma.shopifyVariant.updateMany({ where: { rsProductId }, data: { crmStockQty } });
+}
+
+/**
+ * Maps a sales order line to an RS Product.
  *
  * Raw SQL on purpose: `sales_order_money_guard` is a deferred constraint
  * trigger that re-checks the parent order's payment invariants on any write to
  * a line. Going through Prisma would drag unrelated columns into the statement
  * on orders the fixtures deliberately leave part-paid.
  */
-export async function linkOrderLineToProduct(
+export async function mapOrderLineToRsProduct(
   salesOrderItemId: string,
-  productId: string,
+  rsProductId: string,
 ): Promise<void> {
   await prisma.$executeRaw`
-    UPDATE "SalesOrderItem" SET "productId" = ${productId} WHERE "id" = ${salesOrderItemId}`;
+    UPDATE "SalesOrderItem" SET "rsProductId" = ${rsProductId} WHERE "id" = ${salesOrderItemId}`;
 }
 
-/** A purchase bill payload with one line, as the create endpoint expects it. */
+/**
+ * A purchase bill payload with one line, as the create endpoint expects it.
+ *
+ * `rsProductId` is optional: a bill is recorded from a piece of paper and a
+ * line may legitimately name nothing yet. Pass an empty string for a line that
+ * should be left unmapped.
+ */
 export function purchaseBillPayload(
   vendorId: string,
-  productId: string,
+  rsProductId: string,
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
@@ -171,7 +246,15 @@ export function purchaseBillPayload(
     vendorId,
     billType: 'CREDIT',
     billDate: new Date().toISOString(),
-    items: [{ productName: `${TEST_PREFIX}-bill-line`, productId, orderedQty: 10, receivedQty: 10, rate: '100.00' }],
+    items: [
+      {
+        productName: `${TEST_PREFIX}-bill-line`,
+        ...(rsProductId ? { rsProductId } : {}),
+        orderedQty: 10,
+        receivedQty: 10,
+        rate: '100.00',
+      },
+    ],
     ...overrides,
   };
 }
@@ -382,9 +465,6 @@ async function sweepTestOwnedRows(failures: unknown[]): Promise<void> {
   await step(failures, () =>
     prisma.purchaseBill.deleteMany({ where: { OR: [{ vendor: owned }, { createdBy: owned }] } }),
   );
-  await step(failures, () => prisma.purchaseBillItem.deleteMany({ where: { product: owned } }));
-  await step(failures, () => prisma.inventoryItem.deleteMany({ where: { product: owned } }));
-  await step(failures, () => prisma.product.deleteMany({ where: owned }));
   await step(failures, () => prisma.auditLog.deleteMany({ where: { actor: owned } }));
   await step(failures, () => prisma.userModulePermission.deleteMany({ where: { user: owned } }));
   // MediaAsset -> uploadedBy is Restrict, so an asset a test user uploaded would
@@ -445,17 +525,15 @@ export async function cleanup(): Promise<void> {
       prisma.purchaseBill.deleteMany({ where: { createdById: { in: created.userIds } } }),
     );
   }
-  if (created.productIds.length) {
-    // Allocations cascade from their bill item; anything still pointing at
-    // these products is removed with the bills above.
+  // Before the legacy products: an RsProduct may hold the bridge to one, and
+  // Product -> RsProduct.productId is SetNull rather than Cascade, so the
+  // legacy row cannot go while the reference is still there.
+  if (created.rsProductIds.length) {
+    // Bill items reference these with SetNull, so any that survived the bills
+    // above simply lose the mapping rather than blocking the delete. Variants
+    // and images cascade from the product.
     await step(failures, () =>
-      prisma.purchaseBillItem.deleteMany({ where: { productId: { in: created.productIds } } }),
-    );
-    await step(failures, () =>
-      prisma.inventoryItem.deleteMany({ where: { productId: { in: created.productIds } } }),
-    );
-    await step(failures, () =>
-      prisma.product.deleteMany({ where: { id: { in: created.productIds } } }),
+      prisma.rsProduct.deleteMany({ where: { id: { in: created.rsProductIds } } }),
     );
   }
   if (created.customerIds.length) {
@@ -487,7 +565,7 @@ export async function cleanup(): Promise<void> {
   created.userIds.length = 0;
   created.customerIds.length = 0;
   created.vendorIds.length = 0;
-  created.productIds.length = 0;
+  created.rsProductIds.length = 0;
   created.purchaseBillIds.length = 0;
 
   // Teardown attempted everything; now report. Surfacing the first failure keeps
@@ -500,7 +578,7 @@ export async function cleanup(): Promise<void> {
 
 /** Guards against fixtures escaping — asserted at the end of each suite. */
 export async function residualTestRows(): Promise<number> {
-  const [users, customers, vendors, salesOrders, products] = await Promise.all([
+  const [users, customers, vendors, salesOrders, rsProducts] = await Promise.all([
     prisma.user.count({ where: { name: { startsWith: TEST_PREFIX } } }),
     prisma.customer.count({ where: { name: { startsWith: TEST_PREFIX } } }),
     prisma.vendor.count({ where: { name: { startsWith: TEST_PREFIX } } }),
@@ -509,7 +587,9 @@ export async function residualTestRows(): Promise<number> {
     prisma.salesOrder.count({
       where: { items: { some: { productName: { startsWith: TEST_PREFIX } } } },
     }),
-    prisma.product.count({ where: { name: { startsWith: TEST_PREFIX } } }),
+    // The real catalogue holds hundreds of rows, so only the prefixed ones
+    // count — an escaped fixture must not be hidden among them.
+    prisma.rsProduct.count({ where: { title: { startsWith: TEST_PREFIX } } }),
   ]);
-  return users + customers + vendors + salesOrders + products;
+  return users + customers + vendors + salesOrders + rsProducts;
 }

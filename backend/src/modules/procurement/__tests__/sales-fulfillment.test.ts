@@ -17,12 +17,13 @@ import { api, mintToken, startTestServer, stopTestServer } from '../../../__test
 import {
   cleanup,
   makeCustomer,
-  makeProduct,
+  makeRsProduct,
   makeUser,
   makeVendor,
   purchaseBillPayload,
   residualTestRows,
   salesOrderPayload,
+  approvePurchaseBill,
   trackPurchaseBill,
   trackSalesOrder,
   type TestUser,
@@ -70,7 +71,7 @@ async function makeOrder(productId: string, quantity: number) {
   const res = await api('POST', '/api/sales', {
     token: adminToken,
     body: salesOrderPayload(customer.id, {
-      items: [{ productName: 'zz-test line', productId, quantity, price: '100.00' }],
+      items: [{ productName: 'zz-test line', rsProductId: productId, quantity, price: '100.00' }],
     }),
   });
   expect(res.status, JSON.stringify(res.body)).toBe(201);
@@ -90,11 +91,16 @@ async function salesRow(salesOrderItemId: string): Promise<SalesRow> {
 
 /** The free-text row for a product nobody has catalogued. */
 async function unlinkedShortage(productName: string): Promise<{
-  totalRequired: number; onHand: number; linked: boolean; standingQty: number;
+  totalRequired: number;
+  rsStockQty: number | null;
+  rsProduct: { id: string } | null;
+  linked: boolean;
+  standingQty: number;
 } | undefined> {
   const res = await api('GET', '/api/procurement/shortages', { token: adminToken });
   const rows = (res.body.data as { shortages: {
-    productName: string; linked: boolean; totalRequired: number; onHand: number; standingQty: number;
+    productName: string; linked: boolean; totalRequired: number;
+    rsStockQty: number | null; rsProduct: { id: string } | null; standingQty: number;
   }[] }).shortages;
   return rows.find((r) => !r.linked && r.productName === productName);
 }
@@ -115,23 +121,25 @@ async function makeFreeTextOrder(productName: string, quantity: number) {
 
 async function shortageFor(productId: string): Promise<number> {
   const res = await api('GET', '/api/procurement/shortages', { token: adminToken });
-  // `product` is null on free-text rows, so it must be narrowed before its id
-  // is read — the board now carries both kinds.
+  // `rsProduct` is null on free-text rows, so it must be narrowed before its
+  // id is read — the board carries both kinds.
   const rows = (res.body.data as { shortages: {
-    product: { id: string } | null; shortageQty: number; totalRequired: number;
+    rsProduct: { id: string } | null; shortageQty: number; totalRequired: number;
   }[] }).shortages;
-  return rows.find((r) => r.product?.id === productId)?.totalRequired ?? 0;
+  return rows.find((r) => r.rsProduct?.id === productId)?.totalRequired ?? 0;
 }
 
 async function makeBill(productId: string, received: number) {
   const res = await api('POST', '/api/procurement/bills', {
     token: adminToken,
     body: purchaseBillPayload(vendor.id, productId, {
-      items: [{ productName: 'zz-test purchase', productId, orderedQty: received, receivedQty: received, rate: '10.00' }],
+      items: [{ productName: 'zz-test purchase', rsProductId: productId, orderedQty: received, receivedQty: received, rate: '10.00' }],
     }),
   });
   const bill = (res.body.data as { bill: { id: string; items: { id: string }[] } }).bill;
   trackPurchaseBill(bill.id);
+  // Allocation needs an approved bill; the approval rule has its own suite.
+  await approvePurchaseBill(bill.id);
   return { billId: bill.id, itemId: bill.items[0]!.id };
 }
 
@@ -139,7 +147,7 @@ async function makeBill(productId: string, received: number) {
 
 describe('the SALES board', () => {
   it('shows a new order line with nothing fulfilled', async () => {
-    const product = await makeProduct(0);
+    const product = await makeRsProduct();
     const { lineId, orderNumber } = await makeOrder(product.id, 10);
 
     const row = await salesRow(lineId);
@@ -154,7 +162,7 @@ describe('the SALES board', () => {
   });
 
   it('reduces outstanding demand when fulfilment is recorded by hand', async () => {
-    const product = await makeProduct(0);
+    const product = await makeRsProduct();
     const { lineId } = await makeOrder(product.id, 10);
 
     const res = await api('PATCH', `/api/procurement/order-lines/${lineId}/fulfillment`, {
@@ -171,7 +179,7 @@ describe('the SALES board', () => {
   });
 
   it('feeds only the outstanding six into Requirement vs Stock, not the gross ten', async () => {
-    const product = await makeProduct(0);
+    const product = await makeRsProduct();
     const { lineId } = await makeOrder(product.id, 10);
     await api('PATCH', `/api/procurement/order-lines/${lineId}/fulfillment`, {
       token: adminToken, body: { alreadyFulfilled: 4 },
@@ -183,7 +191,7 @@ describe('the SALES board', () => {
   it('does not let one shelf of stock fulfil several customers at once', async () => {
     // The failure mode the per-line column exists to prevent: ten units on hand
     // must not read as satisfying three separate ten-unit orders.
-    const product = await makeProduct(10);
+    const product = await makeRsProduct({ crmStockQty: 10 });
     const a = await makeOrder(product.id, 10);
     const b = await makeOrder(product.id, 10);
 
@@ -199,7 +207,7 @@ describe('the SALES board', () => {
 
 describe('procurement allocation feeds the same total', () => {
   it('combines hand-recorded and procurement fulfilment', async () => {
-    const product = await makeProduct(0);
+    const product = await makeRsProduct();
     const { lineId } = await makeOrder(product.id, 10);
     await api('PATCH', `/api/procurement/order-lines/${lineId}/fulfillment`, {
       token: adminToken, body: { alreadyFulfilled: 4 },
@@ -218,7 +226,21 @@ describe('procurement allocation feeds the same total', () => {
     expect(row.totalFulfilled).toBe(7);
     expect(row.unfulfilledQty).toBe(3);
     expect(row.status).toBe('PARTIAL');
-    expect(await shortageFor(product.id)).toBe(3);
+
+    /*
+      Three units are still outstanding — asserted directly above, from the
+      SALES board — but the product no longer appears on Requirement vs Stock.
+
+      That is the board working as intended rather than a lost requirement. Six
+      units were purchased and approved, three of them committed here, so three
+      sit in free CRM stock: exactly the outstanding demand. Requirement vs
+      Stock lists what still has to be BOUGHT, and nothing more needs buying —
+      what is left is an allocation, not a purchase.
+
+      Before purchased goods reached CRM stock this row stayed visible with a
+      shortage of 3, which is why the assertion changed.
+    */
+    expect(await shortageFor(product.id)).toBe(0);
 
     // The remaining three complete it.
     const second = await api('POST', `/api/procurement/bills/${billId}/items/${itemId}/allocations`, {
@@ -236,7 +258,7 @@ describe('procurement allocation feeds the same total', () => {
   });
 
   it('maps against the exact order line, leaving its sibling alone', async () => {
-    const product = await makeProduct(0);
+    const product = await makeRsProduct();
     const first = await makeOrder(product.id, 5);
     const second = await makeOrder(product.id, 5);
     const { billId, itemId } = await makeBill(product.id, 5);
@@ -250,7 +272,7 @@ describe('procurement allocation feeds the same total', () => {
   });
 
   it('refuses hand-recorded fulfilment that would exceed the requirement', async () => {
-    const product = await makeProduct(0);
+    const product = await makeRsProduct();
     const { lineId } = await makeOrder(product.id, 10);
     const { billId, itemId } = await makeBill(product.id, 6);
     await api('POST', `/api/procurement/bills/${billId}/items/${itemId}/allocations`, {
@@ -272,7 +294,7 @@ describe('procurement allocation feeds the same total', () => {
   });
 
   it('still refuses to allocate beyond what the line needs', async () => {
-    const product = await makeProduct(0);
+    const product = await makeRsProduct();
     const { lineId } = await makeOrder(product.id, 10);
     await api('PATCH', `/api/procurement/order-lines/${lineId}/fulfillment`, {
       token: adminToken, body: { alreadyFulfilled: 8 },
@@ -287,7 +309,7 @@ describe('procurement allocation feeds the same total', () => {
   });
 
   it('keeps the product-mismatch guard', async () => {
-    const [a, b] = [await makeProduct(0), await makeProduct(0)];
+    const [a, b] = [await makeRsProduct(), await makeRsProduct()];
     const { lineId } = await makeOrder(a.id, 5);
     const { billId, itemId } = await makeBill(b.id, 5);
 
@@ -305,7 +327,7 @@ describe('authorization and existing data', () => {
   });
 
   it('refuses a USER without the PROCUREMENT module', async () => {
-    const product = await makeProduct(0);
+    const product = await makeRsProduct();
     const { lineId } = await makeOrder(product.id, 5);
 
     expect((await api('GET', '/api/procurement/sales-requirements', { token: outsiderToken })).status).toBe(403);
@@ -327,7 +349,7 @@ describe('authorization and existing data', () => {
       select: {
         status: true,
         paidAmount: true,
-        items: { select: { quantity: true, price: true, productId: true, alreadyFulfilled: true } },
+        items: { select: { quantity: true, price: true, rsProductId: true, alreadyFulfilled: true } },
       },
     });
 
@@ -338,7 +360,7 @@ describe('authorization and existing data', () => {
       const line = order.items[0]!;
       expect(line.quantity).toBe(4);
       expect(line.price.toFixed(2)).toBe('1300.00');
-      expect(line.productId).toBeNull();
+      expect(line.rsProductId).toBeNull();
       // Simply the column default — never written to.
       expect(line.alreadyFulfilled).toBe(0);
     }
@@ -362,7 +384,7 @@ describe('Requirement vs Stock receives only unfulfilled quantities', () => {
    * here against the same fixtures.
    */
   it('aggregates across orders, counting outstanding only and keeping every line in SALES', async () => {
-    const product = await makeProduct(0);
+    const product = await makeRsProduct();
 
     // Three orders for one product, in the three fulfilment states.
     const unfulfilled = await makeOrder(product.id, 10);          // owes 10
@@ -396,7 +418,7 @@ describe('Requirement vs Stock receives only unfulfilled quantities', () => {
   });
 
   it('drops a product from the queue once every line is met', async () => {
-    const product = await makeProduct(0);
+    const product = await makeRsProduct();
     const { lineId } = await makeOrder(product.id, 5);
     expect(await shortageFor(product.id)).toBe(5);
 
@@ -412,7 +434,7 @@ describe('Requirement vs Stock receives only unfulfilled quantities', () => {
   it('re-enters the queue if the requirement grows beyond what was supplied', async () => {
     // Lowering recorded fulfilment must put the shortfall back on the queue —
     // the queue is derived every time, never a stored flag that could stick.
-    const product = await makeProduct(0);
+    const product = await makeRsProduct();
     const { lineId } = await makeOrder(product.id, 8);
     await api('PATCH', `/api/procurement/order-lines/${lineId}/fulfillment`, {
       token: adminToken, body: { alreadyFulfilled: 8 },
@@ -455,8 +477,17 @@ describe('Requirement vs Stock includes demand that is not in the catalogue', ()
     expect(row, 'unlinked demand must reach the board').toBeDefined();
     expect(row!.totalRequired).toBe(4);
     expect(row!.linked).toBe(false);
-    // No InventoryItem exists, so there is nothing to report but zero.
-    expect(row!.onHand).toBe(0);
+    /*
+      Null, not zero, and the distinction is the point.
+
+      Nobody has said what these goods are, so there is no product to read a
+      stock figure from. A zero would state that there are none in stock, which
+      is a different claim and one the data does not support. The column used to
+      report InventoryItem.onHand, which Procurement no longer treats as its
+      stock source at all.
+    */
+    expect(row!.rsStockQty).toBeNull();
+    expect(row!.rsProduct).toBeNull();
 
     // And it stays on the SALES board with its own figures.
     const sales = await salesRow(lineId);
@@ -513,7 +544,7 @@ describe('Requirement vs Stock includes demand that is not in the catalogue', ()
   });
 
   it('D — catalogue-linked behaviour is unchanged', async () => {
-    const product = await makeProduct(0);
+    const product = await makeRsProduct();
     const { lineId } = await makeOrder(product.id, 10);
     expect(await shortageFor(product.id)).toBe(10);
 
@@ -522,12 +553,26 @@ describe('Requirement vs Stock includes demand that is not in the catalogue', ()
     });
     expect(await shortageFor(product.id)).toBe(6);
 
-    // The linked row still carries its inventory figure.
+    // The linked row still carries its stock figures — both of them, under
+    // `rsProduct`. The legacy `product` key went with the legacy catalogue.
     const res = await api('GET', '/api/procurement/shortages', { token: adminToken });
-    const rows = (res.body.data as { shortages: { product: { id: string } | null; linked: boolean }[] })
-      .shortages;
-    const row = rows.find((r) => r.linked && r.product?.id === product.id);
+    const rows = (
+      res.body.data as {
+        shortages: {
+          rsProduct: { id: string } | null;
+          linked: boolean;
+          crmStockQty: number | null;
+          rsStockQty: number | null;
+        }[];
+      }
+    ).shortages;
+    const row = rows.find((r) => r.linked && r.rsProduct?.id === product.id);
     expect(row).toBeDefined();
+    // CRM stock is zero here, which is below the outstanding requirement — the
+    // condition for the row appearing at all — and RS stock is reported beside
+    // it as its own figure rather than a copy of it.
+    expect(row!.crmStockQty).toBe(0);
+    expect(row!.rsStockQty).toBe(0);
   });
 
   it('E — the board reflects fulfilment changes on the next read', async () => {
@@ -546,14 +591,5 @@ describe('Requirement vs Stock includes demand that is not in the catalogue', ()
       token: adminToken, body: { alreadyFulfilled: 2 },
     });
     expect((await unlinkedShortage(productName))!.totalRequired).toBe(7);
-  });
-
-  it('creates no Product records as a side effect', async () => {
-    const productName = name();
-    await makeFreeTextOrder(productName, 5);
-    await api('GET', '/api/procurement/shortages', { token: adminToken });
-
-    const created = await prisma.product.count({ where: { name: productName } });
-    expect(created, 'the board must never mint catalogue entries').toBe(0);
   });
 });

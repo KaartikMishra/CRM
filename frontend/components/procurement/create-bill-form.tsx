@@ -27,6 +27,7 @@ import {
 import { Separator } from '@/components/ui/separator';
 import { ErrorMessage } from '@/components/common/error-message';
 import { ImageUploadField } from '@/components/product-enquiry/image-upload-field';
+import { RsProductPicker, type PickedProduct } from '@/components/products/rs-product-picker';
 import { formatCurrency } from '@/lib/format';
 import { createPurchaseBillAction, createVendorAction } from '@/app/(app)/procurement/actions';
 
@@ -41,8 +42,25 @@ import { createPurchaseBillAction, createVendorAction } from '@/app/(app)/procur
 
 type ItemDraft = {
   key: string;
-  /** As written on the vendor's bill. Free text — this is a record of a document. */
-  productName: string;
+  /**
+   * The RS Product this line is for. The line's product selection, full stop.
+   *
+   * There used to be a free-text "Product name — as written on the bill" field
+   * beside this, and it is gone. A typed name is not an identity: it matched
+   * nothing, it let two spellings of one product sit on the shortage board as
+   * two rows, and it invited recording a line whose goods the CRM could never
+   * reconcile. What is stored as the line's description is now the title of the
+   * product somebody deliberately picked here.
+   *
+   * Nothing is ever derived the other way. A SKU does not resolve to a product
+   * — RS SKUs are nullable and legitimately repeat — and no wording is matched
+   * against the catalogue, because a purchase attached to the wrong product
+   * cannot be untangled once its stock is allocated.
+   *
+   * If the right product is not in the catalogue, it is created in RS Products
+   * first and mapped afterwards. This form never creates one.
+   */
+  rsProduct: PickedProduct | null;
   orderedQty: string;
   receivedQty: string;
   rate: string;
@@ -55,7 +73,7 @@ type ItemDraft = {
  */
 const emptyItem = (key: string): ItemDraft => ({
   key,
-  productName: '',
+  rsProduct: null,
   orderedQty: '',
   receivedQty: '',
   rate: '',
@@ -128,8 +146,8 @@ export function CreateBillForm({
     const missing: Record<string, string> = {};
     if (!vendorId) missing.vendorId = 'Choose a vendor';
     items.forEach((item, index) => {
-      if (!item.productName.trim()) {
-        missing[`items.${index}.productName`] = 'Enter the product name from the bill';
+      if (!item.rsProduct) {
+        missing[`items.${index}.rsProductId`] = 'Choose the RS Product this line is for';
       }
     });
     if (Object.keys(missing).length > 0) {
@@ -147,7 +165,13 @@ export function CreateBillForm({
       ...(billImageAssetId ? { billImageAssetId } : {}),
       ...(notes.trim() ? { notes } : {}),
       items: items.map((i) => ({
-        productName: i.productName.trim(),
+        /*
+          Only the id. `productName` is deliberately not sent: the server takes
+          the chosen product's title, so the line's description is the catalogue
+          entry a person actually selected rather than something typed beside
+          it that could say anything at all.
+        */
+        ...(i.rsProduct ? { rsProductId: i.rsProduct.id } : {}),
         orderedQty: Number(i.orderedQty),
         // Recording a bill is recording what arrived, so received defaults to
         // the quantity billed rather than to zero.
@@ -276,12 +300,24 @@ export function CreateBillForm({
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           {/*
-            A grid rather than a <table>: the same column alignment on desktop,
-            but each row can stack on a narrow screen instead of forcing the
-            page to scroll sideways. Header hidden below sm for that reason.
+            A grid rather than a <table>: the same column alignment on a wide
+            screen, but each row can stack on a narrow one instead of forcing
+            the page to scroll sideways.
+
+            The numeric columns are fixed widths and the product column is
+            `minmax(240px, 1fr)`. That combination is what stops the row
+            overflowing: a grid item defaults to `min-width: auto`, so an `fr`
+            column refuses to shrink below its content — and a formatted total
+            like ₹1,50,006.00 is wider than the share an `fr` track was giving
+            it, which pushed the whole row past the card. Fixed tracks cannot be
+            squeezed at all, and the product column absorbs the remainder and is
+            free to shrink because its cell carries `min-w-0`.
+
+            `lg` rather than `sm`, because the five fixed tracks plus their gaps
+            need roughly 800px before the product name has usable room left.
           */}
-          <div className="hidden gap-3 px-1 text-[11px] font-semibold uppercase tracking-wider text-muted sm:grid sm:grid-cols-[2fr_0.7fr_0.9fr_1fr_0.8fr_auto]">
-            <span>Product name</span>
+          <div className="hidden gap-3 px-1 text-[11px] font-semibold uppercase tracking-wider text-muted lg:grid lg:grid-cols-[minmax(240px,1fr)_96px_120px_150px_120px_auto]">
+            <span>RS Product</span>
             <span className="text-right">Qty</span>
             <span className="text-right">Rate</span>
             <span className="text-right">Total bill</span>
@@ -305,57 +341,117 @@ export function CreateBillForm({
             return (
               <div key={item.key} className="flex flex-col gap-2">
                 {index > 0 && <Separator className="sm:hidden" />}
-                <div className="grid items-start gap-3 sm:grid-cols-[2fr_0.7fr_0.9fr_1fr_0.8fr_auto]">
-                  <div className="flex flex-col gap-1.5">
-                    <Label className="sm:hidden">Product name</Label>
-                    <Input
-                      value={item.productName}
-                      onChange={(e) => patch(item.key, { productName: e.target.value })}
-                      placeholder="As written on the bill"
+                <div className="grid items-start gap-3 lg:grid-cols-[minmax(240px,1fr)_96px_120px_150px_120px_auto]">
+                  {/*
+                    The product selection, in the column the free-text name used
+                    to occupy. It is the first field on the row because it is the
+                    line's identity — everything to the right of it is a quantity
+                    about goods this has already named.
+
+                    `min-w-0` is load-bearing. Without it this cell's automatic
+                    minimum is its content's width, so a long catalogue title
+                    would widen the track and push the row off the card instead
+                    of letting the picker's own `truncate` take effect.
+                  */}
+                  <div className="flex min-w-0 flex-col gap-1.5">
+                    <Label htmlFor={`${formId}-rs-${item.key}`} className="lg:hidden">
+                      RS Product
+                    </Label>
+                    <RsProductPicker
+                      id={`${formId}-rs-${item.key}`}
+                      value={item.rsProduct}
+                      onChange={(product) => patch(item.key, { rsProduct: product })}
+                      disabled={pending}
+                      placeholder="Select RS Product"
                     />
+                    {/*
+                      The chosen product's SKU, directly beneath the product it
+                      belongs to rather than under the whole row. Confirmation
+                      rather than input: it is how a person checks that the row
+                      they clicked is the product on the paper in front of them,
+                      and it identifies nothing.
+
+                      `break-all` because a SKU is an unbroken token with no
+                      space to wrap at, and a long one would otherwise widen this
+                      cell past the track it sits in.
+                    */}
+                    {item.rsProduct && (
+                      <p className="break-all font-mono text-[11px] text-muted">
+                        SKU: {item.rsProduct.sku ?? 'Not available'}
+                      </p>
+                    )}
                   </div>
 
-                  <div className="flex flex-col gap-1.5">
-                    <Label className="sm:hidden">Qty</Label>
-                    <Input
-                      inputMode="numeric"
-                      className="text-right"
-                      value={item.orderedQty}
-                      onChange={(e) => patch(item.key, { orderedQty: e.target.value })}
-                      placeholder="0"
-                    />
+                  {/*
+                    The four figures.
+
+                    Wrapped in their own two-column grid below `lg` so they sit
+                    2×2 instead of each taking a full-width line, and dissolved
+                    with `lg:contents` at `lg` so they become direct children of
+                    the row grid and line up under the headers above. One
+                    arrangement, no duplicated markup.
+                  */}
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:contents">
+                    <div className="flex min-w-0 flex-col gap-1.5">
+                      <Label className="lg:hidden">Qty</Label>
+                      <Input
+                        inputMode="numeric"
+                        className="text-right"
+                        value={item.orderedQty}
+                        onChange={(e) => patch(item.key, { orderedQty: e.target.value })}
+                        placeholder="0"
+                      />
+                    </div>
+
+                    {/*
+                      Rate is typed, always. It is deliberately not filled in
+                      from the selected product: RS Products carries a selling
+                      price, and what belongs on a purchase bill is what this
+                      vendor actually charged — negotiated, discounted or marked
+                      up. Choosing a product says what the goods are and nothing
+                      about what they cost.
+                    */}
+                    <div className="flex min-w-0 flex-col gap-1.5">
+                      <Label className="lg:hidden">Rate</Label>
+                      <Input
+                        inputMode="decimal"
+                        className="text-right"
+                        value={item.rate}
+                        onChange={(e) => patch(item.key, { rate: e.target.value })}
+                        placeholder="0.00"
+                      />
+                    </div>
+
+                    <div className="flex min-w-0 flex-col gap-1.5">
+                      <Label className="lg:hidden">Total bill</Label>
+                      {/*
+                        Quantity × Rate, read-only. An <output>, not a disabled
+                        input: there is no value to submit here, and the server
+                        recomputes the line total from the ledger regardless.
+                      */}
+                      <output className="flex h-10 items-center justify-end truncate rounded-md border border-line bg-surface-2 px-3 text-sm text-ink tabular">
+                        {total ? formatCurrency(total) : '—'}
+                      </output>
+                    </div>
+
+                    <div className="flex min-w-0 flex-col gap-1.5">
+                      <Label className="lg:hidden">Standing out</Label>
+                      <output className="flex h-10 items-center justify-end truncate rounded-md border border-line bg-surface-2 px-3 text-sm tabular">
+                        {standing === null ? (
+                          <span className="text-muted">—</span>
+                        ) : (
+                          <span className="font-medium text-positive">{standing}</span>
+                        )}
+                      </output>
+                    </div>
                   </div>
 
-                  <div className="flex flex-col gap-1.5">
-                    <Label className="sm:hidden">Rate</Label>
-                    <Input
-                      inputMode="decimal"
-                      className="text-right"
-                      value={item.rate}
-                      onChange={(e) => patch(item.key, { rate: e.target.value })}
-                      placeholder="0.00"
-                    />
-                  </div>
-
-                  <div className="flex flex-col gap-1.5">
-                    <Label className="sm:hidden">Total bill</Label>
-                    <output className="flex h-10 items-center justify-end rounded-md border border-line bg-surface-2 px-3 text-sm text-ink tabular">
-                      {total ? formatCurrency(total) : '—'}
-                    </output>
-                  </div>
-
-                  <div className="flex flex-col gap-1.5">
-                    <Label className="sm:hidden">Standing out</Label>
-                    <output className="flex h-10 items-center justify-end rounded-md border border-line bg-surface-2 px-3 text-sm tabular">
-                      {standing === null ? (
-                        <span className="text-muted">—</span>
-                      ) : (
-                        <span className="font-medium text-positive">{standing}</span>
-                      )}
-                    </output>
-                  </div>
-
-                  <div className="flex items-start">
+                  {/*
+                    Kept reachable at every width: it sits in the row's last
+                    track on a wide screen and on its own line, right-aligned,
+                    once the row stacks.
+                  */}
+                  <div className="flex items-start justify-end lg:justify-start">
                     <Button
                       type="button"
                       variant="ghost"
@@ -370,8 +466,8 @@ export function CreateBillForm({
                   </div>
                 </div>
 
-                {fieldErrors[`items.${index}.productName`] && (
-                  <p className="text-xs text-critical">{fieldErrors[`items.${index}.productName`]}</p>
+                {fieldErrors[`items.${index}.rsProductId`] && (
+                  <p className="text-xs text-critical">{fieldErrors[`items.${index}.rsProductId`]}</p>
                 )}
                 {fieldErrors[`items.${index}.orderedQty`] && (
                   <p className="text-xs text-critical">{fieldErrors[`items.${index}.orderedQty`]}</p>
@@ -384,6 +480,12 @@ export function CreateBillForm({
           })}
 
           {fieldErrors.items && <p className="text-xs text-critical">{fieldErrors.items}</p>}
+
+          <p className="text-xs text-muted">
+            Every line names a product from the RS Products catalogue. If the product on the bill is
+            not there yet, add it in RS Products first and then record this bill — recording a bill
+            never creates a product, and no line is mapped to an approximate match.
+          </p>
         </CardContent>
       </Card>
 

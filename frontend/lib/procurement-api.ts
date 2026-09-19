@@ -1,7 +1,7 @@
 import { cache } from 'react';
 import type {
   OrderRequirementView,
-  ProductView,
+  ProductChangeView,
   PurchaseBillDetail,
   PurchaseBillSummary,
   SalesRequirementRow,
@@ -40,13 +40,6 @@ export const fetchPurchaseBill = cache(
     apiFetch<{ bill: PurchaseBillDetail }>(`/api/procurement/bills/${id}`),
 );
 
-export async function fetchProducts(q?: string): Promise<ProductView[]> {
-  const query = new URLSearchParams({ limit: '200' });
-  if (q) query.set('q', q);
-  const result = await apiFetch<{ products: ProductView[] }>(`/api/procurement/products?${query}`);
-  return result.success ? result.data.products : [];
-}
-
 /** The SALES board: outstanding customer demand. */
 export async function fetchSalesRequirements(date?: string): Promise<SalesRequirementRow[]> {
   // Without a date the whole board comes back, so Active is never filtered.
@@ -69,6 +62,21 @@ export async function fetchFulfillmentDetail(
 export async function fetchShortages(): Promise<ShortageRow[]> {
   const result = await apiFetch<{ shortages: ShortageRow[] }>('/api/procurement/shortages');
   return result.success ? result.data.shortages : [];
+}
+
+/**
+ * Undecided requests to re-map a purchase line, for the approval queue.
+ *
+ * An empty list on failure, like the readers above: the queue is one section of
+ * a page, and a Procurement page that refused to render because this call
+ * failed would hide the bills too. Anyone without the capability to act on these
+ * simply sees nothing here, which is also what the API returns them.
+ */
+export async function fetchPendingProductChanges(): Promise<ProductChangeView[]> {
+  const result = await apiFetch<{ changes: ProductChangeView[] }>(
+    '/api/procurement/product-changes?status=PENDING',
+  );
+  return result.success ? result.data.changes : [];
 }
 
 /**

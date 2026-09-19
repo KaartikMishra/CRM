@@ -116,22 +116,26 @@ export async function createSalesOrder(
   actor: AuthenticatedUser,
   input: CreateSalesOrderInput,
 ): Promise<SalesOrderDetail> {
-  // Every catalogue link on the order has to resolve to a real, active product
+  // Every product named on the order has to resolve to a real, live RS Product
   // before any of it is written. A dangling id would satisfy the foreign key
-  // only by accident, and an inactive product must not be attachable to a new
+  // only by accident, and an archived product must not be attachable to a new
   // line — procurement would then be asked to buy something withdrawn.
+  //
+  // A ShopifyVariant id is a well-formed cuid that names no RsProduct, so it is
+  // refused here: mapping is product level and no variant identity can be
+  // stored even by a hand-crafted request.
   const linkedIds = [
-    ...new Set(input.items.map((i) => i.productId).filter((v): v is string => Boolean(v))),
+    ...new Set(input.items.map((i) => i.rsProductId).filter((v): v is string => Boolean(v))),
   ];
   if (linkedIds.length > 0) {
-    const found = await prisma.product.findMany({
-      where: { id: { in: linkedIds }, isActive: true },
+    const found = await prisma.rsProduct.findMany({
+      where: { id: { in: linkedIds }, status: { not: 'ARCHIVED' } },
       select: { id: true },
     });
     if (found.length !== linkedIds.length) {
       throw AppError.badRequest(
-        'PRODUCT_NOT_FOUND',
-        'One of those catalogue products could not be found, or is no longer active.',
+        'RS_PRODUCT_NOT_FOUND',
+        'One of those RS Products could not be found, or is no longer available.',
       );
     }
   }
@@ -167,7 +171,7 @@ export async function createSalesOrder(
           create: input.items.map((item, index) => ({
             lineNo: index + 1,
             productName: item.productName,
-            productId: item.productId ?? null,
+            rsProductId: item.rsProductId ?? null,
             productImageId: item.productImageAssetId ?? null,
             quantity: item.quantity,
             price: new Prisma.Decimal(item.price),

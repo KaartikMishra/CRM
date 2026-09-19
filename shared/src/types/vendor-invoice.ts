@@ -64,8 +64,8 @@ export type VendorTradeRow = {
 
   /** What the vendor's own bill called it. Always present. */
   productName: string;
-  /** The catalogue entry, once linked. Null on an unlinked line. */
-  productId: string | null;
+  /** The RS Product the line is mapped to. Null on an unmapped line. */
+  rsProductId: string | null;
   /** The line's photograph, through the existing MediaAsset path. */
   productImageUrl: string | null;
 

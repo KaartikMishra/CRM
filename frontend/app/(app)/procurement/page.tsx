@@ -6,10 +6,14 @@ import { Card, CardContent } from '@/components/ui/card';
 import { PageHeader } from '@/components/common/page-header';
 import { EmptyState } from '@/components/common/empty-state';
 import { ErrorMessage } from '@/components/common/error-message';
+import { ProductChangeQueue } from '@/components/procurement/product-change-queue';
 import { PurchaseBillTable } from '@/components/procurement/purchase-bill-table';
-import { SalesBoard } from '@/components/procurement/sales-board';
 import { ShortageBoard } from '@/components/procurement/shortage-board';
-import { fetchPurchaseBills, fetchSalesRequirements, fetchShortages } from '@/lib/procurement-api';
+import {
+  fetchPendingProductChanges,
+  fetchPurchaseBills,
+  fetchShortages,
+} from '@/lib/procurement-api';
 import { can } from '@/lib/current-user';
 import { requireModule } from '@/lib/require-module';
 import { NoModuleAccess } from '@/components/common/no-module-access';
@@ -26,17 +30,24 @@ export default async function ProcurementPage({ searchParams }: { searchParams: 
   const access = await requireModule('PROCUREMENT');
   if (!access.allowed) return <NoModuleAccess module="PROCUREMENT" />;
   const canCreate = can(access.user, 'PROCUREMENT', 'CREATE');
+  /*
+    Deciding a re-mapping request is ASSIGN, the same capability Sales reviews
+    its change requests under — never `role === 'ADMIN'`, so a per-user grant or
+    revocation applies here as it does everywhere else. This only decides whether
+    the queue is rendered; the API refuses the decision itself without it.
+  */
+  const canReview = can(access.user, 'PROCUREMENT', 'ASSIGN');
 
   // Independent of each other, and the API is a long way from here.
-  const [{ result }, salesRequirements, shortages] = await Promise.all([
+  const [{ result }, shortages, productChanges] = await Promise.all([
     fetchPurchaseBills({
       q: first(params.q),
       status: first(params.status),
       vendorId: first(params.vendorId),
       limit: '25',
     }),
-    fetchSalesRequirements(),
     fetchShortages(),
+    canReview ? fetchPendingProductChanges() : Promise.resolve([]),
   ]);
 
   return (
@@ -57,8 +68,20 @@ export default async function ProcurementPage({ searchParams }: { searchParams: 
         }
       />
 
-      {/* Customer demand first: it is what creates the shortage below. */}
-      <SalesBoard rows={salesRequirements} canEdit={can(access.user, 'PROCUREMENT', 'EDIT')} />
+      {/*
+        The Sales section is gone from this page.
+
+        It listed every outstanding customer order line here, which made the
+        Procurement page a second view of Sales — and the Sales module already
+        owns that. Procurement's own question is narrower: what has to be bought,
+        and which bills cover it. Requirement vs stock below still aggregates the
+        same customer demand, which is the part procurement acts on.
+
+        The Sales module itself is untouched and unchanged: its pages, routes,
+        sidebar entry and API are exactly as they were. Only this page's copy of
+        that information was removed.
+      */}
+      {canReview && <ProductChangeQueue changes={productChanges} />}
 
       <ShortageBoard rows={shortages} />
 

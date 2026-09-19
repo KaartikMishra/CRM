@@ -291,9 +291,9 @@ describe('existing Sales behaviour is unchanged', () => {
 
     const row = await prisma.salesOrderItem.findUniqueOrThrow({
       where: { id: res.body.data!.order.items[0]!.id },
-      select: { productId: true, productName: true },
+      select: { rsProductId: true, productName: true },
     });
-    expect(row.productId).toBeNull();
+    expect(row.rsProductId).toBeNull();
     expect(row.productName).toContain('product');
   });
 

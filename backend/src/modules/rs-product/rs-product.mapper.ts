@@ -25,6 +25,48 @@ import type {
 const GRAMS_PER: Record<WeightUnit, number> = { G: 1, KG: 1000, LB: 453.59237 };
 
 /**
+ * A product's CRM stock: the sum of its variants' hand-maintained counts.
+ *
+ * The one definition of "this product's stock", used by the RS Products
+ * catalogue row and by Procurement alike. It lives here rather than in either
+ * caller because the two must agree by construction: Procurement displays the
+ * figure RS Products owns, and a second summation in another file could drift
+ * from this one without anything failing.
+ *
+ * Deliberately not clamped, matching `inventoryQty`: a negative CRM count is a
+ * real bookkeeping fact, and rounding it up to zero would hide it.
+ *
+ * Never Shopify's `inventoryQty`, which is overwritten by every sync pass, and
+ * never `InventoryItem.onHand`, which is the legacy warehouse count.
+ */
+export function crmStockOf(variants: { crmStockQty: number }[]): number {
+  return variants.reduce((sum, v) => sum + v.crmStockQty, 0);
+}
+
+/**
+ * A product's RS stock: the sum of its variants' Shopify quantities.
+ *
+ * The companion to `crmStockOf`, and deliberately a separate function over a
+ * separate column rather than a parameter on one. These are two different
+ * numbers about the same goods:
+ *
+ *   crmStockOf  →  crmStockQty    what the CRM has counted, entered by hand
+ *   rsStockOf   →  inventoryQty   what Shopify says is sellable
+ *
+ * They routinely disagree, and the disagreement is the useful part — it is how
+ * a mis-set storefront quantity or an uncounted delivery becomes visible. One
+ * function switching on a flag would make substituting one for the other a
+ * one-character mistake; two functions mean a caller has to say which question
+ * it is asking.
+ *
+ * Not clamped, matching `crmStockOf`: Shopify reports negative sellable
+ * quantities when a product oversells, and that is a real fact about the store.
+ */
+export function rsStockOf(variants: { inventoryQty: number }[]): number {
+  return variants.reduce((sum, v) => sum + v.inventoryQty, 0);
+}
+
+/**
  * Shopify's weight units to ours.
  *
  * OUNCES has no equivalent in the CRM's WeightUnit enum and the store uses none,

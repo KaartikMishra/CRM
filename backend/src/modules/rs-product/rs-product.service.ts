@@ -29,6 +29,7 @@ import {
   type ShopifyConnectionStatus,
 } from '../../integrations/shopify/connection.js';
 import { syncShopifyCatalogue, type SyncReport } from './rs-product.sync.js';
+import { crmStockOf } from './rs-product.mapper.js';
 
 type ProductWithChildren = Prisma.RsProductGetPayload<{
   include: { variants: true; images: true };
@@ -71,7 +72,9 @@ function toListRow(product: ProductWithChildren): RsProductListRow {
     priceMax: prices.length ? Math.max(...prices).toFixed(2) : null,
 
     inventoryQty: variants.reduce((sum, v) => sum + v.inventoryQty, 0),
-    crmStockQty: variants.reduce((sum, v) => sum + v.crmStockQty, 0),
+    // The shared definition, so Procurement's product-level stock figure and
+    // this one cannot drift apart.
+    crmStockQty: crmStockOf(variants),
 
     weightValue: first ? decimalText(first.weightValue) : null,
     weightUnit: first?.weightUnit ?? null,
@@ -132,7 +135,6 @@ function toDetail(product: ProductWithChildren): RsProductDetail {
     status: product.status,
     productType: product.productType,
     vendor: product.vendor,
-    productId: product.productId,
     syncedAt: product.syncedAt?.toISOString() ?? null,
     createdAt: product.createdAt.toISOString(),
     updatedAt: product.updatedAt.toISOString(),

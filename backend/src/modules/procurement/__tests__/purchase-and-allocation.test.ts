@@ -14,15 +14,16 @@ import { prisma } from '../../../config/database.js';
 import { api, mintToken, startTestServer, stopTestServer } from '../../../__tests__/helpers/test-server.js';
 import {
   cleanup,
-  linkOrderLineToProduct,
+  mapOrderLineToRsProduct,
   makeCustomer,
-  makeProduct,
+  makeRsProduct,
   makeUser,
   makeVendor,
   purchaseBillPayload,
   residualTestRows,
   salesOrderPayload,
-  setInventory,
+  setCrmStock,
+  approvePurchaseBill,
   trackPurchaseBill,
   trackSalesOrder,
   type TestUser,
@@ -75,7 +76,7 @@ async function makeLinkedOrder(
 
   const order = (res.body.data as { order: { id: string; orderId: string; items: { id: string }[] } }).order;
   trackSalesOrder(order.id);
-  await linkOrderLineToProduct(order.items[0]!.id, productId);
+  await mapOrderLineToRsProduct(order.items[0]!.id, productId);
 
   return { orderId: order.id, orderNumber: order.orderId, lineId: order.items[0]!.id };
 }
@@ -92,69 +93,27 @@ async function makeBill(
 
   const bill = (res.body.data as { bill: { id: string; items: { id: string }[] } }).bill;
   trackPurchaseBill(bill.id);
+  // Allocation needs an approved bill. This suite is about the allocation
+  // arithmetic, not the approval rule, which has its own suite.
+  await approvePurchaseBill(bill.id);
   return { billId: bill.id, itemId: bill.items[0]!.id };
 }
 
 // ---------------------------------------------------------------------------
 
-describe('products and inventory', () => {
-  it('creates a product with an opening stock level', async () => {
-    const res = await api('POST', '/api/procurement/products', {
-      token: adminToken,
-      body: { name: `zz-test-product-${Date.now()}`, onHand: 12 },
-    });
-
-    expect(res.status).toBe(201);
-    const product = (res.body.data as { product: { id: string; onHand: number } }).product;
-    expect(product.onHand).toBe(12);
-    await prisma.inventoryItem.deleteMany({ where: { productId: product.id } });
-    await prisma.product.delete({ where: { id: product.id } });
-  });
-
-  it('refuses a duplicate product name', async () => {
-    const existing = await makeProduct();
-    const res = await api('POST', '/api/procurement/products', {
-      token: adminToken,
-      body: { name: existing.name },
-    });
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe('PRODUCT_EXISTS');
-  });
-
-  it('adjusts stock by a signed delta', async () => {
-    const product = await makeProduct(10);
-
-    const up = await api('POST', `/api/procurement/products/${product.id}/inventory`, {
-      token: adminToken,
-      body: { delta: 5, reason: 'stock count' },
-    });
-    expect((up.body.data as { product: { onHand: number } }).product.onHand).toBe(15);
-
-    const down = await api('POST', `/api/procurement/products/${product.id}/inventory`, {
-      token: adminToken,
-      body: { delta: -3, reason: 'breakage' },
-    });
-    expect((down.body.data as { product: { onHand: number } }).product.onHand).toBe(12);
-  });
-
-  it('refuses an adjustment that would drive stock negative', async () => {
-    const product = await makeProduct(2);
-    const res = await api('POST', `/api/procurement/products/${product.id}/inventory`, {
-      token: adminToken,
-      body: { delta: -5, reason: 'too much' },
-    });
-    expect(res.status).toBe(400);
-    expect(res.body.code).toBe('INSUFFICIENT_STOCK');
-  });
-});
+/*
+ * The legacy product list had a suite here. It is gone with the endpoint:
+ * Procurement neither lists, creates nor stock-corrects a second catalogue.
+ * `rs-product-mapping.test.ts` asserts those routes now answer 404.
+ */
 
 describe('purchase bills', () => {
   it('creates a bill with several lines', async () => {
-    const [a, b] = [await makeProduct(), await makeProduct()];
+    const [a, b] = [await makeRsProduct(), await makeRsProduct()];
     const { billId } = await makeBill(a.id, {
       items: [
-        { productName: 'zz-test-line', productId: a.id, orderedQty: 10, receivedQty: 10, rate: '100.00' },
-        { productName: 'zz-test-line', productId: b.id, orderedQty: 5, receivedQty: 0, rate: '250.50' },
+        { productName: 'zz-test-line', rsProductId: a.id, orderedQty: 10, receivedQty: 10, rate: '100.00' },
+        { productName: 'zz-test-line', rsProductId: b.id, orderedQty: 5, receivedQty: 0, rate: '250.50' },
       ],
     });
 
@@ -167,7 +126,7 @@ describe('purchase bills', () => {
   });
 
   it('supports several vendors against one shortage, as separate bills', async () => {
-    const product = await makeProduct();
+    const product = await makeRsProduct();
     const second = await makeVendor();
 
     const one = await makeBill(product.id);
@@ -184,7 +143,7 @@ describe('purchase bills', () => {
   });
 
   it('refuses the same bill number twice from one vendor', async () => {
-    const product = await makeProduct();
+    const product = await makeRsProduct();
     const payload = purchaseBillPayload(vendor.id, product.id);
 
     const first = await api('POST', '/api/procurement/bills', { token: adminToken, body: payload });
@@ -197,9 +156,9 @@ describe('purchase bills', () => {
   });
 
   it('refuses receiving more than was ordered', async () => {
-    const product = await makeProduct();
+    const product = await makeRsProduct();
     const { billId, itemId } = await makeBill(product.id, {
-      items: [{ productName: 'zz-test-line', productId: product.id, orderedQty: 5, receivedQty: 0, rate: '10.00' }],
+      items: [{ productName: 'zz-test-line', rsProductId: product.id, orderedQty: 5, receivedQty: 0, rate: '10.00' }],
     });
 
     const res = await api('POST', `/api/procurement/bills/${billId}/items/${itemId}/receive`, {
@@ -211,7 +170,7 @@ describe('purchase bills', () => {
   });
 
   it('records a delay with its reason, and refuses one without', async () => {
-    const product = await makeProduct();
+    const product = await makeRsProduct();
     const { billId } = await makeBill(product.id);
 
     const bad = await api('POST', `/api/procurement/bills/${billId}/delay`, {
@@ -235,7 +194,7 @@ describe('order requirements and shortage', () => {
   it('reports 6 required, 4 already fulfilled, 2 pending', async () => {
     // Fulfilment is per line now. Warehouse stock is shared across orders, so
     // it is reported but never counted against one customer's requirement.
-    const product = await makeProduct(4);
+    const product = await makeRsProduct({ crmStockQty: 4 });
     const { orderNumber, lineId } = await makeLinkedOrder(product.id, 6);
     await api('PATCH', `/api/procurement/order-lines/${lineId}/fulfillment`, {
       token: adminToken,
@@ -249,22 +208,28 @@ describe('order requirements and shortage', () => {
     );
 
     expect(res.status).toBe(200);
-    const line = (res.body.data as { order: { lines: {
-      requiredQty: number; alreadyFulfilled: number; availableInInventory: number;
-      totalFulfilled: number; pendingQty: number; status: string;
-    }[] } }).order.lines[0]!;
+    const line = (res.body.data as { order: { lines: Record<string, unknown>[] } }).order.lines[0]!;
 
     expect(line.requiredQty).toBe(6);
     expect(line.alreadyFulfilled).toBe(4);
     expect(line.totalFulfilled).toBe(4);
     expect(line.pendingQty).toBe(2);
     expect(line.status).toBe('PARTIAL');
-    // Stock is shown, but it did not fulfil anything.
-    expect(line.availableInInventory).toBe(4);
+    /*
+      No stock figure on an order line, and that is the assertion.
+
+      This used to report `availableInInventory`, read from InventoryItem.onHand
+      — which the product still has, set to 4 above. Procurement no longer
+      treats that as a stock source, and a sales order line carries no RS
+      Product to read the RS figure from, so the field is gone rather than
+      relabelled. Reporting the legacy number under a stock heading is precisely
+      the second, disagreeing stock source the migration removes.
+    */
+    expect(line).not.toHaveProperty('availableInInventory');
   });
 
   it('reports nothing pending once the line is fully fulfilled by hand', async () => {
-    const product = await makeProduct(5);
+    const product = await makeRsProduct({ crmStockQty: 5 });
     const { orderNumber, lineId } = await makeLinkedOrder(product.id, 1);
     await api('PATCH', `/api/procurement/order-lines/${lineId}/fulfillment`, {
       token: adminToken, body: { alreadyFulfilled: 1 },
@@ -293,11 +258,14 @@ describe('order requirements and shortage', () => {
     const res = await api('GET', `/api/procurement/order-requirements?orderId=${encodeURIComponent(order.orderId)}`, {
       token: adminToken,
     });
-    const line = (res.body.data as { order: { lines: { linked: boolean; productId: string | null }[] } })
-      .order.lines[0]!;
+    const line = (
+      res.body.data as { order: { lines: { linked: boolean; rsProductId: string | null }[] } }
+    ).order.lines[0]!;
 
     expect(line.linked).toBe(false);
-    expect(line.productId).toBeNull();
+    // `rsProductId`, not the legacy `productId`: there is one product identity
+    // and an unmapped line reports it as null rather than omitting it.
+    expect(line.rsProductId).toBeNull();
   });
 
   it('404s for an unknown order number', async () => {
@@ -311,10 +279,10 @@ describe('order requirements and shortage', () => {
 
 describe('allocation', () => {
   it('allocates purchased stock and reduces both standing and pending', async () => {
-    const product = await makeProduct(0);
+    const product = await makeRsProduct();
     const { orderNumber, lineId } = await makeLinkedOrder(product.id, 6);
     const { billId, itemId } = await makeBill(product.id, {
-      items: [{ productName: 'zz-test-line', productId: product.id, orderedQty: 10, receivedQty: 10, rate: '50.00' }],
+      items: [{ productName: 'zz-test-line', rsProductId: product.id, orderedQty: 10, receivedQty: 10, rate: '50.00' }],
     });
 
     const res = await api('POST', `/api/procurement/bills/${billId}/items/${itemId}/allocations`, {
@@ -337,9 +305,9 @@ describe('allocation', () => {
   });
 
   it('serves several customers from one purchase, leaving the rest standing', async () => {
-    const product = await makeProduct(0);
+    const product = await makeRsProduct();
     const { billId, itemId } = await makeBill(product.id, {
-      items: [{ productName: 'zz-test-line', productId: product.id, orderedQty: 20, receivedQty: 20, rate: '10.00' }],
+      items: [{ productName: 'zz-test-line', rsProductId: product.id, orderedQty: 20, receivedQty: 20, rate: '10.00' }],
     });
 
     // The brief's example: 6 + 4 + 5 allocated out of 20 leaves 5 standing.
@@ -360,21 +328,24 @@ describe('allocation', () => {
   });
 
   it('fills one order line from two different bills', async () => {
-    const product = await makeProduct(0);
+    const product = await makeRsProduct();
     const { orderNumber, lineId } = await makeLinkedOrder(product.id, 8);
 
     const first = await makeBill(product.id, {
-      items: [{ productName: 'zz-test-line', productId: product.id, orderedQty: 5, receivedQty: 5, rate: '10.00' }],
+      items: [{ productName: 'zz-test-line', rsProductId: product.id, orderedQty: 5, receivedQty: 5, rate: '10.00' }],
     });
     const secondVendor = await makeVendor();
     const secondRes = await api('POST', '/api/procurement/bills', {
       token: adminToken,
       body: purchaseBillPayload(secondVendor.id, product.id, {
-        items: [{ productName: 'zz-test-line', productId: product.id, orderedQty: 3, receivedQty: 3, rate: '11.00' }],
+        items: [{ productName: 'zz-test-line', rsProductId: product.id, orderedQty: 3, receivedQty: 3, rate: '11.00' }],
       }),
     });
     const secondBill = (secondRes.body.data as { bill: { id: string; items: { id: string }[] } }).bill;
     trackPurchaseBill(secondBill.id);
+    // Recorded inline rather than through makeBill, so it needs approving the
+    // same way — an unapproved bill's stock cannot be allocated.
+    await approvePurchaseBill(secondBill.id);
 
     await api('POST', `/api/procurement/bills/${first.billId}/items/${first.itemId}/allocations`, {
       token: adminToken, body: { salesOrderItemId: lineId, quantity: 5 },
@@ -393,7 +364,7 @@ describe('allocation', () => {
   });
 
   it('refuses to allocate more than the line still needs', async () => {
-    const product = await makeProduct(0);
+    const product = await makeRsProduct();
     const { lineId } = await makeLinkedOrder(product.id, 2);
     const { billId, itemId } = await makeBill(product.id);
 
@@ -406,10 +377,10 @@ describe('allocation', () => {
   });
 
   it('refuses to allocate more than the purchase has standing', async () => {
-    const product = await makeProduct(0);
+    const product = await makeRsProduct();
     const { lineId } = await makeLinkedOrder(product.id, 50);
     const { billId, itemId } = await makeBill(product.id, {
-      items: [{ productName: 'zz-test-line', productId: product.id, orderedQty: 10, receivedQty: 3, rate: '10.00' }],
+      items: [{ productName: 'zz-test-line', rsProductId: product.id, orderedQty: 10, receivedQty: 3, rate: '10.00' }],
     });
 
     const res = await api('POST', `/api/procurement/bills/${billId}/items/${itemId}/allocations`, {
@@ -421,7 +392,7 @@ describe('allocation', () => {
   });
 
   it('refuses to allocate stock for a different product', async () => {
-    const [a, b] = [await makeProduct(0), await makeProduct(0)];
+    const [a, b] = [await makeRsProduct(), await makeRsProduct()];
     const { lineId } = await makeLinkedOrder(a.id, 5);
     const { billId, itemId } = await makeBill(b.id);
 
@@ -434,7 +405,7 @@ describe('allocation', () => {
   });
 
   it('refuses to allocate to a line with no catalogue product', async () => {
-    const product = await makeProduct(0);
+    const product = await makeRsProduct();
     const payload = salesOrderPayload(customer.id, {
       items: [{ productName: 'zz-test-unlinked-alloc', quantity: 3, price: '10.00' }],
     });
@@ -452,7 +423,7 @@ describe('allocation', () => {
   });
 
   it('releases an allocation, returning the stock to standing', async () => {
-    const product = await makeProduct(0);
+    const product = await makeRsProduct();
     const { lineId } = await makeLinkedOrder(product.id, 4);
     const { billId, itemId } = await makeBill(product.id);
 
@@ -478,7 +449,7 @@ describe('allocation', () => {
 
 describe('the freeze rule', () => {
   it('refuses a USER changing an allocation on a fulfilled line, and lets an ADMIN', async () => {
-    const product = await makeProduct(0);
+    const product = await makeRsProduct();
     const { lineId } = await makeLinkedOrder(product.id, 4);
     const { billId, itemId } = await makeBill(product.id);
 
@@ -505,7 +476,7 @@ describe('the freeze rule', () => {
   });
 
   it('lets a USER allocate freely while the line is still pending', async () => {
-    const product = await makeProduct(0);
+    const product = await makeRsProduct();
     const { lineId } = await makeLinkedOrder(product.id, 10);
     const { billId, itemId } = await makeBill(product.id);
 
@@ -516,7 +487,7 @@ describe('the freeze rule', () => {
   });
 
   it('refuses a USER allocating onto an already fulfilled line', async () => {
-    const product = await makeProduct(5);
+    const product = await makeRsProduct({ crmStockQty: 5 });
     const { lineId } = await makeLinkedOrder(product.id, 5);
     const { billId, itemId } = await makeBill(product.id);
 
@@ -541,31 +512,44 @@ describe('authorization', () => {
     const outsider = await makeUser('USER');
     const token = await mintToken(outsider.id, { role: 'USER' });
 
+    /*
+      `/products` is deliberately absent from this list. The legacy catalogue
+      route no longer exists, so it answers 404 for everyone — including someone
+      with full rights — and asserting 403 there would be asserting that a
+      removed route is permission-gated, which is not a fact about anything.
+      That the route is gone is covered directly in rs-product-mapping.test.ts.
+    */
     for (const [method, path] of [
       ['GET', '/api/procurement/bills'],
-      ['GET', '/api/procurement/products'],
       ['GET', '/api/procurement/shortages'],
+      ['GET', '/api/procurement/product-changes'],
     ] as const) {
       const res = await api(method, path, { token });
       expect(res.status, `${method} ${path}`).toBe(403);
     }
   });
 
-  it('refuses a USER creating a product without CREATE', async () => {
+  it('refuses a USER mapping a line to an RS Product without EDIT', async () => {
     const outsider = await makeUser('USER');
     const token = await mintToken(outsider.id, { role: 'USER' });
-    const res = await api('POST', '/api/procurement/products', {
-      token, body: { name: 'zz-test-denied' },
+    const product = await makeRsProduct();
+    const { billId, itemId } = await makeBill(product.id);
+
+    const res = await api('POST', `/api/procurement/bills/${billId}/items/${itemId}/rs-product`, {
+      token,
+      body: { rsProductId: 'ckd0000000000000000000001' },
     });
+    // Permission is answered before the product is looked up, so this is 403
+    // rather than the 404 an authorised caller would get for an unknown id.
     expect(res.status).toBe(403);
   });
 });
 
 describe('concurrency', () => {
   it('never over-allocates a purchase line under parallel requests', async () => {
-    const product = await makeProduct(0);
+    const product = await makeRsProduct();
     const { billId, itemId } = await makeBill(product.id, {
-      items: [{ productName: 'zz-test-line', productId: product.id, orderedQty: 4, receivedQty: 4, rate: '10.00' }],
+      items: [{ productName: 'zz-test-line', rsProductId: product.id, orderedQty: 4, receivedQty: 4, rate: '10.00' }],
     });
 
     // Six orders, each wanting 2, against 4 units of standing stock. At most
@@ -601,17 +585,17 @@ describe('concurrency', () => {
   });
 
   it('never over-fills one order line from two bills at once', async () => {
-    const product = await makeProduct(0);
+    const product = await makeRsProduct();
     const { orderNumber, lineId } = await makeLinkedOrder(product.id, 3);
 
     const bills = await Promise.all([
-      makeBill(product.id, { items: [{ productName: 'zz-test-line', productId: product.id, orderedQty: 3, receivedQty: 3, rate: '10.00' }] }),
+      makeBill(product.id, { items: [{ productName: 'zz-test-line', rsProductId: product.id, orderedQty: 3, receivedQty: 3, rate: '10.00' }] }),
       (async () => {
         const v = await makeVendor();
         const res = await api('POST', '/api/procurement/bills', {
           token: adminToken,
           body: purchaseBillPayload(v.id, product.id, {
-            items: [{ productName: 'zz-test-line', productId: product.id, orderedQty: 3, receivedQty: 3, rate: '10.00' }],
+            items: [{ productName: 'zz-test-line', rsProductId: product.id, orderedQty: 3, receivedQty: 3, rate: '10.00' }],
           }),
         });
         const bill = (res.body.data as { bill: { id: string; items: { id: string }[] } }).bill;

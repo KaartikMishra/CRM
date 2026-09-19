@@ -1,20 +1,19 @@
 import type { Request, Response } from 'express';
 import type {
-  AdjustInventoryInput,
   CreateAllocationInput,
-  CreateProductInput,
   CreatePurchaseBillInput,
   LinkOrderLineInput,
-  LinkPurchaseItemInput,
+  MapPurchaseItemInput,
+  ProductChangeListQuery,
   RecordFulfillmentInput,
-  ProductListQuery,
-  PutInCatalogueInput,
+  RequestProductChangeInput,
+  ReviewProductChangeInput,
+  ReviewPurchaseBillInput,
   SalesRequirementQuery,
   PurchaseBillListQuery,
   PurchaseDelayInput,
   ReceiveItemInput,
   UpdateAllocationInput,
-  UpdateProductInput,
   UpdatePurchaseBillInput,
 } from '@rs/shared';
 import { sendCreated, sendSuccess } from '../../utils/apiResponse.js';
@@ -22,43 +21,13 @@ import { validatedBody, validatedParams, validatedQuery } from '../../utils/requ
 import { currentUser } from '../../middleware/requireAuth.js';
 import * as service from './procurement.service.js';
 
-// --- products ---------------------------------------------------------------
-
-export async function listProducts(req: Request, res: Response): Promise<void> {
-  const products = await service.listProducts(validatedQuery<ProductListQuery>(req));
-  sendSuccess(res, { products });
-}
-
-export async function createProduct(req: Request, res: Response): Promise<void> {
-  const product = await service.createProduct(
-    req,
-    currentUser(req).id,
-    validatedBody<CreateProductInput>(req),
-  );
-  sendCreated(res, { product });
-}
-
-export async function updateProduct(req: Request, res: Response): Promise<void> {
-  const { id } = validatedParams<{ id: string }>(req);
-  const product = await service.updateProduct(
-    req,
-    currentUser(req).id,
-    id,
-    validatedBody<UpdateProductInput>(req),
-  );
-  sendSuccess(res, { product });
-}
-
-export async function adjustInventory(req: Request, res: Response): Promise<void> {
-  const { id } = validatedParams<{ id: string }>(req);
-  const product = await service.adjustInventory(
-    req,
-    currentUser(req).id,
-    id,
-    validatedBody<AdjustInventoryInput>(req),
-  );
-  sendSuccess(res, { product });
-}
+/*
+ * There is no legacy-catalogue handler left.
+ *
+ * Listing, creating, editing and stock-correcting a legacy Product have all
+ * gone with the legacy Product itself. RS Products is the catalogue, and
+ * Procurement names goods by RsProduct.id alone.
+ */
 
 // --- requirements & shortages ----------------------------------------------
 
@@ -67,7 +36,7 @@ export async function orderRequirements(req: Request, res: Response): Promise<vo
   sendSuccess(res, { order: await service.getOrderRequirements(orderId) });
 }
 
-/** Attaching a free-text or legacy order line to the catalogue. */
+/** Mapping a free-text order line to an RS Product. */
 export async function linkOrderLine(req: Request, res: Response): Promise<void> {
   const order = await service.linkOrderLine(
     req,
@@ -77,27 +46,60 @@ export async function linkOrderLine(req: Request, res: Response): Promise<void> 
   sendSuccess(res, { order });
 }
 
-/** Attaching a free-text purchase line to the catalogue. */
-export async function linkPurchaseItem(req: Request, res: Response): Promise<void> {
+/** Mapping a purchase line to an RS Product — the canonical identity. */
+export async function mapPurchaseItem(req: Request, res: Response): Promise<void> {
   const { id, itemId } = validatedParams<{ id: string; itemId: string }>(req);
-  const bill = await service.linkPurchaseItem(
+  const bill = await service.mapPurchaseItemToRsProduct(
     req,
     currentUser(req).id,
     id,
     itemId,
-    validatedBody<LinkPurchaseItemInput>(req),
+    validatedBody<MapPurchaseItemInput>(req),
   );
   sendSuccess(res, { bill });
 }
 
-/** Cataloguing a free-text order line's product, then linking the line to it. */
-export async function putInCatalogue(req: Request, res: Response): Promise<void> {
-  const order = await service.putInCatalogue(
+/**
+ * Asking to move an already-mapped line. Records a request; changes nothing.
+ */
+export async function requestProductChange(req: Request, res: Response): Promise<void> {
+  const { id, itemId } = validatedParams<{ id: string; itemId: string }>(req);
+  const bill = await service.requestProductChange(
     req,
-    currentUser(req).id,
-    validatedBody<PutInCatalogueInput>(req),
+    currentUser(req),
+    id,
+    itemId,
+    validatedBody<RequestProductChangeInput>(req),
   );
-  sendSuccess(res, { order });
+  sendSuccess(res, { bill });
+}
+
+/** The approval queue, or one bill's request history. */
+export async function listProductChanges(req: Request, res: Response): Promise<void> {
+  const query = validatedQuery<ProductChangeListQuery>(req);
+  sendSuccess(res, { changes: await service.listProductChanges(query) });
+}
+
+export async function approveProductChange(req: Request, res: Response): Promise<void> {
+  const { id } = validatedParams<{ id: string }>(req);
+  const changes = await service.approveProductChange(
+    req,
+    currentUser(req),
+    id,
+    validatedBody<ReviewProductChangeInput>(req),
+  );
+  sendSuccess(res, { changes });
+}
+
+export async function rejectProductChange(req: Request, res: Response): Promise<void> {
+  const { id } = validatedParams<{ id: string }>(req);
+  const changes = await service.rejectProductChange(
+    req,
+    currentUser(req),
+    id,
+    validatedBody<ReviewProductChangeInput>(req),
+  );
+  sendSuccess(res, { changes });
 }
 
 /** The SALES board: outstanding customer demand, line by line. */
@@ -170,6 +172,29 @@ export async function receiveItem(req: Request, res: Response): Promise<void> {
     id,
     itemId,
     validatedBody<ReceiveItemInput>(req),
+  );
+  sendSuccess(res, { bill });
+}
+
+/** Signing a recorded bill off, or refusing it. Needs PROCUREMENT ASSIGN. */
+export async function approveBill(req: Request, res: Response): Promise<void> {
+  const { id } = validatedParams<{ id: string }>(req);
+  const bill = await service.approveBill(
+    req,
+    currentUser(req),
+    id,
+    validatedBody<ReviewPurchaseBillInput>(req),
+  );
+  sendSuccess(res, { bill });
+}
+
+export async function rejectBill(req: Request, res: Response): Promise<void> {
+  const { id } = validatedParams<{ id: string }>(req);
+  const bill = await service.rejectBill(
+    req,
+    currentUser(req),
+    id,
+    validatedBody<ReviewPurchaseBillInput>(req),
   );
   sendSuccess(res, { bill });
 }

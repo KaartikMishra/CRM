@@ -310,17 +310,21 @@ describe('the submitted payload', () => {
     expect(code).toContain('price:');
     expect(code).toContain('gstRate: item.gstRate');
     expect(code).not.toContain('...item,');
-    // Draft-only state must not reach the API.
-    expect(code).not.toContain('rsProduct');
+    // The picker's whole object is draft state and must not reach the API —
+    // only its id travels, as rsProductId.
+    expect(code).not.toContain('rsProduct:');
+    expect(code).toContain('item.rsProduct.id');
   });
 
   it('omits an untouched HSN rather than sending an empty string', () => {
     expect(code).toContain("item.hsnCode.trim() ? { hsnCode: item.hsnCode.trim() }");
   });
 
-  it('still never sends an RsProduct id as the legacy productId', () => {
-    expect(code).toContain('item.productId ? { productId: item.productId }');
-    expect(form).not.toMatch(/productId:\s*(product|item\.rsProduct)\??\.id/);
+  it('sends the RsProduct id as the line identity, and no legacy key', () => {
+    // The chosen product's id is what the line stores. There is no second
+    // identity to send it as, and no legacy productId left to confuse it with.
+    expect(code).toContain('item.rsProduct ? { rsProductId: item.rsProduct.id }');
+    expect(form).not.toMatch(/productId(?!.*rsProductId)/);
   });
 
   it('produces a payload the shared schema accepts', () => {

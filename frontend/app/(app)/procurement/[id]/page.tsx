@@ -8,11 +8,13 @@ import { Separator } from '@/components/ui/separator';
 import { ErrorMessage } from '@/components/common/error-message';
 import { NoModuleAccess } from '@/components/common/no-module-access';
 import {
+  BillApprovalBadge,
   BillStatusBadge,
   BillTypeBadge,
 } from '@/components/procurement/procurement-badges';
+import { BillApprovalPanel } from '@/components/procurement/bill-approval-panel';
 import { BillItemList } from '@/components/procurement/bill-item-list';
-import { fetchProducts, fetchPurchaseBill } from '@/lib/procurement-api';
+import { fetchPurchaseBill } from '@/lib/procurement-api';
 import { can } from '@/lib/current-user';
 import { requireModule } from '@/lib/require-module';
 import { formatCurrency, formatDate, formatDateTime } from '@/lib/format';
@@ -30,7 +32,7 @@ export default async function PurchaseBillDetailPage({ params }: { params: Param
   const access = await requireModule('PROCUREMENT');
   if (!access.allowed) return <NoModuleAccess module="PROCUREMENT" />;
 
-  const [result, products] = await Promise.all([fetchPurchaseBill(id), fetchProducts()]);
+  const result = await fetchPurchaseBill(id);
   if (!result.success) {
     if (result.code === 'PURCHASE_BILL_NOT_FOUND') notFound();
     return <ErrorMessage message={result.message} code={result.code} />;
@@ -39,6 +41,8 @@ export default async function PurchaseBillDetailPage({ params }: { params: Param
   const bill = result.data.bill;
   const canEdit = can(access.user, 'PROCUREMENT', 'EDIT');
   const isAdmin = access.user.role === 'ADMIN';
+  // Deciding a bill is ASSIGN, resolved like every other capability.
+  const canReview = can(access.user, 'PROCUREMENT', 'ASSIGN');
 
   const facts: { label: string; value: React.ReactNode }[] = [
     { label: 'Vendor', value: bill.vendor.name },
@@ -65,6 +69,7 @@ export default async function PurchaseBillDetailPage({ params }: { params: Param
               <div className="flex flex-wrap items-center gap-2.5">
                 <h1 className="font-mono text-xl font-medium text-ink tabular">{bill.billNumber}</h1>
                 <BillStatusBadge status={bill.status} />
+                <BillApprovalBadge status={bill.approvalStatus} />
                 <BillTypeBadge type={bill.billType} />
               </div>
               <p className="mt-1.5 text-[15px] text-ink-2">{bill.vendor.name}</p>
@@ -112,13 +117,9 @@ export default async function PurchaseBillDetailPage({ params }: { params: Param
         <h2 className="text-sm font-semibold uppercase tracking-wider text-muted">
           Products ({bill.items.length})
         </h2>
-        <BillItemList
-          billId={bill.id}
-          items={bill.items}
-          products={products}
-          canEdit={canEdit}
-          isAdmin={isAdmin}
-        />
+        <BillApprovalPanel bill={bill} canReview={canReview} />
+
+        <BillItemList billId={bill.id} items={bill.items} canEdit={canEdit} isAdmin={isAdmin} />
       </section>
     </div>
   );

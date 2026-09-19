@@ -58,19 +58,18 @@ import { createSalesCustomerAction, createSalesOrderAction } from '@/app/(app)/s
 const today = (): string => new Date().toISOString().slice(0, 10);
 
 type ItemDraft = {
-  /** Optional catalogue link; free text stays valid when this is null. */
-  productId: string | null;
   key: string;
   productName: string;
   quantity: string;
   price: string;
   imageAssetId: string | null;
   /**
-   * The catalogue product this line was picked from, if any.
+   * The RS Product this line is for, if the picker was used.
    *
-   * Frontend-only: it supplies the label and the thumbnail, and is never sent
-   * to the API. `productId` on the submitted line stays null — that column
-   * points at the legacy Product master, which an RsProduct id is not.
+   * Its `id` is what the API stores as `rsProductId` — the CRM's one product
+   * identity, and what Procurement matches purchased stock against. Free text
+   * stays valid when this is null: an order records what a customer asked for,
+   * and that is not always something in the catalogue.
    */
   rsProduct: PickedProduct | null;
 
@@ -97,7 +96,6 @@ type ItemDraft = {
  */
 const emptyItem = (key: string): ItemDraft => ({
   key,
-  productId: null,
   productName: '',
   quantity: '',
   price: '',
@@ -209,11 +207,11 @@ export function CreateSalesOrderForm() {
       customerId: customer?.id ?? '',
       items: items.map((item) => ({
         productName: item.productName.trim(),
-        // Fields are listed rather than spread, so `rsProduct` cannot reach the
-        // API by accident. `productId` is still only ever a legacy Product id —
-        // the catalogue picker does not set it, and must not: that column is a
-        // foreign key to a different table.
-        ...(item.productId ? { productId: item.productId } : {}),
+        // Fields are listed rather than spread, so the picker's whole object
+        // cannot reach the API by accident — only its id travels, as the one
+        // product identity the CRM has. Omitted rather than sent as null when
+        // nothing was picked: the schema reads an absent key as "not mapped".
+        ...(item.rsProduct ? { rsProductId: item.rsProduct.id } : {}),
         quantity: item.quantity.trim() === '' ? Number.NaN : Number(item.quantity),
         price: item.price.trim(),
         ...(item.imageAssetId ? { productImageAssetId: item.imageAssetId } : {}),
@@ -480,12 +478,11 @@ export function CreateSalesOrderForm() {
                       a product that is not in the catalogue still works exactly
                       as before, and the box below stays available for it.
 
-                      What is deliberately *not* done here: the RsProduct id is
-                      never written to `productId`. That column is a foreign key
-                      to the legacy Product master, and the two are different
-                      entities — putting a catalogue id there would either break
-                      the constraint or silently mean the wrong thing. The line
-                      is simply unlinked, which the schema has always allowed.
+                      The chosen product's id travels with the line as
+                      `rsProductId`. That is what lets Procurement match
+                      purchased stock to this requirement by identity rather
+                      than by spelling — and it is the only product identity the
+                      CRM has, so there is nothing to translate it into.
                     */}
                     <RsProductPicker
                       id={`${formId}-name-${item.key}`}
@@ -495,8 +492,8 @@ export function CreateSalesOrderForm() {
                       onChange={(product) =>
                         updateItem(item.key, {
                           rsProduct: product,
-                          // The title becomes the line's label; the id is not
-                          // carried over — see above.
+                          // The title becomes the line's label; the id travels
+                          // separately as rsProductId — see above.
                           productName: product?.title ?? '',
                         })
                       }

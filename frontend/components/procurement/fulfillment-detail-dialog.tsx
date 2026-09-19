@@ -125,8 +125,8 @@ export function FulfillmentDetailDialog({
               <Field
                 label="Catalogue product"
                 value={
-                  detail.product ? (
-                    detail.product.name
+                  detail.rsProduct ? (
+                    detail.rsProduct.title
                   ) : (
                     <Badge variant="warning">Not in catalogue</Badge>
                   )

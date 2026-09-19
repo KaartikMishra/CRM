@@ -14,7 +14,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { prisma } from '../../../config/database.js';
@@ -40,6 +40,27 @@ type Wrapped = {
 const repoRoot = resolve(import.meta.dirname, '../../../../..');
 const git = (...args: string[]): string =>
   execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' });
+
+/**
+ * The files these audits scan: tracked, and still on disk.
+ *
+ * `git ls-files` reports the INDEX, not the working tree, so a file that has
+ * been deleted but whose deletion is not yet staged is still listed — and
+ * reading it throws ENOENT, failing the audit for a reason that has nothing to
+ * do with credentials. That is not a hypothetical: the procurement resolver was
+ * removed with the legacy catalogue and these audits started failing on its
+ * absence rather than on anything they exist to check.
+ *
+ * Filtering on existence keeps the scan honest in both directions. A file that
+ * is gone cannot contain a secret, and one that is present is still scanned
+ * whether or not its addition has been staged.
+ */
+const trackedFiles = (pathspec: string, ext: string[]): string[] =>
+  git('ls-files', pathspec)
+    .split('\n')
+    .filter(Boolean)
+    .filter((f) => ext.some((e) => f.endsWith(e)) && !f.includes('__tests__'))
+    .filter((f) => existsSync(resolve(repoRoot, f)));
 
 let admin: TestUser;
 let employee: TestUser;
@@ -226,10 +247,7 @@ describe('repository-wide credential audit', () => {
     // Test files are excluded, and deliberately: a test that asserts a string
     // is absent must name that string, so scanning them would flag the audits
     // themselves — including this one. What matters is the shipped bundle.
-    const tracked = git('ls-files', 'frontend').split('\n').filter(Boolean);
-    const clientFiles = tracked.filter(
-      (f) => (f.endsWith('.tsx') || f.endsWith('.ts')) && !f.includes('__tests__'),
-    );
+    const clientFiles = trackedFiles('frontend', ['.tsx', '.ts']);
 
     for (const file of clientFiles) {
       const contents = readFileSync(resolve(repoRoot, file), 'utf8');
@@ -253,9 +271,7 @@ describe('repository-wide credential audit', () => {
 
   it('reads the client secret only through validated env, never process.env', () => {
     const root = resolve(repoRoot, 'backend/src');
-    const files = git('ls-files', 'backend/src')
-      .split('\n')
-      .filter((f) => f.endsWith('.ts') && !f.includes('__tests__'));
+    const files = trackedFiles('backend/src', ['.ts']);
 
     for (const file of files) {
       const contents = readFileSync(resolve(repoRoot, file), 'utf8');
@@ -276,9 +292,7 @@ describe('repository-wide credential audit', () => {
     // changed without the design changing.
     // Test files excluded for the same reason as the credential scan above:
     // naming the forbidden path is how a test forbids it.
-    const backend = git('ls-files', 'backend/src')
-      .split('\n')
-      .filter((f) => f.endsWith('.ts') && !f.includes('__tests__'));
+    const backend = trackedFiles('backend/src', ['.ts']);
 
     for (const file of backend) {
       const contents = readFileSync(resolve(repoRoot, file), 'utf8').toLowerCase();

@@ -150,7 +150,17 @@ export type PurchaseBillType = (typeof PURCHASE_BILL_TYPES)[number];
  * received before the bill is closed, and there is no reopen.
  */
 export const PURCHASE_BILL_STATUSES = ['OPEN', 'RECEIVED', 'CLOSED'] as const;
+
+/**
+ * Whether a recorded purchase bill has been signed off.
+ *
+ * A separate axis from PURCHASE_BILL_STATUSES above, which says how much of the
+ * goods have arrived and is derived from the lines. A bill can be fully
+ * RECEIVED and still PENDING approval; the two never collapse into one value.
+ */
+export const BILL_APPROVAL_STATUSES = ['PENDING', 'APPROVED', 'REJECTED'] as const;
 export type PurchaseBillStatus = (typeof PURCHASE_BILL_STATUSES)[number];
+export type BillApprovalStatus = (typeof BILL_APPROVAL_STATUSES)[number];
 
 /**
  * How far an order line's requirement has been met.

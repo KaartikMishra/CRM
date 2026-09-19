@@ -717,19 +717,6 @@ describe('inventory_levels/update', () => {
     expect((res.body.data as { status: string }).status).toBe('ignored');
   });
 
-  it('never touches the legacy InventoryItem table', async () => {
-    const before = await prisma.inventoryItem.count();
-
-    await deliver('products-create', productPayload());
-    stubAggregate(640);
-    await deliver('inventory_levels-update', {
-      inventory_item_id: TEST_INVENTORY_ITEM_ID,
-      available: 640,
-      updated_at: '2026-09-11T14:00:00Z',
-    });
-
-    expect(await prisma.inventoryItem.count()).toBe(before);
-  });
 });
 
 describe('MANUAL products are never touched', () => {
@@ -754,13 +741,11 @@ describe('MANUAL products are never touched', () => {
 });
 
 describe('shipped modules are unaffected', () => {
-  it('leaves Product, InventoryItem and every business table untouched', async () => {
+  it('leaves every business table untouched', async () => {
     // Captured first: the database also holds rows created through the app by
     // hand, so the claim is "a webhook changes nothing here", not "these
     // tables are empty".
     const before = {
-      product: await prisma.product.count(),
-      inventoryItem: await prisma.inventoryItem.count(),
       salesOrder: await prisma.salesOrder.count(),
       purchaseBill: await prisma.purchaseBill.count(),
       productEnquiry: await prisma.productEnquiry.count(),
@@ -769,8 +754,6 @@ describe('shipped modules are unaffected', () => {
     await deliver('products-create', productPayload());
     await deliver('products-delete', { id: TEST_PRODUCT_ID });
 
-    expect(await prisma.product.count()).toBe(before.product);
-    expect(await prisma.inventoryItem.count()).toBe(before.inventoryItem);
     expect(await prisma.salesOrder.count()).toBe(before.salesOrder);
     expect(await prisma.purchaseBill.count()).toBe(before.purchaseBill);
     expect(await prisma.productEnquiry.count()).toBe(before.productEnquiry);

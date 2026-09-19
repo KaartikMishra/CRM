@@ -248,12 +248,12 @@ describe('existing Sales rules still hold with the new fields present', () => {
     expect(parse({ quantity: 0, hsnCode: '7418' }).success).toBe(false);
   });
 
-  it('still leaves productId absent unless supplied', () => {
-    expect(firstItem({ hsnCode: '7418', gstRate: '18' }).productId).toBeUndefined();
+  it('still leaves rsProductId absent unless supplied', () => {
+    expect(firstItem({ hsnCode: '7418', gstRate: '18' }).rsProductId).toBeUndefined();
   });
 
-  it('still rejects a non-cuid productId', () => {
-    expect(parse({ productId: 'not-a-cuid', gstRate: '18' }).success).toBe(false);
+  it('still rejects a non-cuid rsProductId', () => {
+    expect(parse({ rsProductId: 'not-a-cuid', gstRate: '18' }).success).toBe(false);
   });
 
   it('validates an order that uses none of the new fields, exactly as before', () => {

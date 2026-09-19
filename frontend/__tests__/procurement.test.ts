@@ -17,12 +17,11 @@ import {
   createPurchaseBillSchema,
   createAllocationSchema,
   purchaseDelaySchema,
-  adjustInventorySchema,
+  mapPurchaseItemSchema,
 } from '@rs/shared';
 import {
   createVendorSchema,
   lineTotal,
-  linkPurchaseItemSchema,
   vendorSearchSchema,
 } from '@rs/shared';
 import type { SalesRequirementRow, ShortageRow } from '@rs/shared';
@@ -148,10 +147,18 @@ describe('allocation and delay contracts', () => {
     expect(purchaseDelaySchema.safeParse({}).success).toBe(false);
   });
 
-  it('requires a reason and a non-zero delta for a stock correction', () => {
-    expect(adjustInventorySchema.safeParse({ delta: -3, reason: 'breakage' }).success).toBe(true);
-    expect(adjustInventorySchema.safeParse({ delta: 0, reason: 'nothing' }).success).toBe(false);
-    expect(adjustInventorySchema.safeParse({ delta: 5 }).success).toBe(false);
+  /**
+   * Hand-correcting stock was the only writer of InventoryItem.onHand, and it
+   * is gone: RS Products owns CRM stock, and a second hand-maintained number
+   * beside it is exactly the disagreement this migration removes. The contract
+   * is absent from the shared package, so nothing can call it by accident.
+   */
+  it('no longer offers a Procurement stock-correction contract', async () => {
+    const shared = await import('@rs/shared');
+    expect('adjustInventorySchema' in shared).toBe(false);
+    expect('createProductSchema' in shared).toBe(false);
+    expect('updateProductSchema' in shared).toBe(false);
+    expect('putInCatalogueSchema' in shared).toBe(false);
   });
 });
 
@@ -206,7 +213,7 @@ describe('the bill line records what the vendor wrote', () => {
       items: [{ productName: 'Brass Lota', orderedQty: 5, receivedQty: 5, rate: '500.00' }],
     });
     expect(parsed.success).toBe(true);
-    if (parsed.success) expect(parsed.data.items[0]!.productId).toBeUndefined();
+    if (parsed.success) expect(parsed.data.items[0]!.rsProductId).toBeUndefined();
   });
 
   it('still accepts a catalogue link when one is known', () => {
@@ -278,9 +285,111 @@ describe('the figures the products table shows', () => {
     expect(standingQty(10, [{ quantity: 6 }, { quantity: 4 }])).toBe(0);
   });
 
-  it('links a purchase line to the catalogue by id, never by name', () => {
-    expect(linkPurchaseItemSchema.safeParse({ productId: 'ckd0000000000000000000001' }).success).toBe(true);
-    expect(linkPurchaseItemSchema.safeParse({ productId: 'Kansa Thali Set' }).success).toBe(false);
+  it('maps a purchase line by RsProduct id, never by name', () => {
+    expect(mapPurchaseItemSchema.safeParse({ rsProductId: 'ckd0000000000000000000001' }).success).toBe(true);
+    expect(mapPurchaseItemSchema.safeParse({ rsProductId: 'Kansa Thali Set' }).success).toBe(false);
+  });
+});
+
+/**
+ * Procurement's canonical product identity.
+ *
+ * One `RsProduct.id`, chosen by a person. The three things that are *not*
+ * identity — a SKU, a title, the vendor's wording — are asserted to be
+ * unacceptable here, because each of them looks like an identifier and none of
+ * them is: RS SKUs are nullable and repeat across products, and titles are not
+ * unique by design.
+ */
+describe('mapping a purchase line to RS Products', () => {
+  const RS_ID = 'ckd0000000000000000000001';
+
+  it('accepts an RsProduct id and nothing else', () => {
+    expect(mapPurchaseItemSchema.safeParse({ rsProductId: RS_ID }).success).toBe(true);
+    expect(mapPurchaseItemSchema.safeParse({}).success).toBe(false);
+  });
+
+  it('refuses a SKU, a title or the vendor’s wording as an identifier', () => {
+    for (const notAnId of ['RS2525', 'Kansa Thali Set', 'kansathaliset', '', '   ']) {
+      expect(mapPurchaseItemSchema.safeParse({ rsProductId: notAnId }).success, notAnId).toBe(false);
+    }
+  });
+
+  it('carries no variant concept at all', () => {
+    const parsed = mapPurchaseItemSchema.safeParse({
+      rsProductId: RS_ID,
+      variantId: RS_ID,
+      shopifyVariantId: 'gid://shopify/ProductVariant/1',
+      sku: 'RS2525',
+    });
+    expect(parsed.success).toBe(true);
+    // Anything beyond the product id is stripped, so it can never be persisted
+    // even by a hand-crafted request.
+    if (parsed.success) expect(Object.keys(parsed.data)).toEqual(['rsProductId']);
+  });
+
+  it('lets a bill line carry the RS mapping at entry, and equally not', () => {
+    const base = {
+      billNumber: 'INV-RS',
+      vendorId: 'ckd0000000000000000000000',
+      billType: 'CREDIT' as const,
+      billDate: '2026-09-18',
+    };
+    const line = { productName: 'Kansa Thali Set', orderedQty: 4, rate: '100.00' };
+
+    const mapped = createPurchaseBillSchema.safeParse({
+      ...base,
+      items: [{ ...line, rsProductId: RS_ID }],
+    });
+    expect(mapped.success).toBe(true);
+    if (mapped.success) expect(mapped.data.items[0]!.rsProductId).toBe(RS_ID);
+
+    // A bill is typed from paper, often before anyone has decided what a line
+    // refers to. Recording it must not depend on that decision.
+    const unmapped = createPurchaseBillSchema.safeParse({ ...base, items: [line] });
+    expect(unmapped.success).toBe(true);
+    if (unmapped.success) expect(unmapped.data.items[0]!.rsProductId).toBeUndefined();
+  });
+
+  it('refuses a malformed RS id on a bill line', () => {
+    const parsed = createPurchaseBillSchema.safeParse({
+      billNumber: 'INV-RS2',
+      vendorId: 'ckd0000000000000000000000',
+      billType: 'CREDIT' as const,
+      billDate: '2026-09-18',
+      items: [{ productName: 'x', orderedQty: 1, rate: '1.00', rsProductId: 'RS2525' }],
+    });
+    expect(parsed.success).toBe(false);
+  });
+});
+
+/**
+ * What the shortage board says about stock.
+ *
+ * The column reports RS Products' figure, and `null` where there is none. The
+ * distinction matters: "nobody has said what these goods are" and "there are
+ * none in stock" are different facts, and a zero would state the second when
+ * only the first is true.
+ */
+describe('the shortage board reads stock from RS Products', () => {
+  it('keys a row mapped only to RS Products by its RsProduct id', () => {
+    const row = shortage({ rsProduct: rsProduct('ckr1', 'Brass Diya'), rsStockQty: 12 });
+    expect(rowKey(row)).toBe('rs:ckr1');
+  });
+
+  it('names an RS-only row by its RS title', () => {
+    const row = shortage({ productName: '', rsProduct: rsProduct('ckr1', 'Brass Diya') });
+    expect(displayName(row)).toBe('Brass Diya');
+  });
+
+  it('distinguishes "no RS product" from "none in stock"', () => {
+    expect(shortage({}).rsStockQty).toBeNull();
+    expect(shortage({ rsProduct: rsProduct('ckr1', 'x'), rsStockQty: 0 }).rsStockQty).toBe(0);
+  });
+
+  it('never nets stock off the shortage', () => {
+    // shortageQty is totalRequired, whatever stock exists beside it.
+    const row = shortage({ totalRequired: 5, shortageQty: 5, rsStockQty: 100 });
+    expect(row.shortageQty).toBe(row.totalRequired);
   });
 });
 
@@ -291,11 +400,11 @@ describe('the combined Map Quantity flow', () => {
    * behind them are unchanged and still separate, which is what keeps the
    * safety rules intact while the UI gets simpler.
    */
-  it('links by catalogue id, never by the name on the bill', () => {
-    expect(linkPurchaseItemSchema.safeParse({ productId: 'ckd0000000000000000000001' }).success).toBe(true);
+  it('maps by RsProduct id, never by the name on the bill', () => {
+    expect(mapPurchaseItemSchema.safeParse({ rsProductId: 'ckd0000000000000000000001' }).success).toBe(true);
     // The vendor's wording is not an identifier and must never be accepted as one.
     for (const notAnId of ['brassdinnerset', 'Brass Dinner Set', 'kansa thali set', '']) {
-      expect(linkPurchaseItemSchema.safeParse({ productId: notAnId }).success, notAnId).toBe(false);
+      expect(mapPurchaseItemSchema.safeParse({ rsProductId: notAnId }).success, notAnId).toBe(false);
     }
   });
 
@@ -345,29 +454,33 @@ describe('adding a vendor without leaving the bill form', () => {
  */
 const shortage = (over: Partial<ShortageRow>): ShortageRow => ({
   productName: 'Kansa Thali Set',
-  product: null,
+  rsProduct: null,
   linked: false,
+  sku: null,
   totalRequired: 5,
   totalAllocated: 0,
-  onHand: 0,
+  // Two stock figures, never one. CRM stock is the hand-maintained count and RS
+  // stock is Shopify's sellable quantity; the row carries both separately.
+  crmStockQty: null,
+  rsStockQty: null,
   shortageQty: 5,
   standingQty: 0,
   ...over,
 });
 
-const product = (id: string, name: string): ShortageRow['product'] => ({
+const rsProduct = (id: string, title: string): ShortageRow['rsProduct'] => ({
   id,
-  name,
-  description: null,
-  isActive: true,
-  onHand: 0,
-  createdAt: '2026-01-01T00:00:00.000Z',
+  title,
+  sku: null,
+  imageUrl: null,
+  crmStockQty: 0,
+  rsStockQty: 0,
 });
 
 describe('every shortage row renders under a stable, unique key', () => {
-  it('keys a catalogued row by product id', () => {
-    const row = shortage({ product: product('ckp1', 'Kansa Thali Set'), linked: true });
-    expect(rowKey(row)).toBe('product:ckp1');
+  it('keys a mapped row by RS Product id', () => {
+    const row = shortage({ rsProduct: rsProduct('ckp1', 'Kansa Thali Set'), linked: true });
+    expect(rowKey(row)).toBe('rs:ckp1');
   });
 
   it('keys a free-text row by its exact name', () => {
@@ -382,20 +495,20 @@ describe('every shortage row renders under a stable, unique key', () => {
 
   it('prefers product identity even when linked disagrees with the data', () => {
     // linked says false, but a product is present: the data wins.
-    const row = shortage({ product: product('ckp2', 'Brass Diya'), linked: false });
-    expect(rowKey(row)).toBe('product:ckp2');
+    const row = shortage({ rsProduct: rsProduct('ckp2', 'Brass Diya'), linked: false });
+    expect(rowKey(row)).toBe('rs:ckp2');
   });
 
   it('falls back to the name when linked claims a product that is not there', () => {
     // The case the old `row.product!.id` assertion could not survive.
-    const row = shortage({ productName: 'Ganesha Idol', product: null, linked: true });
+    const row = shortage({ productName: 'Ganesha Idol', rsProduct: null, linked: true });
     expect(rowKey(row)).toBe('name:Ganesha Idol');
   });
 
   it('gives a mixed board of nullable-product rows all-unique keys', () => {
     const rows: ShortageRow[] = [
-      shortage({ product: product('ckp1', 'Kansa Thali Set'), linked: true }),
-      shortage({ product: product('ckp2', 'Brass Diya'), linked: true }),
+      shortage({ rsProduct: rsProduct('ckp1', 'Kansa Thali Set'), linked: true }),
+      shortage({ rsProduct: rsProduct('ckp2', 'Brass Diya'), linked: true }),
       shortage({ productName: 'Ganesha Idol' }),
       shortage({ productName: 'Silver Bowl' }),
       // Two spellings stay two rows: the server never normalises, nor does the key.
@@ -407,7 +520,7 @@ describe('every shortage row renders under a stable, unique key', () => {
   });
 
   it('drops a row with no identity at all rather than inventing one', () => {
-    const row = shortage({ productName: '', product: null });
+    const row = shortage({ productName: '', rsProduct: null });
     expect(rowKey(row)).toBeNull();
   });
 
@@ -430,7 +543,7 @@ describe('every shortage row renders under a stable, unique key', () => {
  */
 describe('the product column shows a name for every row', () => {
   it('shows the catalogue name for a linked row', () => {
-    const row = shortage({ product: product('ckp1', 'Kansa Thali Set'), linked: true });
+    const row = shortage({ rsProduct: rsProduct('ckp1', 'Kansa Thali Set'), linked: true });
     expect(displayName(row)).toBe('Kansa Thali Set');
   });
 
@@ -441,7 +554,7 @@ describe('the product column shows a name for every row', () => {
   it('shows the catalogue name even when the row carries no productName', () => {
     // The shape an older server sends: the name lives only on the product.
     const row = shortage({
-      product: product('ckp1', 'Brass Diya'),
+      rsProduct: rsProduct('ckp1', 'Brass Diya'),
       productName: undefined as unknown as string,
       linked: true,
     });
@@ -451,8 +564,8 @@ describe('the product column shows a name for every row', () => {
 
   it('never blanks a row that has a name on either field', () => {
     const rows: ShortageRow[] = [
-      shortage({ product: product('ckp1', 'Kansa Thali Set'), linked: true }),
-      shortage({ product: product('ckp2', 'Brass Diya'), productName: undefined as unknown as string }),
+      shortage({ rsProduct: rsProduct('ckp1', 'Kansa Thali Set'), linked: true }),
+      shortage({ rsProduct: rsProduct('ckp2', 'Brass Diya'), productName: undefined as unknown as string }),
       shortage({ productName: 'Ganesha Idol' }),
       shortage({ productName: 'thali set brass' }),
     ];
@@ -468,7 +581,7 @@ describe('the product column shows a name for every row', () => {
   it('prefers the catalogue name when both fields are present', () => {
     // Product Master is the authority on what a catalogued product is called.
     const row = shortage({
-      product: product('ckp1', 'Kansa Thali Set'),
+      rsProduct: rsProduct('ckp1', 'Kansa Thali Set'),
       productName: 'kansa thali set',
       linked: true,
     });
@@ -645,16 +758,16 @@ describe('the Map Quantity catalogue picker searches the whole active catalogue'
     expect(catalogue.find((p) => p.id === 'p8')!.name).toBe('Ganesha Idol');
   });
 
-  it('links by product id, so a differently spelled bill name survives', () => {
+  it('maps by product id, so a differently spelled bill name survives', () => {
     // What the link call carries is the id; productName is never an argument.
     const billLine = { productName: 'ganesh iDol', productId: null as string | null };
     const chosen = catalogue.find((p) => p.name === 'Ganesha Idol')!;
     const linked = { ...billLine, productId: chosen.id };
     expect(linked.productId).toBe('p8');
     expect(linked.productName).toBe('ganesh iDol');
-    expect(linkPurchaseItemSchema.safeParse({ productId: 'ckd0000000000000000000001' }).success).toBe(true);
+    expect(mapPurchaseItemSchema.safeParse({ rsProductId: 'ckd0000000000000000000001' }).success).toBe(true);
     // A name is not an acceptable identifier for the link endpoint.
-    expect(linkPurchaseItemSchema.safeParse({ productId: 'Ganesha Idol' }).success).toBe(false);
+    expect(mapPurchaseItemSchema.safeParse({ rsProductId: 'Ganesha Idol' }).success).toBe(false);
   });
 });
 
@@ -741,7 +854,7 @@ const salesRow = (over: Partial<SalesRequirementRow>): SalesRequirementRow => {
     orderNumber: 'rsm1',
     customerName: 'Puttu',
     productName: 'Ganesha Idol',
-    productId: null,
+    rsProductId: null,
     linked: false,
     requiredQty,
     alreadyFulfilled,
@@ -1019,87 +1132,16 @@ describe('Put in Catalogue is offered only when nothing represents the product',
   });
 });
 
-/**
- * Read-side product resolution on the shortage board.
+/*
+ * Read-side name folding on the shortage board is gone.
  *
  * A purchase line reading "Brasscooker" and a catalogue entry reading "Brass
- * Cooker" fold to one key, so they belong on one row. Resolving is a *read*:
- * the row displays under the product it plainly names while the database still
- * records the line as unlinked, until somebody links it deliberately.
+ * Cooker" used to fold to one key, against the legacy catalogue's normalised
+ * names. With one product identity the board keys on `RsProduct.id` alone: two
+ * spellings stay two rows until somebody maps them, because folding them is an
+ * identity decision taken from a string and this board is read by people
+ * deciding what to buy.
  */
-type Cat2 = { id: string; name: string; isActive: boolean };
-
-/** The service's key rule, applied the way getShortages applies it. */
-const shortageKey = (
-  catalogue: Cat2[],
-  productId: string | null,
-  productName: string,
-): string => {
-  if (productId) return `product:${productId}`;
-  const key = normalizeProductName(productName);
-  const match = catalogue.find((p) => normalizeProductName(p.name) === key);
-  return match && match.isActive ? `product:${match.id}` : `name:${productName}`;
-};
-
-describe('the shortage board resolves free text to the catalogue', () => {
-  const catalogue: Cat2[] = [
-    { id: 'pc', name: 'Brass Cooker', isActive: true },
-    { id: 'pr', name: 'Retired Kadhai', isActive: false },
-  ];
-
-  it('puts a linked sales line and an unlinked purchase line on ONE row', () => {
-    // The live case: rsm1 "Brass Cooker" linked, BL01 "Brasscooker" unlinked.
-    const sales = shortageKey(catalogue, 'pc', 'Brass Cooker');
-    const purchase = shortageKey(catalogue, null, 'Brasscooker');
-    expect(purchase).toBe(sales);
-    expect(purchase).toBe('product:pc');
-  });
-
-  it('resolves every spelling of the same product to that product', () => {
-    for (const spelling of ['Brass Cooker', 'Brasscooker', 'BRASS COOKER', 'brass cooker', 'Brass   Cooker', '  brass cooker  ']) {
-      expect(shortageKey(catalogue, null, spelling), spelling).toBe('product:pc');
-    }
-  });
-
-  it('keeps a genuinely different name as free text', () => {
-    expect(shortageKey(catalogue, null, 'Brass Cooker 2')).toBe('name:Brass Cooker 2');
-    expect(shortageKey(catalogue, null, 'Brass Kadhai')).toBe('name:Brass Kadhai');
-  });
-
-  it('does not resolve to an inactive product', () => {
-    // Retired stock cannot be allocated, so the line stays visible as free text
-    // rather than folding into something nobody can act on.
-    expect(shortageKey(catalogue, null, 'retiredkadhai')).toBe('name:retiredkadhai');
-  });
-
-  it('never rewrites the name it read', () => {
-    const before = catalogue.map((p) => p.name);
-    shortageKey(catalogue, null, 'BRASSCOOKER');
-    expect(catalogue.map((p) => p.name)).toEqual(before);
-    // The bill keeps its own wording; only the key is shared.
-    const billName = 'Brasscooker';
-    expect(shortageKey(catalogue, null, billName)).toBe('product:pc');
-    expect(billName).toBe('Brasscooker');
-  });
-
-  it('offers the resolved product for an unlinked purchase line', () => {
-    // What the Map Quantity button now shows instead of "Different product".
-    const entryFor = (name: string): Cat2 | undefined => {
-      const key = normalizeProductName(name);
-      return catalogue.find((p) => normalizeProductName(p.name) === key);
-    };
-    expect(entryFor('Brasscooker')?.id).toBe('pc');
-    expect(entryFor('Brasscooker')?.name).toBe('Brass Cooker');
-    expect(entryFor('Unknown Thing')).toBeUndefined();
-  });
-
-  it('caps the allocation input at min(pending, standing)', () => {
-    // The live case: sales pending 5, purchase standing 8 → at most 5.
-    expect(Math.min(5, 8)).toBe(5);
-    expect(Math.min(0, 8)).toBe(0);
-    expect(Math.min(5, 3)).toBe(3);
-  });
-});
 
 /**
  * What "Allocated" counts on the shortage board.

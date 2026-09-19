@@ -13,9 +13,9 @@ import {
 import { StandingQty } from './procurement-badges';
 
 /**
- * The row's identity, mirroring how the server keys demand.
+ * The row's identity, mirroring how the server keys demand and supply.
  *
- *   product:<id>   a catalogue-linked requirement
+ *   rs:<id>        a line naming an RS Product
  *   name:<text>    free text, keyed by the exact string on the line
  *
  * Read from the identity fields themselves rather than from `linked`. The flag
@@ -33,7 +33,7 @@ import { StandingQty } from './procurement-badges';
  * lines and has no single one to point at.
  */
 export function rowKey(row: ShortageRow): string | null {
-  if (row.product) return `product:${row.product.id}`;
+  if (row.rsProduct) return `rs:${row.rsProduct.id}`;
   if (row.productName) return `name:${row.productName}`;
   return null;
 }
@@ -42,14 +42,14 @@ export function rowKey(row: ShortageRow): string | null {
  * What to call the row.
  *
  * Both fields can carry the name, and which one does depends on the row: a
- * catalogued row has it on the Product, a free-text row has it on the line. So
- * neither field alone is sufficient — reading only `productName` blanks every
- * catalogued row, and reading only `product?.name` blanks every free-text one.
- * Taking the first that is present displays both, and leaves the component
- * working against either shape rather than only the newest one.
+ * mapped row has it on the RS Product, a free-text row has it on the line. So
+ * neither alone is sufficient — reading only `productName` blanks every mapped
+ * row, and reading only `rsProduct?.title` blanks every free-text one. Taking
+ * the first that is present displays both, and leaves the component working
+ * against either shape rather than only the newest one.
  */
 export function displayName(row: ShortageRow): string {
-  return row.product?.name ?? row.productName ?? '';
+  return row.rsProduct?.title ?? row.productName ?? '';
 }
 
 /**
@@ -79,7 +79,7 @@ export function ShortageBoard({ rows }: { rows: ShortageRow[] }) {
       <Card>
         <CardContent className="flex items-center gap-3 p-5 text-sm text-muted">
           <PackageSearch className="size-4 shrink-0" />
-          Nothing outstanding — no open order needs stock that is not already on hand.
+          Nothing to buy — every open order&apos;s outstanding demand is covered by CRM stock.
         </CardContent>
       </Card>
     );
@@ -89,15 +89,15 @@ export function ShortageBoard({ rows }: { rows: ShortageRow[] }) {
 
   return (
     <section className="flex flex-col gap-3">
-      <div className="flex items-baseline justify-between">
+      <div className="flex items-baseline justify-between gap-3">
         <h2 className="text-sm font-semibold uppercase tracking-wider text-muted">
           Requirement vs stock
         </h2>
         {short.length > 0 && (
-          <span className="text-xs text-muted">
-            {short.length} product{short.length === 1 ? '' : 's'} short
-            {identified.some(({ row }) => !row.product && row.shortageQty > 0) &&
-              ' · some need catalogue mapping'}
+          <span className="text-right text-xs text-muted">
+            {short.length} product{short.length === 1 ? '' : 's'} needing stock
+            {identified.some(({ row }) => !row.rsProduct) &&
+              ' · some rows are not mapped to RS Products'}
           </span>
         )}
       </div>
@@ -107,8 +107,26 @@ export function ShortageBoard({ rows }: { rows: ShortageRow[] }) {
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead>Product</TableHead>
+              <TableHead>SKU</TableHead>
               <TableHead className="text-right">Required</TableHead>
-              <TableHead className="text-right">On hand</TableHead>
+              {/*
+                TWO stock columns, because there are two numbers.
+
+                  CRM stock  →  what the business has counted, kept by hand
+                  RS stock   →  Shopify's sellable quantity, overwritten by sync
+
+                A single column here used to carry the CRM figure under the label
+                "RS stock", which read as a fact about the storefront and was
+                not one. They are separate columns now and neither is derived
+                from the other; where they disagree, that is a real signal.
+
+                Both sit beside the shortage and neither is subtracted from it —
+                the shortage is what the open orders still need, and stock is
+                shared across all of them. CRM stock is the figure that decides
+                whether a row appears at all.
+              */}
+              <TableHead className="text-right">CRM stock</TableHead>
+              <TableHead className="text-right">RS stock</TableHead>
               <TableHead className="text-right">Allocated</TableHead>
               <TableHead className="text-right">Shortage</TableHead>
               <TableHead className="text-right">Standing</TableHead>
@@ -119,21 +137,46 @@ export function ShortageBoard({ rows }: { rows: ShortageRow[] }) {
               <TableRow key={key}>
                 <TableCell>
                   <span className="font-medium text-ink">{displayName(row)}</span>
-                  {!row.product && (
+                  {!row.rsProduct && (
                     /*
                       The demand is real and must be bought, so the row is here.
-                      What it cannot yet do is take part in inventory: there is
-                      no catalogue entry to hold stock against, which is why
-                      On hand reads as a dash rather than zero.
+                      What it cannot yet do is take part in allocation: nobody
+                      has said which product these goods are, and allocation
+                      matches on that identity alone — never on the wording.
                     */
                     <Badge variant="warning" className="ml-2 align-middle">
-                      Not in catalogue
+                      Not mapped
                     </Badge>
                   )}
                 </TableCell>
+                {/*
+                  Its own column rather than a suffix on the name: a buyer
+                  checking a delivery note reads down SKUs, and a value tucked
+                  after a title of unpredictable length cannot be read that way.
+                */}
+                <TableCell className="font-mono text-[11px] text-muted">
+                  {row.sku ?? <span className="text-faint">—</span>}
+                </TableCell>
                 <TableCell className="text-right tabular text-ink-2">{row.totalRequired}</TableCell>
+                {/*
+                  Null is a dash in both columns, never a zero. "No RS Product is
+                  mapped, so there is no stock figure to state" and "there are
+                  none in stock" are different facts, and a zero would conflate
+                  them — on an unmapped row the first is always what is true.
+                */}
                 <TableCell className="text-right tabular text-ink-2">
-                  {row.product ? row.onHand : <span className="text-muted">—</span>}
+                  {row.crmStockQty === null ? (
+                    <span className="text-muted">—</span>
+                  ) : (
+                    row.crmStockQty
+                  )}
+                </TableCell>
+                <TableCell className="text-right tabular text-ink-2">
+                  {row.rsStockQty === null ? (
+                    <span className="text-muted">—</span>
+                  ) : (
+                    row.rsStockQty
+                  )}
                 </TableCell>
                 <TableCell className="text-right tabular text-ink-2">{row.totalAllocated}</TableCell>
                 <TableCell className="text-right">

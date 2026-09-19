@@ -11,22 +11,24 @@
 import { Prisma } from '@prisma/client';
 import type { Request } from 'express';
 import type {
-  AdjustInventoryInput,
   AllocationView,
+  BillApprovalStatus,
   CreateAllocationInput,
-  CreateProductInput,
   CreatePurchaseBillInput,
   LinkOrderLineInput,
-  LinkPurchaseItemInput,
+  MapPurchaseItemInput,
   OrderRequirementView,
-  ProductListQuery,
-  ProductView,
   PurchaseBillDetail,
   PurchaseBillItemView,
   PurchaseBillListQuery,
   PurchaseBillSummary,
+  ProductChangeListQuery,
+  ProductChangeView,
   RecordFulfillmentInput,
-  PutInCatalogueInput,
+  RequestProductChangeInput,
+  ReviewProductChangeInput,
+  ReviewPurchaseBillInput,
+  RsProductRef,
   SalesRequirementQuery,
   SalesFulfillmentDetail,
   FulfillmentSource,
@@ -36,14 +38,15 @@ import type {
   ReceiveItemInput,
   ShortageRow,
   UpdateAllocationInput,
-  UpdateProductInput,
   UpdatePurchaseBillInput,
 } from '@rs/shared';
-import { addAmount, lineTotal, normalizeProductName } from '@rs/shared';
+import { addAmount, lineTotal } from '@rs/shared';
 import { prisma } from '../../config/database.js';
+import { crmStockOf, rsStockOf } from '../rs-product/rs-product.mapper.js';
 import { AppError } from '../../utils/AppError.js';
 import { recordAudit } from '../../services/audit.service.js';
 import type { AuthenticatedUser } from '../../middleware/requireAuth.js';
+import { resolvePermission } from '../../services/permission.service.js';
 import { canModifyAllocation } from '../../policies/procurement-access.js';
 import {
   allocatedQty,
@@ -55,13 +58,21 @@ import {
   totalFulfilled,
 } from './procurement.calc.js';
 import * as repo from './procurement.repository.js';
-import * as resolver from './procurement.resolver.js';
 
 /** Neon is a network hop away; the same budget the enquiry module uses. */
 const TX_OPTIONS = { timeout: 15_000, maxWait: 10_000 } as const;
 
-const productNotFound = (): AppError =>
-  AppError.notFound('PRODUCT_NOT_FOUND', 'That product could not be found.');
+/**
+ * Also what a ShopifyVariant id gets.
+ *
+ * Variant ids and product ids are both cuids, so a variant id is a
+ * well-formed value that simply names no RsProduct — and the lookup that
+ * rejects it is the same one that rejects a deleted product. Procurement has no
+ * variant concept to give a more specific answer with, and inventing one would
+ * imply variants are a thing it maps to.
+ */
+const rsProductNotFound = (): AppError =>
+  AppError.notFound('RS_PRODUCT_NOT_FOUND', 'That RS Product could not be found.');
 const billNotFound = (): AppError =>
   AppError.notFound('PURCHASE_BILL_NOT_FOUND', 'That purchase bill could not be found.');
 const itemNotFound = (): AppError =>
@@ -73,24 +84,67 @@ const allocationNotFound = (): AppError =>
 //  Projections
 // ---------------------------------------------------------------------------
 
-type ProductRow = {
+type RsProductRow = {
   id: string;
-  name: string;
-  description: string | null;
-  isActive: boolean;
-  createdAt: Date;
-  inventory: { onHand: number } | null;
+  title: string;
+  variants: { sku: string | null; crmStockQty: number; inventoryQty: number }[];
+  images: { url: string }[];
 };
 
-function toProductView(row: ProductRow): ProductView {
+/**
+ * An RS Product as Procurement states it: one product, one SKU, two numbers.
+ *
+ * The variants are folded away here and never travel further. Both stock
+ * figures come from the RS Products module's own helpers rather than sums
+ * written out again, so what Procurement displays is by construction what the
+ * RS Products catalogue displays — not a second opinion about the same stock.
+ *
+ * TWO figures, and they are not interchangeable:
+ *
+ *   crmStockQty  ← crmStockOf(variants)  ← ShopifyVariant.crmStockQty
+ *                  CRM Stock: counted by hand, never touched by a sync.
+ *   rsStockQty   ← rsStockOf(variants)   ← ShopifyVariant.inventoryQty
+ *                  RS Product Stock: Shopify's sellable count, overwritten by
+ *                  every sync pass and every inventory webhook.
+ *
+ * They are carried separately all the way to the screen, under separate labels,
+ * because they answer different questions and routinely disagree. Neither is
+ * ever computed from the other, and neither stands in for the other.
+ *
+ * The SKU is the first variant's, matching how `RsProductListRow` picks one.
+ * It is shown so a person can recognise the product; nothing identifies by it.
+ */
+function toRsProductRef(row: RsProductRow): RsProductRef {
   return {
     id: row.id,
-    name: row.name,
-    description: row.description,
-    isActive: row.isActive,
-    // A product with no stock row has never been counted, which is zero.
-    onHand: row.inventory?.onHand ?? 0,
-    createdAt: row.createdAt.toISOString(),
+    title: row.title,
+    sku: row.variants[0]?.sku ?? null,
+    imageUrl: row.images[0]?.url ?? null,
+    crmStockQty: crmStockOf(row.variants),
+    rsStockQty: rsStockOf(row.variants),
+  };
+}
+
+/** One re-mapping request as the API states it. */
+type ProductChangeRow = Awaited<ReturnType<typeof repo.findProductChanges>>[number];
+
+function toProductChangeView(row: ProductChangeRow): ProductChangeView {
+  return {
+    id: row.id,
+    billId: row.billId,
+    billNumber: row.bill.billNumber,
+    itemId: row.itemId,
+    productName: row.item.productName,
+    fromRsProduct: toRsProductRef(row.fromRsProduct),
+    toRsProduct: toRsProductRef(row.toRsProduct),
+    reason: row.reason,
+    status: row.status,
+    requestedBy: row.requestedBy,
+    requestedAt: row.requestedAt.toISOString(),
+    reviewedBy: row.reviewedBy,
+    reviewedAt: row.reviewedAt?.toISOString() ?? null,
+    reviewNote: row.reviewNote,
+    allocatedQty: allocatedQty(row.item.allocations),
   };
 }
 
@@ -111,7 +165,7 @@ function toBillItemView(item: BillRow['items'][number]): PurchaseBillItemView {
     id: item.id,
     lineNo: item.lineNo,
     productName: item.productName,
-    product: item.product ? toProductView(item.product) : null,
+    rsProduct: item.rsProduct ? toRsProductRef(item.rsProduct) : null,
     orderedQty: item.orderedQty,
     receivedQty: item.receivedQty,
     rate,
@@ -144,6 +198,15 @@ function toBillItemView(item: BillRow['items'][number]): PurchaseBillItemView {
       ),
       createdAt: a.createdAt.toISOString(),
     })),
+    /*
+      A pending request changes nothing, so `rsProduct` above is still the live
+      mapping. This is carried beside it so the line can say it is awaiting a
+      decision — never instead of it, which would show a proposed product as
+      though it had already been applied.
+    */
+    pendingProductChange: item.productChanges[0]
+      ? toProductChangeView(item.productChanges[0])
+      : null,
   };
 }
 
@@ -157,6 +220,10 @@ function toBillDetail(row: BillRow): PurchaseBillDetail {
     status: row.status,
     billDate: row.billDate.toISOString(),
     expectedBy: row.expectedBy?.toISOString() ?? null,
+    approvalStatus: row.approvalStatus,
+    reviewedBy: row.reviewedBy,
+    reviewedAt: row.reviewedAt?.toISOString() ?? null,
+    reviewNote: row.reviewNote,
     isDelayed: row.isDelayed,
     delayReason: row.delayReason,
     notes: row.notes,
@@ -178,6 +245,10 @@ function toBillSummary(row: BillRow): PurchaseBillSummary {
     vendor: detail.vendor,
     billType: detail.billType,
     status: detail.status,
+    approvalStatus: detail.approvalStatus,
+    reviewedBy: detail.reviewedBy,
+    reviewedAt: detail.reviewedAt,
+    reviewNote: detail.reviewNote,
     billDate: detail.billDate,
     expectedBy: detail.expectedBy,
     isDelayed: detail.isDelayed,
@@ -188,146 +259,21 @@ function toBillSummary(row: BillRow): PurchaseBillSummary {
   };
 }
 
-// ---------------------------------------------------------------------------
-//  Products & inventory
-// ---------------------------------------------------------------------------
-
-export async function listProducts(query: ProductListQuery): Promise<ProductView[]> {
-  const where: Prisma.ProductWhereInput = {
-    ...(query.isActive === undefined ? {} : { isActive: query.isActive }),
-    ...(query.q ? { name: { contains: query.q, mode: 'insensitive' as const } } : {}),
-  };
-  return (await repo.findProducts(where, query.limit)).map(toProductView);
-}
-
-export async function createProduct(
-  req: Request,
-  actorId: string,
-  input: CreateProductInput,
-): Promise<ProductView> {
-  // Checked on the folded name, not the raw one: "Kansa Dinner Set" must
-  // collide with an existing "kansa dinner set" rather than becoming a second
-  // product beside it. The unique index refuses it either way; this is here to
-  // answer with a sentence instead of a constraint violation.
-  const existing = await repo.findProductByNormalizedName(normalizeProductName(input.name));
-  if (existing) {
-    throw AppError.conflict(
-      existing.isActive ? 'PRODUCT_EXISTS' : 'PRODUCT_EXISTS_INACTIVE',
-      existing.isActive
-        ? `“${existing.name}” is already in the catalogue.`
-        : `“${existing.name}” is already in the catalogue but is inactive.`,
-    );
-  }
-
-  const created = await prisma.product.create({
-    data: {
-      name: input.name,
-      normalizedName: normalizeProductName(input.name),
-      description: input.description ?? null,
-      // Every product gets a stock row at creation, so nothing has to cope
-      // later with a product that has no inventory record.
-      inventory: { create: { onHand: input.onHand ?? 0 } },
-    },
-    select: repo.productSelect,
-  });
-
-  await recordAudit(req, {
-    action: 'procurement.product.created',
-    entityType: 'Product',
-    entityId: created.id,
-    actorId,
-    newValue: { name: created.name, onHand: input.onHand ?? 0 },
-  });
-
-  return toProductView(created);
-}
-
-export async function updateProduct(
-  req: Request,
-  actorId: string,
-  id: string,
-  input: UpdateProductInput,
-): Promise<ProductView> {
-  if (!(await repo.findProduct(id))) throw productNotFound();
-
-  if (input.name) {
-    const clash = await repo.findProductByName(input.name);
-    if (clash && clash.id !== id) {
-      throw AppError.conflict('PRODUCT_EXISTS', 'A product with that name already exists.');
-    }
-  }
-
-  const updated = await prisma.product.update({
-    where: { id },
-    data: {
-      ...(input.name !== undefined ? { name: input.name } : {}),
-      ...(input.description !== undefined ? { description: input.description } : {}),
-      ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
-    },
-    select: repo.productSelect,
-  });
-
-  await recordAudit(req, {
-    action: 'procurement.product.updated',
-    entityType: 'Product',
-    entityId: id,
-    actorId,
-    newValue: input as Prisma.InputJsonValue,
-  });
-
-  return toProductView(updated);
-}
-
-/**
- * Corrects stock by a signed delta, under a row lock.
+/*
+ * Every legacy catalogue operation this module had is gone: listing products,
+ * creating one, editing one, and correcting stock by hand.
  *
- * A delta rather than an absolute count so two people correcting the same
- * shelf compose instead of overwriting each other with stale totals. The floor
- * at zero is also a database CHECK, so a racing pair cannot drive it negative
- * between the read and the write.
+ * Procurement maintains neither a catalogue nor a stock figure of its own. RS
+ * Products is the catalogue, and a product that is not in it is created there.
+ * `adjustInventory` was the only writer of InventoryItem.onHand, and a second
+ * hand-maintained stock number beside RS Products' own is precisely what this
+ * migration set out to remove.
+ *
+ * `listProducts` went too. It survived one phase longer because allocation
+ * reconciled a purchase line against a SalesOrderItem by legacy Product
+ * identity, and an order line written as free text needed a legacy entry to be
+ * linked to. Both sides name an RsProduct now, so there is nothing to list.
  */
-export async function adjustInventory(
-  req: Request,
-  actorId: string,
-  productId: string,
-  input: AdjustInventoryInput,
-): Promise<ProductView> {
-  const result = await prisma.$transaction(async (tx) => {
-    await repo.lockInventory(tx, productId);
-
-    const product = await repo.findProduct(productId, tx);
-    if (!product) throw productNotFound();
-
-    const current = product.inventory?.onHand ?? 0;
-    const next = current + input.delta;
-    if (next < 0) {
-      throw AppError.badRequest(
-        'INSUFFICIENT_STOCK',
-        `That would leave ${next} in stock. Only ${current} is on hand.`,
-      );
-    }
-
-    await tx.inventoryItem.upsert({
-      where: { productId },
-      update: { onHand: next },
-      create: { productId, onHand: next },
-    });
-
-    return { current, next };
-  }, TX_OPTIONS);
-
-  await recordAudit(req, {
-    action: 'procurement.inventory.adjusted',
-    entityType: 'Product',
-    entityId: productId,
-    actorId,
-    oldValue: { onHand: result.current },
-    newValue: { onHand: result.next, delta: input.delta, reason: input.reason },
-  });
-
-  const product = await repo.findProduct(productId);
-  return toProductView(product!);
-}
 
 // ---------------------------------------------------------------------------
 //  Purchase bills
@@ -339,6 +285,7 @@ export async function listBills(
   const where: Prisma.PurchaseBillWhereInput = {
     ...(query.vendorId ? { vendorId: query.vendorId } : {}),
     ...(query.status ? { status: query.status } : {}),
+    ...(query.approvalStatus ? { approvalStatus: query.approvalStatus } : {}),
     ...(query.billType ? { billType: query.billType } : {}),
     ...(query.isDelayed === undefined ? {} : { isDelayed: query.isDelayed }),
     ...(query.q
@@ -379,20 +326,60 @@ export async function createBill(
     throw AppError.notFound('VENDOR_NOT_FOUND', 'That vendor could not be found.');
   }
 
-  // Only the lines that named a catalogue product are checked; the rest are
-  // free text by design and are linked later, when stock is allocated.
-  const productIds = [
-    ...new Set(input.items.map((i) => i.productId).filter((v): v is string => Boolean(v))),
+  /*
+    The RS Products mapping, validated before anything is written.
+
+    Every id must name a real RsProduct. A ShopifyVariant id is a well-formed
+    cuid that names none, so it is refused here rather than stored — which is
+    the whole guarantee that no variant identity can reach this column.
+
+    Lines that name nothing are free text by design and are mapped later, from
+    the bill. Nothing is inferred from the vendor's wording or from a SKU.
+  */
+  const rsProductIds = [
+    ...new Set(input.items.map((i) => i.rsProductId).filter((v): v is string => Boolean(v))),
   ];
-  if (productIds.length > 0) {
-    const found = await prisma.product.findMany({
-      where: { id: { in: productIds }, isActive: true },
-      select: { id: true },
+  const titles = new Map<string, string>();
+  if (rsProductIds.length > 0) {
+    const found = await prisma.rsProduct.findMany({
+      where: { id: { in: rsProductIds } },
+      select: { id: true, title: true },
     });
-    if (found.length !== productIds.length) {
-      throw AppError.badRequest('PRODUCT_NOT_FOUND', 'One of those products could not be found.');
+    if (found.length !== rsProductIds.length) {
+      throw AppError.badRequest(
+        'RS_PRODUCT_NOT_FOUND',
+        'One of those RS Products could not be found.',
+      );
     }
+    for (const p of found) titles.set(p.id, p.title);
   }
+
+  /*
+    What each line is called, now that nobody types it.
+
+    The UI has no free-text product-name field any more, so an ordinary new bill
+    arrives carrying only `rsProductId` per line, and the description comes from
+    the catalogue entry the person actually picked. A caller that does send
+    `productName` — a historical import, or a line being recorded from a
+    document before its product exists in RS Products — keeps its own wording
+    verbatim; the column is the record of the paper and this never overwrites it.
+
+    Nothing is inferred in either direction: a title is only ever taken from a
+    product somebody deliberately selected, and a typed name is never matched
+    against the catalogue to find one.
+  */
+  const nameFor = (item: (typeof input.items)[number]): string => {
+    const name = item.productName ?? (item.rsProductId ? titles.get(item.rsProductId) : undefined);
+    if (!name) {
+      // Unreachable through the schema, which refuses a line carrying neither.
+      // Kept so a future caller cannot create a line that describes nothing.
+      throw AppError.badRequest(
+        'PRODUCT_NAME_REQUIRED',
+        'Every line needs an RS Product or a product name.',
+      );
+    }
+    return name;
+  };
 
   const id = await prisma.$transaction(async (tx) => {
     const bill = await tx.purchaseBill.create({
@@ -408,8 +395,8 @@ export async function createBill(
         items: {
           create: input.items.map((item, index) => ({
             lineNo: index + 1,
-            productName: item.productName,
-            productId: item.productId ?? null,
+            productName: nameFor(item),
+            rsProductId: item.rsProductId ?? null,
             orderedQty: item.orderedQty,
             receivedQty: item.receivedQty,
             rate: item.rate,
@@ -438,7 +425,12 @@ export async function createBill(
     entityType: 'PurchaseBill',
     entityId: id,
     actorId: actor.id,
-    newValue: { billNumber: input.billNumber, vendorId: input.vendorId, lines: input.items.length },
+    newValue: {
+      billNumber: input.billNumber,
+      vendorId: input.vendorId,
+      lines: input.items.length,
+      rsMapped: input.items.filter((i) => i.rsProductId).length,
+    },
   });
 
   return getBill(id);
@@ -524,6 +516,17 @@ export async function receiveItem(
       where: { id: billId },
       data: { status: allIn ? 'RECEIVED' : 'OPEN' },
     });
+
+    /*
+      A further receipt credits only the NEW units.
+
+      The target is recomputed from the new receivedQty and the delta taken
+      against what this line already stands for, so receiving 5 and later 2 more
+      adds 4 then 2 — never 5 then 7. On a pending bill the target stays zero and
+      this does nothing, which is the rule that receiving an unapproved bill
+      moves no stock.
+    */
+    await reconcileLineStock(tx, itemId);
   }, TX_OPTIONS);
 
   await recordAudit(req, {
@@ -535,6 +538,269 @@ export async function receiveItem(
   });
 
   return getBill(billId);
+}
+
+// ---------------------------------------------------------------------------
+//  CRM stock
+// ---------------------------------------------------------------------------
+
+/**
+ * Brings one purchase line's contribution to CRM stock up to date.
+ *
+ * THE SINGLE STOCK MUTATION POINT. Every event that could change what a line
+ * stands for — approving the bill, receiving more goods, allocating, releasing
+ * an allocation, mapping the line to a product — ends by calling this, and
+ * nothing else in Procurement writes `crmStockQty` at all. One function means
+ * the rule is stated once and cannot be phrased differently in two places.
+ *
+ * The rule:
+ *
+ *     target = approved && mapped ? receivedQty − Σ allocations : 0
+ *     delta  = target − stockedQty
+ *
+ * `target` is the business rule directly: only an approved bill contributes,
+ * and only its SURPLUS — the received goods not already committed to a customer
+ * requirement. Received 5 against a requirement of 1 contributes 4.
+ *
+ * `delta` is what makes it safe. Because every call recomputes the target from
+ * the ledger and moves stock by the difference, the operation is idempotent:
+ *
+ *   - a repeated or retried request computes delta 0 and moves nothing;
+ *   - a further receipt credits only the new units, never the cumulative total;
+ *   - releasing an allocation restores exactly what it consumed, exactly once;
+ *   - a rejected or pending bill has target 0, so it contributes nothing, and a
+ *     bill that somehow held stock would give it back rather than keep it.
+ *
+ * It also cannot strand stock: a line only ever removes what it itself added,
+ * so procurement can never push a product below the count someone maintained by
+ * hand in RS Products.
+ *
+ * MUST be called with the line's row already locked by the caller — every call
+ * site takes `lockBillItem` first — because the target is read and the stocked
+ * figure written as a pair, and two concurrent allocations against one line
+ * would otherwise both compute from the same stale total.
+ *
+ * Exported solely so test fixtures that approve a bill directly can run the
+ * same reconciliation the service runs, rather than restating this arithmetic
+ * in a helper where it could silently drift from the rule it is meant to mirror.
+ */
+export async function reconcileLineStock(
+  tx: Prisma.TransactionClient,
+  itemId: string,
+): Promise<void> {
+  const line = await repo.findLineForStock(tx, itemId);
+  if (!line) return;
+
+  /*
+    An unmapped line names no product, so there is nowhere to put its goods —
+    it holds no stock and its target is zero. The same is true of a bill that is
+    pending or rejected: neither contributes until somebody approves it.
+  */
+  const eligible = line.bill.approvalStatus === 'APPROVED' && line.rsProductId !== null;
+  const target = eligible
+    ? Math.max(0, line.receivedQty - allocatedQty(line.allocations))
+    : 0;
+
+  const delta = target - line.stockedQty;
+  if (delta === 0) return;
+
+  /*
+    Which product the movement belongs to.
+
+    When a line is being un-stocked because it lost its mapping, the stock has
+    to come off the product it was credited to, which is no longer the line's
+    own. Callers that move a mapping therefore reconcile to zero BEFORE the
+    change and reconcile again after, so this only ever sees a line whose
+    current product is the right one.
+  */
+  if (!line.rsProductId) {
+    // Nothing to credit against and nothing previously credited, since an
+    // unmapped line can never have been eligible. Record the target and stop.
+    await tx.purchaseBillItem.update({ where: { id: itemId }, data: { stockedQty: target } });
+    return;
+  }
+
+  const variantId = await repo.firstVariantId(tx, line.rsProductId);
+  if (!variantId) {
+    /*
+      A product with no variant has nowhere to hold a count — `crmStockQty` is a
+      variant column and the product figure is the sum across variants. Refused
+      loudly rather than silently dropping the goods, which would leave the
+      bill claiming stock the catalogue does not have. No such product exists in
+      the catalogue today; Shopify always sends at least one variant.
+    */
+    throw AppError.conflict(
+      'RS_PRODUCT_HAS_NO_VARIANT',
+      'That RS Product has no variant to hold stock against. Add one in RS Products first.',
+    );
+  }
+
+  await repo.moveCrmStock(tx, variantId, delta);
+  await tx.purchaseBillItem.update({ where: { id: itemId }, data: { stockedQty: target } });
+}
+
+/**
+ * Takes a line's contribution back off the product it is currently credited to.
+ *
+ * Needed only when a line's mapping is about to move. `reconcileLineStock`
+ * always works against the line's *current* product, so changing `rsProductId`
+ * first would credit the new product while leaving the old one holding stock
+ * nobody can account for. Releasing first and reconciling after keeps every
+ * movement attached to the product it actually belongs to.
+ */
+async function releaseLineStock(tx: Prisma.TransactionClient, itemId: string): Promise<void> {
+  const line = await repo.findLineForStock(tx, itemId);
+  if (!line || line.stockedQty === 0) return;
+
+  if (line.rsProductId) {
+    const variantId = await repo.firstVariantId(tx, line.rsProductId);
+    if (variantId) await repo.moveCrmStock(tx, variantId, -line.stockedQty);
+  }
+
+  await tx.purchaseBillItem.update({ where: { id: itemId }, data: { stockedQty: 0 } });
+}
+
+// ---------------------------------------------------------------------------
+//  Bill approval
+// ---------------------------------------------------------------------------
+
+/**
+ * Refuses to spend a bill that has not been signed off.
+ *
+ * One function, called from every place a bill's stock would be committed, so
+ * the rule reads the same at each site and a new allocation path cannot quietly
+ * omit it by phrasing the check differently.
+ *
+ * REJECTED is refused with its own message rather than folded into PENDING:
+ * "nobody has looked at this yet" and "somebody looked and said no" lead to
+ * completely different next actions for the person reading the error.
+ */
+function assertBillApproved(status: BillApprovalStatus): void {
+  if (status === 'APPROVED') return;
+
+  if (status === 'REJECTED') {
+    throw AppError.conflict(
+      'BILL_REJECTED',
+      'This purchase bill was rejected, so its stock cannot be allocated.',
+    );
+  }
+
+  throw AppError.conflict(
+    'BILL_NOT_APPROVED',
+    'This purchase bill is waiting for approval. Its stock cannot be allocated until an administrator approves it.',
+  );
+}
+
+/**
+ * Decides a recorded bill, and records who decided.
+ *
+ * Mirrors the product-change review beside it rather than inventing a second
+ * shape: ASSIGN resolved through the permission service, the decision taken
+ * under a row lock, and re-validation inside that lock instead of trust in what
+ * the route saw. Two reviewers racing therefore produce one decision and one
+ * honest BILL_ALREADY_REVIEWED.
+ *
+ * Nobody signs off their own bill, whatever they hold. Holding approval rights
+ * means being trusted to check other people's paperwork, not to wave through
+ * your own — which is exactly the case the rule exists for.
+ */
+async function reviewBill(
+  req: Request,
+  actor: AuthenticatedUser,
+  billId: string,
+  decision: 'APPROVED' | 'REJECTED',
+  input: ReviewPurchaseBillInput,
+): Promise<PurchaseBillDetail> {
+  /*
+    Checked here as well as at the route. Neither layer is sufficient alone: a
+    route is one registration away from losing its middleware, and this is the
+    rule the whole feature exists to enforce.
+  */
+  if (!(await resolvePermission(actor.id, actor.role, 'PROCUREMENT', 'ASSIGN'))) {
+    throw AppError.forbidden('Approving a purchase bill needs approval rights.');
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await repo.lockBill(tx, billId);
+
+    const bill = await repo.findBillForReview(tx, billId);
+    if (!bill) throw billNotFound();
+
+    if (bill.createdById === actor.id) {
+      throw new AppError(
+        'SELF_APPROVAL_NOT_ALLOWED',
+        403,
+        'You cannot approve a purchase bill you recorded yourself. Someone else has to decide it.',
+      );
+    }
+
+    if (bill.approvalStatus !== 'PENDING') {
+      throw AppError.conflict(
+        'BILL_ALREADY_REVIEWED',
+        `That purchase bill has already been ${bill.approvalStatus.toLowerCase()}.`,
+      );
+    }
+
+    await tx.purchaseBill.update({
+      where: { id: billId },
+      // Status, reviewer and moment written together, satisfying
+      // bill_review_recorded_together and bill_decided_has_reviewer.
+      data: {
+        approvalStatus: decision,
+        reviewedById: actor.id,
+        reviewedAt: new Date(),
+        ...(input.note ? { reviewNote: input.note } : {}),
+      },
+    });
+
+    /*
+      THE INBOUND STOCK POINT. Approval is where purchased goods become CRM
+      stock, and only the surplus does — each line contributes what it received
+      minus what is already committed to a requirement.
+
+      Every line is locked before it is reconciled, so an allocation racing the
+      approval queues behind it rather than computing its own target from a
+      half-approved bill. The lock order is bill → line here and line → order
+      line in allocation, and allocation never takes the bill lock, so the two
+      cannot deadlock.
+
+      A rejection runs this too, and deliberately: its target is zero, so the
+      loop is a no-op on a bill that never held stock and gives the stock back
+      on one that somehow did.
+    */
+    for (const line of await repo.findBillLineIds(tx, billId)) {
+      await repo.lockBillItem(tx, line.id);
+      await reconcileLineStock(tx, line.id);
+    }
+  }, TX_OPTIONS);
+
+  await recordAudit(req, {
+    action: decision === 'APPROVED' ? 'procurement.bill.approved' : 'procurement.bill.rejected',
+    entityType: 'PurchaseBill',
+    entityId: billId,
+    actorId: actor.id,
+    newValue: { decision, note: input.note ?? null },
+  });
+
+  return getBill(billId);
+}
+
+export function approveBill(
+  req: Request,
+  actor: AuthenticatedUser,
+  billId: string,
+  input: ReviewPurchaseBillInput,
+): Promise<PurchaseBillDetail> {
+  return reviewBill(req, actor, billId, 'APPROVED', input);
+}
+
+export function rejectBill(
+  req: Request,
+  actor: AuthenticatedUser,
+  billId: string,
+  input: ReviewPurchaseBillInput,
+): Promise<PurchaseBillDetail> {
+  return reviewBill(req, actor, billId, 'REJECTED', input);
 }
 
 /** Flags a late delivery. The reason is mandatory — also a database CHECK. */
@@ -595,15 +861,12 @@ export async function getOrderRequirements(orderNumber: string): Promise<OrderRe
         salesOrderItemId: item.id,
         lineNo: item.lineNo,
         productName: item.productName,
-        productId: item.productId,
-        linked: item.productId !== null,
+        rsProductId: item.rsProductId,
+        linked: item.rsProductId !== null,
         requiredQty: item.quantity,
         alreadyFulfilled: item.alreadyFulfilled,
         allocatedQty: allocated,
         totalFulfilled: totalFulfilled(item.alreadyFulfilled, allocated),
-        // Informational only: warehouse stock is shared across orders and is
-        // never counted against one customer's requirement.
-        availableInInventory: item.product?.inventory?.onHand ?? 0,
         pendingQty: pending,
         status: fulfillmentStatus(item.quantity, pending),
         frozen: isFrozen(pending),
@@ -700,7 +963,7 @@ export async function getFulfillmentDetail(
     },
     customer: line.order.customer,
     productName: line.productName,
-    product: line.product ? toProductView(line.product) : null,
+    rsProduct: line.rsProduct ? toRsProductRef(line.rsProduct) : null,
     requiredQty: line.quantity,
     alreadyFulfilled: line.alreadyFulfilled,
     procurementFulfilled,
@@ -721,45 +984,32 @@ export async function getFulfillmentDetail(
  * hide the fact that the stock exists and merely needs allocating.
  */
 export async function getShortages(): Promise<ShortageRow[]> {
-  const [lines, products, billItems, unlinkedBillItems] = await Promise.all([
+  const [lines, billItems] = await Promise.all([
     repo.findOpenRequirements(),
-    repo.findProducts({ isActive: true }, 500),
-    prisma.purchaseBillItem.findMany({
-      where: { productId: { not: null } },
-      select: { productId: true, receivedQty: true, allocations: { select: { quantity: true } } },
-    }),
-    repo.findUnlinkedBillItems(),
+    repo.findBillItemsForShortages(),
   ]);
 
   /**
-   * Demand is keyed two ways, and the prefixes keep them from colliding.
+   * Rows are keyed two ways, and the prefixes keep them from colliding.
    *
-   *   product:<id>   a catalogue-linked requirement
-   *   name:<text>    free text with no catalogue entry to belong to
+   *   rs:<id>      demand or supply naming an RS Product
+   *   name:<text>  free text, keyed by the exact string written on the line
    *
-   * A line without a `productId` is not automatically free text. "Brasscooker"
-   * typed on a bill and "Brass Cooker" in the catalogue fold to one key, so it
-   * is keyed as that product and its stock lands on that product's row —
-   * previously the two appeared as separate rows, one of them claiming to be
-   * uncatalogued while its product sat in the list above.
+   * There used to be a third. Demand arrived keyed by the legacy Product and
+   * supply by the RS one, so the board carried both and could not always join
+   * them; and a free-text line was folded onto a catalogue entry by its
+   * normalised name, which meant the board decided product identity by
+   * spelling. Both are gone. One identity means demand and supply land on the
+   * same key whenever they name the same product, and nothing else does.
    *
-   * Resolving here does not write `productId`: the row displays under the
-   * product it plainly refers to, and the database still says the line is
-   * unlinked until somebody links it deliberately. Only an *active* product
-   * resolves — a retired one cannot take part in inventory, so a line naming
-   * it stays free text and visible rather than being folded into something
-   * nobody can allocate against.
+   * Two spellings of one product therefore stay two rows until somebody maps
+   * them. That is the honest state: folding them would be an identity decision
+   * taken from a string, and this board is read by people deciding what to buy.
    */
-  const linkedKey = (id: string): string => `product:${id}`;
+  const rsKey = (id: string): string => `rs:${id}`;
   const nameKey = (name: string): string => `name:${name}`;
-
-  // The catalogue is already loaded above, so indexing it costs no query.
-  const byNormalized = resolver.indexByNormalizedName(products);
-  const resolveKey = (productId: string | null, productName: string): string => {
-    if (productId) return linkedKey(productId);
-    const match = byNormalized.get(normalizeProductName(productName));
-    return match && match.isActive ? linkedKey(match.id) : nameKey(productName);
-  };
+  const keyFor = (rsProductId: string | null, productName: string): string =>
+    rsProductId ? rsKey(rsProductId) : nameKey(productName);
 
   /*
     Both columns describe the same thing: demand that is still open.
@@ -778,8 +1028,11 @@ export async function getShortages(): Promise<ShortageRow[]> {
   */
   const required = new Map<string, number>();
   const allocated = new Map<string, number>();
+  const names = new Map<string, string>();
+
   for (const line of lines) {
-    const key = resolveKey(line.productId, line.productName);
+    const key = keyFor(line.rsProductId, line.productName);
+    names.set(key, line.productName);
     const lineAllocated = allocatedQty(line.allocations);
     const outstanding = pendingQty(line.quantity, line.alreadyFulfilled, lineAllocated);
     required.set(key, (required.get(key) ?? 0) + outstanding);
@@ -788,78 +1041,94 @@ export async function getShortages(): Promise<ShortageRow[]> {
     }
   }
 
+  // Supply: received stock nobody has claimed yet, on the same keys.
   const standing = new Map<string, number>();
   for (const item of billItems) {
-    if (!item.productId) continue;
-    const key = linkedKey(item.productId);
-    standing.set(key, (standing.get(key) ?? 0) + standingQty(item.receivedQty, item.allocations));
-  }
-  for (const item of unlinkedBillItems) {
-    const key = resolveKey(null, item.productName);
+    const key = keyFor(item.rsProduct?.id ?? null, item.productName);
+    if (!names.has(key)) names.set(key, item.productName);
     standing.set(key, (standing.get(key) ?? 0) + standingQty(item.receivedQty, item.allocations));
   }
 
-  // Catalogue-backed rows, exactly as before.
-  const catalogueRows = products.map((product): ShortageRow => {
-    const view = toProductView(product);
-    const key = linkedKey(product.id);
+  /*
+    The board's spine: the RS Products that demand or supply actually names.
+
+    Fetched by id rather than by scanning the catalogue. The old board loaded
+    five hundred legacy products and rendered a row per catalogue entry; RS
+    Products holds five hundred and two and will hold more, almost none of them
+    on an open order, so a scan would be five hundred rows to show three.
+  */
+  const rsIds = [...new Set([...required.keys(), ...standing.keys()])]
+    .filter((k) => k.startsWith('rs:'))
+    .map((k) => k.slice(3));
+  const rsProducts = new Map(
+    (await repo.findRsProductsByIds(rsIds)).map((r) => [r.id, toRsProductRef(r)]),
+  );
+
+  const rows = [...new Set([...required.keys(), ...standing.keys()])].map((key): ShortageRow => {
+    const rs = key.startsWith('rs:') ? rsProducts.get(key.slice(3)) ?? null : null;
     const totalRequired = required.get(key) ?? 0;
     return {
-      productName: view.name,
-      product: view,
-      linked: true,
+      // The product's title once it is mapped, else the wording on the line.
+      productName: rs?.title ?? names.get(key) ?? '',
+      rsProduct: rs,
+      linked: rs !== null,
+      sku: rs?.sku ?? null,
       // Already net of everything fulfilled, so the shortage *is* the
-      // outstanding demand. Subtracting onHand again would double-count
-      // shared stock against individual customers, and subtracting
-      // allocations again would remove them twice.
+      // outstanding demand. Subtracting stock again would double-count a
+      // figure shared across every order against individual customers, and
+      // subtracting allocations again would remove them twice. Stock is
+      // displayed beside the shortage for exactly that reason, never inside it.
       totalRequired,
       totalAllocated: allocated.get(key) ?? 0,
-      onHand: view.onHand,
+      /*
+        The two stock figures, carried separately all the way to the screen.
+
+        `crmStockQty` is the hand-maintained CRM count; `rsStockQty` is
+        Shopify's sellable quantity. They are different numbers about the same
+        goods and are never derived from, averaged with, or substituted for one
+        another — this row previously reported the CRM figure under the name
+        `rsStockQty`, which is precisely the conflation now undone.
+
+        Null, not zero, on an unmapped row. "Nobody has said what these goods
+        are, so there is no stock figure to state" and "there are none in
+        stock" are different facts, and a zero would conflate them.
+      */
+      crmStockQty: rs?.crmStockQty ?? null,
+      rsStockQty: rs?.rsStockQty ?? null,
       shortageQty: totalRequired,
       standingQty: standing.get(key) ?? 0,
     };
   });
 
-  /**
-   * Free-text rows, for demand with no catalogue entry.
-   *
-   * onHand is 0 rather than unknown: there is no InventoryItem to read, and
-   * reporting a guess would be worse than reporting nothing. `linked: false`
-   * is what tells the reader why, and that the row needs mapping before it can
-   * take part in inventory operations.
-   */
-  const unresolved = (productName: string): boolean => {
-    const match = byNormalized.get(normalizeProductName(productName));
-    return !match || !match.isActive;
-  };
+  /*
+    Which rows the board shows.
 
-  const freeTextNames = new Set<string>();
-  for (const line of lines) {
-    if (!line.productId && unresolved(line.productName)) freeTextNames.add(line.productName);
-  }
-  for (const item of unlinkedBillItems) {
-    if (unresolved(item.productName)) freeTextNames.add(item.productName);
-  }
+    Only products that actually need attention, rather than everything that has
+    ever been demanded or delivered. A row earns its place when there is
+    outstanding demand AND the CRM's own stock cannot cover it:
 
-  const freeTextRows = [...freeTextNames].map((name): ShortageRow => {
-    const key = nameKey(name);
-    const totalRequired = required.get(key) ?? 0;
-    return {
-      productName: name,
-      product: null,
-      linked: false,
-      totalRequired,
-      totalAllocated: allocated.get(key) ?? 0,
-      onHand: 0,
-      shortageQty: totalRequired,
-      standingQty: standing.get(key) ?? 0,
-    };
-  });
+      totalRequired > 0  AND  (crmStockQty is null OR crmStockQty < totalRequired)
 
-  return [...catalogueRows, ...freeTextRows]
-    .filter((row) => row.totalRequired > 0 || row.standingQty > 0)
-        // Biggest gap first; then by name, which every row has whether or not it
-    // is catalogued.
+    CRM stock is the figure tested, not RS stock: it is the count this business
+    maintains, while Shopify's is a number the storefront overwrites and can
+    reflect goods reserved for online orders. An unmapped row — null stock —
+    always qualifies, because nobody has said what the goods are and so nothing
+    can be shown to cover them.
+
+    This is a DISPLAY filter and nothing more. No formula above it changed:
+    `shortageQty` is still `totalRequired`, allocations are still summed the
+    same way, and standing is still reported beside them. A product whose CRM
+    stock covers its outstanding demand simply stops occupying a line on a board
+    whose purpose is to say what to buy.
+  */
+  return rows
+    .filter(
+      (row) =>
+        row.totalRequired > 0 &&
+        (row.crmStockQty === null || row.crmStockQty < row.totalRequired),
+    )
+    // Biggest gap first; then by name, which every row has whether or not it
+    // is mapped.
     .sort((a, b) => b.shortageQty - a.shortageQty || a.productName.localeCompare(b.productName));
 }
 
@@ -894,31 +1163,49 @@ export async function createAllocation(
     const item = await repo.findBillItem(tx, itemId);
     if (!item || item.billId !== billId) throw itemNotFound();
 
+    /*
+      The approval gate, checked under the row lock the allocation already holds.
+
+      Allocation is the moment a purchase stops being a recorded document and
+      starts committing goods to a named customer, so it is the point sign-off
+      protects. Everything before it — recording the bill, receiving against it,
+      mapping its lines — stays open, because those record what happened rather
+      than promising anything to anyone.
+    */
+    assertBillApproved(item.bill.approvalStatus);
+
     const line = await repo.findOrderLine(tx, input.salesOrderItemId);
     if (!line) {
       throw AppError.notFound('SALES_ORDER_ITEM_NOT_FOUND', 'That order line could not be found.');
     }
 
-    // Symmetric to the order-line rule below: stock whose product is unknown
-    // cannot be matched to a requirement either. Recording a bill needs no
-    // catalogue decision; spending what it delivered does.
-    if (!item.productId) {
+    /*
+      One identity on both sides, compared directly.
+
+      This used to compare legacy Product ids, which meant Sales and Procurement
+      had to agree about a catalogue neither of them owned. Both now name an
+      RsProduct, so the comparison is between two values of the same kind and
+      needs no translation — and there is no bridge left to be missing.
+
+      Never a name, a title, a SKU or a folded spelling. An allocation that
+      drifts onto the wrong goods is silent corruption, and once its stock is
+      spent it cannot be untangled.
+    */
+    if (!item.rsProductId) {
       throw AppError.badRequest(
         'PURCHASE_LINE_NOT_LINKED',
-        'That purchase line is not linked to a catalogue product yet. Link it before allocating.',
+        'That purchase line is not mapped to an RS Product yet. Map it before allocating.',
       );
     }
 
-    // A line with no catalogue entry cannot be matched to purchased stock:
-    // there is no product identity to reconcile the two sides against.
-    if (!line.productId) {
+    if (!line.rsProductId) {
       throw AppError.badRequest(
         'ORDER_LINE_NOT_LINKED',
-        'That order line has no catalogue product, so stock cannot be allocated to it.',
+        'That order line is not mapped to an RS Product, so stock cannot be allocated to it.',
       );
     }
 
-    if (line.productId !== item.productId) {
+    if (line.rsProductId !== item.rsProductId) {
       throw AppError.badRequest(
         'PRODUCT_MISMATCH',
         'That purchase line is for a different product than the order line.',
@@ -974,6 +1261,21 @@ export async function createAllocation(
         },
       });
     }
+
+    /*
+      THE OUTBOUND STOCK POINT. Committing goods to a requirement takes them out
+      of free CRM stock, in the same transaction and under the same lock as the
+      allocation itself — so the two can never disagree, and a failure rolls both
+      back together.
+
+      The deduction cannot exceed what this line put in: the quantity is already
+      bounded by `standingQty` (received − allocated), which is exactly the line's
+      own contribution, so its stock can reach zero and never pass it. That is
+      also why there is no separate "allocation cannot exceed available stock"
+      check — the standing check above already is that check, expressed against
+      the pool the goods actually come from.
+    */
+    await reconcileLineStock(tx, itemId);
   }, TX_OPTIONS);
 
   await recordAudit(req, {
@@ -1013,6 +1315,10 @@ export async function updateAllocation(
     const item = await repo.findBillItem(tx, itemId);
     if (!item || item.billId !== billId) throw itemNotFound();
 
+    // Same gate as creating one. A bill whose approval is withdrawn must not
+    // leave its existing allocations quietly editable.
+    assertBillApproved(item.bill.approvalStatus);
+
     const line = await repo.findOrderLine(tx, allocation.salesOrderItemId);
     if (!line) {
       throw AppError.notFound('SALES_ORDER_ITEM_NOT_FOUND', 'That order line could not be found.');
@@ -1020,10 +1326,10 @@ export async function updateAllocation(
 
     // An allocation can only exist on a linked line — creating one requires it
     // — so this is a guard against corruption rather than an expected path.
-    if (!item.productId) {
+    if (!item.rsProductId) {
       throw AppError.conflict(
         'PURCHASE_LINE_NOT_LINKED',
-        'That purchase line is not linked to a catalogue product.',
+        'That purchase line is not mapped to an RS Product.',
       );
     }
     const fulfilled = isFrozen(
@@ -1038,6 +1344,10 @@ export async function updateAllocation(
 
     if (input.quantity === 0) {
       await tx.purchaseAllocation.delete({ where: { id: allocationId } });
+      // Releasing a commitment returns the goods to free stock — exactly once,
+      // because the restored amount is the difference between the recomputed
+      // target and what the line currently stands for, not a remembered number.
+      await reconcileLineStock(tx, itemId);
       return;
     }
 
@@ -1069,6 +1379,10 @@ export async function updateAllocation(
       where: { id: allocationId },
       data: { quantity: input.quantity },
     });
+
+    // Raising or lowering a commitment moves stock the other way by the same
+    // amount. Both directions are the one subtraction, so neither can drift.
+    await reconcileLineStock(tx, itemId);
   }, TX_OPTIONS);
 
   await recordAudit(req, {
@@ -1103,151 +1417,46 @@ export async function updateAllocation(
  * actually is. If the guard still refuses, the error is surfaced rather than
  * worked around: that order's history stays exactly as recorded.
  */
-/**
- * Put a free-text order line's product into the catalogue, then link the line
- * to it.
+/*
+ * "Put in Catalogue" used to live here, and is gone.
  *
- * "Put in catalogue" is not "create a product": a logical product belongs in
- * Product Master once, so this resolves to whatever already represents it and
- * only creates when nothing does. The folded name decides that, so a line
- * reading "kansa dinner set" finds the "Kansa Dinner Set" someone catalogued
- * last week instead of splitting its stock in two.
- *
- * Race safety comes from the unique index on normalizedName, never from the
- * lookup below. Two clicks arriving together both see nothing, both insert,
- * and Postgres rejects the loser with P2002 — which is not an error to report
- * but the answer itself: the row the winner created is the row to use. That is
- * why the catch re-reads rather than surfacing a duplicate-product failure.
- *
- * An inactive match stops the operation. Reviving a retired product, or
- * creating a rival beside it, are both decisions for a person; the conflict
- * names the product so they can make it.
+ * It created a legacy Product from an order line's own wording and linked the
+ * line to it — the one place Procurement could bring a product into existence.
+ * Procurement creates no products: RS Products is the catalogue, and a product
+ * that is not in it is created there, by somebody looking at the catalogue
+ * rather than at one bill.
  */
-export async function putInCatalogue(
-  req: Request,
-  actorId: string,
-  input: PutInCatalogueInput,
-): Promise<OrderRequirementView> {
-  const line = await prisma.salesOrderItem.findUnique({
-    where: { id: input.salesOrderItemId },
-    select: { id: true, productId: true, productName: true },
-  });
-  if (!line) {
-    throw AppError.notFound('SALES_ORDER_ITEM_NOT_FOUND', 'That order line could not be found.');
-  }
-  if (line.productId) {
-    throw AppError.conflict(
-      'ORDER_LINE_ALREADY_LINKED',
-      'That order line is already linked to a catalogue product.',
-    );
-  }
-
-  // The line's own wording is the name, so the catalogue records what the
-  // order actually says rather than a re-typed variant of it.
-  const name = line.productName.trim();
-  const normalizedName = normalizeProductName(name);
-  if (normalizedName === '') {
-    throw AppError.badRequest(
-      'PRODUCT_NAME_REQUIRED',
-      'That order line has no product name to catalogue.',
-    );
-  }
-
-  const reuseOrFail = (product: { id: string; name: string; isActive: boolean }): string => {
-    if (!product.isActive) {
-      throw AppError.conflict(
-        'PRODUCT_EXISTS_INACTIVE',
-        `“${product.name}” is already in the catalogue but is inactive. Reactivate it before linking.`,
-      );
-    }
-    return product.id;
-  };
-
-  const existing = await repo.findProductByNormalizedName(normalizedName);
-  let productId: string;
-
-  if (existing) {
-    productId = reuseOrFail(existing);
-  } else {
-    try {
-      const created = await prisma.product.create({
-        data: {
-          name,
-          normalizedName,
-          inventory: { create: { onHand: 0 } },
-        },
-        select: { id: true },
-      });
-      productId = created.id;
-
-      await recordAudit(req, {
-        action: 'procurement.product.created',
-        entityType: 'Product',
-        entityId: created.id,
-        actorId,
-        newValue: { name, normalizedName, onHand: 0, via: 'putInCatalogue' },
-      });
-    } catch (error) {
-      // P2002: another request catalogued the same logical product first.
-      // Its row is the right answer, so read it back instead of failing.
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      ) {
-        const raced = await repo.findProductByNormalizedName(normalizedName);
-        if (!raced) throw error;
-        productId = reuseOrFail(raced);
-      } else {
-        throw error;
-      }
-    }
-  }
-
-  // Linking runs through the existing path, so every guard it enforces —
-  // already-linked, inactive product, the payment-guard mapping — applies here
-  // unchanged rather than being restated.
-  return linkOrderLine(req, actorId, { salesOrderItemId: line.id, productId });
-}
 
 export async function linkOrderLine(
   req: Request,
   actorId: string,
   input: LinkOrderLineInput,
 ): Promise<OrderRequirementView> {
-  const product = await prisma.product.findUnique({
-    where: { id: input.productId },
-    select: { id: true, isActive: true, name: true },
-  });
-  if (!product) throw productNotFound();
-  if (!product.isActive) {
-    throw AppError.badRequest(
-      'PRODUCT_INACTIVE',
-      'That product is no longer active and cannot be linked.',
-    );
-  }
+  const rsProduct = await repo.findRsProduct(input.rsProductId);
+  if (!rsProduct) throw rsProductNotFound();
 
   const line = await prisma.salesOrderItem.findUnique({
     where: { id: input.salesOrderItemId },
-    select: { id: true, productId: true, productName: true, order: { select: { orderId: true } } },
+    select: { id: true, rsProductId: true, productName: true, order: { select: { orderId: true } } },
   });
   if (!line) {
     throw AppError.notFound('SALES_ORDER_ITEM_NOT_FOUND', 'That order line could not be found.');
   }
 
-  // Relinking an already-linked line would move stock between requirements
-  // without any of allocation's checks running. Unlink by releasing the
-  // allocations first if that is genuinely wanted.
-  if (line.productId) {
+  // Remapping an already-mapped line would move stock between requirements
+  // without any of allocation's checks running. Release the allocations first
+  // if that is genuinely wanted.
+  if (line.rsProductId) {
     throw AppError.conflict(
       'ORDER_LINE_ALREADY_LINKED',
-      'That order line is already linked to a catalogue product.',
+      'That order line is already mapped to an RS Product.',
     );
   }
 
   try {
     await prisma.$executeRaw`
-      UPDATE "SalesOrderItem" SET "productId" = ${product.id}
-      WHERE "id" = ${line.id} AND "productId" IS NULL`;
+      UPDATE "SalesOrderItem" SET "rsProductId" = ${rsProduct.id}
+      WHERE "id" = ${line.id} AND "rsProductId" IS NULL`;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes('sales_closed_fully_paid') || message.includes('sales_paid_within_total')) {
@@ -1264,39 +1473,52 @@ export async function linkOrderLine(
     entityType: 'SalesOrderItem',
     entityId: line.id,
     actorId,
-    newValue: { productId: product.id, productName: product.name, lineName: line.productName },
+    newValue: { rsProductId: rsProduct.id, rsProductTitle: rsProduct.title, lineName: line.productName },
   });
 
   return getOrderRequirements(line.order.orderId);
 }
 
 /**
- * Attaches a purchase line to a catalogue product.
+ * Maps a purchase line to an RS Product — Procurement's canonical identity.
  *
- * The counterpart of linkOrderLine, for the other side of the match. A bill is
- * recorded in the vendor's own words; this is where those words are reconciled
- * with a catalogue entry, which is what allocation needs. Only productId is
- * written — the vendor's description, quantities and rate are the record of the
- * document and stay exactly as entered.
+ * Product level. The line names an `RsProduct` and never a `ShopifyVariant`:
+ * the Procurement-facing RS Products API reports stock as a product-level
+ * aggregate over the variants, so there is nothing a variant key would let this
+ * module read that the product key does not. A variant id reaching this
+ * function is a cuid that names no RsProduct, and is refused by the lookup
+ * below like any other unknown id.
+ *
+ * Nothing is inferred. The vendor's wording on the line, its folded form and
+ * any matching SKU all play no part — RS SKUs are nullable and legitimately
+ * duplicated, so a SKU match is not evidence of anything, and a mapping that
+ * turns out to be wrong cannot be undone once stock has been allocated through
+ * it. The person picks the product.
+ *
+ * This is the whole identity. There is no second key beside it: allocation
+ * compares this against the order line's own RsProduct, so there is nothing to
+ * bridge to and nothing that can be missing.
+ *
+ * INITIAL MAPPING ONLY. This endpoint gives a line its FIRST product and does
+ * nothing else; a line that already names one is refused here and must go
+ * through `requestProductChange` below for an administrator to decide. The
+ * asymmetry is the rule: naming goods nobody had named is ordinary Procurement
+ * work, but *moving* a mapping that the shortage board has been read against and
+ * that allocation compares identity on is not.
+ *
+ * Enforced here, in the service, rather than by hiding a button. A non-admin
+ * calling this route directly with a new product id on a mapped line gets
+ * PRODUCT_CHANGE_REQUIRES_APPROVAL, exactly as they would through the UI.
  */
-export async function linkPurchaseItem(
+export async function mapPurchaseItemToRsProduct(
   req: Request,
   actorId: string,
   billId: string,
   itemId: string,
-  input: LinkPurchaseItemInput,
+  input: MapPurchaseItemInput,
 ): Promise<PurchaseBillDetail> {
-  const product = await prisma.product.findUnique({
-    where: { id: input.productId },
-    select: { id: true, isActive: true, name: true },
-  });
-  if (!product) throw productNotFound();
-  if (!product.isActive) {
-    throw AppError.badRequest(
-      'PRODUCT_INACTIVE',
-      'That product is no longer active and cannot be linked.',
-    );
-  }
+  const rsProduct = await repo.findRsProduct(input.rsProductId);
+  if (!rsProduct) throw rsProductNotFound();
 
   await prisma.$transaction(async (tx) => {
     await repo.lockBillItem(tx, itemId);
@@ -1304,38 +1526,305 @@ export async function linkPurchaseItem(
     const item = await repo.findBillItem(tx, itemId);
     if (!item || item.billId !== billId) throw itemNotFound();
 
-    // Relinking would move already-allocated stock between products without
-    // any of allocation's checks running. Release the allocations first.
-    if (item.productId) {
-      if (item.allocations.length > 0) {
-        throw AppError.conflict(
-          'PURCHASE_LINE_HAS_ALLOCATIONS',
-          'Release this line’s allocations before changing its product.',
-        );
-      }
-      if (item.productId !== product.id) {
-        throw AppError.conflict(
-          'PURCHASE_LINE_ALREADY_LINKED',
-          'That purchase line is already linked to a catalogue product.',
-        );
-      }
+    /*
+      The approval gate, checked under the row lock.
+
+      Re-sending the product the line already has is a no-op rather than a
+      change, so it is allowed through — it is what a double-submitted form
+      does, and refusing it would report a conflict where nothing differs.
+    */
+    if (item.rsProductId && item.rsProductId !== rsProduct.id) {
+      throw AppError.conflict(
+        'PRODUCT_CHANGE_REQUIRES_APPROVAL',
+        'This line is already mapped to an RS Product. Changing it needs an administrator’s approval — raise a change request instead.',
+      );
     }
+
+    if (item.rsProductId === rsProduct.id) return;
 
     await tx.purchaseBillItem.update({
       where: { id: itemId },
-      data: { productId: product.id },
+      data: { rsProductId: rsProduct.id },
+    });
+
+    // An unmapped line held no stock, so there is nothing to release — but once
+    // it names a product, an already-approved bill's surplus belongs to that
+    // product and is credited now rather than waiting for another event.
+    await reconcileLineStock(tx, itemId);
+  }, TX_OPTIONS);
+
+  await recordAudit(req, {
+    action: 'procurement.purchaseItem.rsMapped',
+    entityType: 'PurchaseBillItem',
+    entityId: itemId,
+    actorId,
+    newValue: { rsProductId: rsProduct.id, rsProductTitle: rsProduct.title },
+  });
+
+  return getBill(billId);
+}
+
+// ---------------------------------------------------------------------------
+//  Changing an existing mapping — administrator approval
+// ---------------------------------------------------------------------------
+
+/**
+ * The resolved PROCUREMENT ASSIGN capability for this person.
+ *
+ * Deciding a request is ASSIGN, mirroring how Sales gates reviewing a change
+ * request, and resolved through the same permission service every other
+ * capability goes through — never `role === 'ADMIN'`. A per-user grant or
+ * revocation therefore applies here exactly as it does everywhere else.
+ */
+const mayReview = (actor: AuthenticatedUser): Promise<boolean> =>
+  resolvePermission(actor.id, actor.role, 'PROCUREMENT', 'ASSIGN');
+
+const changeNotFound = (): AppError =>
+  AppError.notFound('PRODUCT_CHANGE_NOT_FOUND', 'That change request could not be found.');
+
+/**
+ * Files a request to re-map an already-mapped purchase line. Changes nothing.
+ *
+ * A request is a record of what somebody asked for, and that is all it is: it
+ * writes no mapping, and the line goes on naming the product it named, so the
+ * shortage board and allocation both carry on against the live identity however
+ * long the request sits pending. Only `approveProductChange` moves it.
+ *
+ * Everything that would make the request impossible to approve is checked now,
+ * so a person is told at once rather than after waiting for a decision:
+ * the line must be mapped, the destination must exist and must differ, and the
+ * line's stock must not already be allocated.
+ */
+export async function requestProductChange(
+  req: Request,
+  actor: AuthenticatedUser,
+  billId: string,
+  itemId: string,
+  input: RequestProductChangeInput,
+): Promise<PurchaseBillDetail> {
+  const target = await repo.findRsProduct(input.rsProductId);
+  if (!target) throw rsProductNotFound();
+
+  await prisma.$transaction(async (tx) => {
+    await repo.lockBillItem(tx, itemId);
+
+    const item = await repo.findBillItem(tx, itemId);
+    if (!item || item.billId !== billId) throw itemNotFound();
+
+    /*
+      An unmapped line needs no approval at all — that is the initial mapping,
+      and sending it here would create an approval queue for ordinary work.
+    */
+    if (!item.rsProductId) {
+      throw AppError.badRequest(
+        'PURCHASE_LINE_NOT_LINKED',
+        'This line has no RS Product yet, so map it directly — no approval is needed for a first mapping.',
+      );
+    }
+
+    if (item.rsProductId === target.id) {
+      throw AppError.badRequest(
+        'PRODUCT_CHANGE_NO_OP',
+        'This line is already mapped to that RS Product.',
+      );
+    }
+
+    /*
+      Stock already promised to orders under the current identity. Approving
+      would move it to different goods without any of allocation's checks
+      running, so the request could never be granted — say so now.
+    */
+    if (item.allocations.length > 0) {
+      throw AppError.conflict(
+        'PURCHASE_LINE_HAS_ALLOCATIONS',
+        'Release this line’s allocations before requesting a different RS Product.',
+      );
+    }
+
+    // Checked for a readable message; the partial unique index is what actually
+    // guarantees it when two people race the same line.
+    if (await repo.findPendingChangeForItem(tx, itemId)) {
+      throw AppError.conflict(
+        'PRODUCT_CHANGE_ALREADY_PENDING',
+        'This line already has a product change waiting for approval. That one has to be decided first.',
+      );
+    }
+
+    await tx.purchaseItemProductChange.create({
+      data: {
+        billId,
+        itemId,
+        fromRsProductId: item.rsProductId,
+        toRsProductId: target.id,
+        reason: input.reason,
+        status: 'PENDING',
+        requestedById: actor.id,
+      },
     });
   }, TX_OPTIONS);
 
   await recordAudit(req, {
-    action: 'procurement.purchaseItem.linked',
+    action: 'procurement.productChange.requested',
     entityType: 'PurchaseBillItem',
     entityId: itemId,
-    actorId,
-    newValue: { productId: product.id, productName: product.name },
+    actorId: actor.id,
+    newValue: { toRsProductId: target.id, toRsProductTitle: target.title, reason: input.reason },
   });
 
   return getBill(billId);
+}
+
+/** The approval queue, or one bill's history of requests. */
+export async function listProductChanges(
+  query: ProductChangeListQuery,
+): Promise<ProductChangeView[]> {
+  const rows = await repo.findProductChanges({
+    ...(query.status ? { status: query.status } : {}),
+    ...(query.billId ? { billId: query.billId } : {}),
+  });
+  return rows.map(toProductChangeView);
+}
+
+type Decision = 'APPROVED' | 'REJECTED';
+
+/**
+ * Decides a request, and — only on approval — applies it.
+ *
+ * Everything is revalidated inside the lock rather than trusted from the route
+ * or from the request row: that the reviewer still holds the capability, that
+ * the request is still pending, that the line still exists, that it still names
+ * the product the request was filed against, and that no stock has been
+ * allocated through it since. Two reviewers racing therefore produce one
+ * decision and one honest PRODUCT_CHANGE_NOT_PENDING, which is also what makes
+ * a repeated approval safe rather than doubly applied.
+ *
+ * A rejection is only ever a record. The existing mapping is left exactly alone
+ * — that is the guarantee the whole workflow is for.
+ */
+async function review(
+  req: Request,
+  actor: AuthenticatedUser,
+  changeId: string,
+  decision: Decision,
+  input: ReviewProductChangeInput,
+): Promise<ProductChangeView[]> {
+  const reviewer = await mayReview(actor);
+  /*
+    Checked here as well as at the route, so a hand-crafted call that somehow
+    reached the service — a future route registered without the middleware, a
+    direct import — cannot decide a request either. Neither layer is sufficient
+    alone and both are cheap.
+  */
+  if (!reviewer) {
+    throw AppError.forbidden('Deciding a product change request needs approval rights.');
+  }
+
+  const billId = await prisma.$transaction(async (tx) => {
+    const change = await repo.findProductChange(tx, changeId);
+    if (!change) throw changeNotFound();
+
+    await repo.lockBillItem(tx, change.itemId);
+
+    if (change.status !== 'PENDING') {
+      throw AppError.conflict(
+        'PRODUCT_CHANGE_NOT_PENDING',
+        'That change request has already been decided.',
+      );
+    }
+
+    await tx.purchaseItemProductChange.update({
+      where: { id: changeId },
+      // Status, reviewer and moment written together, satisfying
+      // product_change_review_recorded_together and
+      // product_change_decided_has_reviewer.
+      data: {
+        status: decision,
+        reviewedById: actor.id,
+        reviewedAt: new Date(),
+        ...(input.note ? { reviewNote: input.note } : {}),
+      },
+    });
+
+    if (decision === 'REJECTED') return change.billId;
+
+    const item = await repo.findBillItem(tx, change.itemId);
+    if (!item) throw itemNotFound();
+
+    /*
+      The line must still say what the request said it said.
+
+      If somebody re-mapped it in between — which needs its own approval, so it
+      is rare but possible — this request describes a move that no longer starts
+      where it claimed. Applying it anyway would silently overwrite that later
+      decision, so it is refused and a fresh request is filed against the state
+      that actually exists.
+    */
+    if (item.rsProductId !== change.fromRsProductId) {
+      throw AppError.conflict(
+        'PRODUCT_CHANGE_STALE',
+        'This line’s RS Product has changed since the request was raised. Raise a new request against its current mapping.',
+      );
+    }
+
+    // Re-checked at the moment of the write, not merely when it was requested:
+    // stock can be allocated through the line while a request waits.
+    if (item.allocations.length > 0) {
+      throw AppError.conflict(
+        'PURCHASE_LINE_HAS_ALLOCATIONS',
+        'Stock has been allocated from this line since the request was raised. Release it before approving.',
+      );
+    }
+
+    /*
+      The mapping moves, and its stock has to move with it.
+
+      Released from the old product first, then re-credited to the new one by
+      the reconcile below. Doing it in that order is what stops the old product
+      keeping goods it no longer has any line accounting for — the movement is
+      always attached to the product it belongs to.
+    */
+    await releaseLineStock(tx, change.itemId);
+
+    await tx.purchaseBillItem.update({
+      where: { id: change.itemId },
+      data: { rsProductId: change.toRsProductId },
+    });
+
+    await reconcileLineStock(tx, change.itemId);
+
+    return change.billId;
+  }, TX_OPTIONS);
+
+  await recordAudit(req, {
+    action:
+      decision === 'APPROVED'
+        ? 'procurement.productChange.approved'
+        : 'procurement.productChange.rejected',
+    entityType: 'PurchaseItemProductChange',
+    entityId: changeId,
+    actorId: actor.id,
+    newValue: { decision, note: input.note ?? null, billId },
+  });
+
+  return listProductChanges({ billId });
+}
+
+export function approveProductChange(
+  req: Request,
+  actor: AuthenticatedUser,
+  changeId: string,
+  input: ReviewProductChangeInput,
+): Promise<ProductChangeView[]> {
+  return review(req, actor, changeId, 'APPROVED', input);
+}
+
+export function rejectProductChange(
+  req: Request,
+  actor: AuthenticatedUser,
+  changeId: string,
+  input: ReviewProductChangeInput,
+): Promise<ProductChangeView[]> {
+  return review(req, actor, changeId, 'REJECTED', input);
 }
 
 /**
@@ -1373,8 +1862,8 @@ export async function getSalesRequirements(
       orderNumber: line.order.orderId,
       customerName: line.order.customer.name,
       productName: line.productName,
-      productId: line.productId,
-      linked: line.productId !== null,
+      rsProductId: line.rsProductId,
+      linked: line.rsProductId !== null,
       requiredQty: line.quantity,
       alreadyFulfilled: line.alreadyFulfilled,
       procurementFulfilled,

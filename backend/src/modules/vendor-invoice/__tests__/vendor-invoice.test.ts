@@ -494,11 +494,10 @@ describe('product mapping', () => {
 
   it('rejects a body using the legacy productId key', async () => {
     const vendor = await makeVendor();
-    const legacy = await prisma.product.findFirst({ select: { id: true } });
 
     const res = await api('POST', '/api/vendor-invoices/mappings', {
       token: adminToken,
-      body: { vendorId: vendor.id, productId: legacy?.id ?? rsProductId, currentRate: '100.00' },
+      body: { vendorId: vendor.id, productId: rsProductId, currentRate: '100.00' },
     });
 
     expect(res.status).toBe(422);
@@ -785,10 +784,8 @@ describe('access control', () => {
 });
 
 describe('existing modules are untouched', () => {
-  it('leaves the legacy Product master and Procurement records alone', async () => {
+  it('leaves the Procurement records alone', async () => {
     const before = {
-      product: await prisma.product.count(),
-      inventory: await prisma.inventoryItem.count(),
       salesOrder: await prisma.salesOrder.count(),
       enquiry: await prisma.productEnquiry.count(),
     };
@@ -804,8 +801,6 @@ describe('existing modules are untouched', () => {
       body: { currentRate: '150.00' },
     });
 
-    expect(await prisma.product.count()).toBe(before.product);
-    expect(await prisma.inventoryItem.count()).toBe(before.inventory);
     expect(await prisma.salesOrder.count()).toBe(before.salesOrder);
     expect(await prisma.productEnquiry.count()).toBe(before.enquiry);
   });

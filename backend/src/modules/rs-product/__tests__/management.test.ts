@@ -470,10 +470,8 @@ describe('access control', () => {
 });
 
 describe('existing data is untouched', () => {
-  it('leaves the Product master, InventoryItem and shipped modules alone', async () => {
+  it('leaves the shipped modules alone', async () => {
     const before = {
-      product: await prisma.product.count(),
-      inventory: await prisma.inventoryItem.count(),
       sales: await prisma.salesOrder.count(),
       purchase: await prisma.purchaseBill.count(),
       enquiry: await prisma.productEnquiry.count(),
@@ -486,18 +484,19 @@ describe('existing data is untouched', () => {
     });
     await api('POST', `/api/rs-products/${product.id}/archive`, { token: adminToken });
 
-    expect(await prisma.product.count()).toBe(before.product);
-    expect(await prisma.inventoryItem.count()).toBe(before.inventory);
     expect(await prisma.salesOrder.count()).toBe(before.sales);
     expect(await prisma.purchaseBill.count()).toBe(before.purchase);
     expect(await prisma.productEnquiry.count()).toBe(before.enquiry);
   });
 
-  it('leaves the bridge to the legacy Product master null', async () => {
-    const bridged = await prisma.rsProduct.count({
-      where: { source: 'SHOPIFY', productId: { not: null } },
-    });
-    expect(bridged).toBe(0);
+  it('carries no bridge to a legacy Product master', async () => {
+    // The column is gone with the migration to one product identity. Asserted
+    // against the schema so it cannot quietly come back.
+    const columns = await prisma.$queryRawUnsafe<{ column_name: string }[]>(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = 'RsProduct' AND column_name = 'productId'`,
+    );
+    expect(columns).toEqual([]);
   });
 });
 

@@ -241,7 +241,7 @@ export async function listVendorTrades(
     recordedAt: item.createdAt.toISOString(),
 
     productName: item.productName,
-    productId: item.productId,
+    rsProductId: item.rsProductId,
     productImageUrl: item.productImage?.secureUrl ?? null,
 
     orderedQty: item.orderedQty,

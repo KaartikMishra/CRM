@@ -30,7 +30,7 @@ const CUID = 'clx0000000000000000000000';
 //  The rule that matters most
 // ---------------------------------------------------------------------------
 
-describe('an RsProduct id never becomes a SalesOrderItem.productId', () => {
+describe('the picked RsProduct id becomes the order line’s identity', () => {
   it('never assigns the picked product id to productId', () => {
     expect(form).not.toMatch(/productId:\s*(product|item\.rsProduct)\??\.id/);
     expect(form).not.toMatch(/productId:\s*selected\??\.id/);
@@ -49,8 +49,8 @@ describe('an RsProduct id never becomes a SalesOrderItem.productId', () => {
   it('builds the payload by naming fields, so draft state cannot leak', () => {
     const build = form.slice(form.indexOf('function buildInput'));
     const items = build.slice(build.indexOf('items:'), build.indexOf('paidAmount:'));
-    // Comments are stripped first: the prose there explains why rsProduct is
-    // excluded, and matching that would make this assertion pass on the
+    // Comments are stripped first: the prose there explains how the picked
+    // product travels, and matching that would make this assertion pass on the
     // explanation rather than on the code.
     const code = items
       .split('\n')
@@ -58,13 +58,15 @@ describe('an RsProduct id never becomes a SalesOrderItem.productId', () => {
       .join('\n');
 
     expect(code).toContain('productName:');
-    expect(code).not.toContain('rsProduct');
-    // productId is still forwarded only when the draft already holds one.
-    expect(code).toContain('item.productId ? { productId: item.productId }');
+    // The picker's object stays in the draft; only its id is forwarded, and
+    // only when something was actually picked.
+    expect(code).not.toContain('rsProduct:');
+    expect(code).toContain('item.rsProduct ? { rsProductId: item.rsProduct.id }');
   });
 
-  it('a line built from a catalogue pick validates with no productId', () => {
-    // What the form actually submits after picking: a name, no id.
+  it('a line typed as free text validates with no product id', () => {
+    // An order records what a customer asked for, which is not always something
+    // in the catalogue — so a line with only a name stays valid.
     const parsed = createSalesOrderSchema.safeParse({
       orderId: 'SO-1001',
       customerId: CUID,
@@ -74,14 +76,14 @@ describe('an RsProduct id never becomes a SalesOrderItem.productId', () => {
       toBeDispatchedBy: '2026-09-20',
     });
     expect(parsed.success).toBe(true);
-    expect(parsed.success && parsed.data.items[0]!.productId).toBeUndefined();
+    expect(parsed.success && parsed.data.items[0]!.rsProductId).toBeUndefined();
   });
 
-  it('rejects a non-cuid in productId, so a stray value cannot slip through', () => {
+  it('rejects a non-cuid in rsProductId, so a stray value cannot slip through', () => {
     const parsed = createSalesOrderSchema.safeParse({
       orderId: 'SO-1002',
       customerId: CUID,
-      items: [{ productName: 'X', productId: 'not-a-cuid', quantity: 1, price: '10.00' }],
+      items: [{ productName: 'X', rsProductId: 'not-a-cuid', quantity: 1, price: '10.00' }],
       paidAmount: '0',
       orderDate: '2026-09-17',
       toBeDispatchedBy: '2026-09-20',

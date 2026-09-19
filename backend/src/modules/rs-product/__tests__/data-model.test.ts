@@ -22,7 +22,6 @@ const tag = () => `zz-test-${Date.now()}-${Math.random().toString(36).slice(2, 8
 const createdRsProductIds: string[] = [];
 const createdWebhookIds: string[] = [];
 /** Legacy Product rows this suite creates to exercise the bridge. */
-const createdProductIds: string[] = [];
 
 async function makeRsProduct(data: Record<string, unknown> = {}): Promise<string> {
   const row = await prisma.rsProduct.create({
@@ -36,11 +35,10 @@ async function makeRsProduct(data: Record<string, unknown> = {}): Promise<string
 /** Counts of everything Phase 2 must not disturb. */
 async function businessSnapshot() {
   const [
-    product, inventory, salesOrder, salesOrderItem, purchaseBill, purchaseBillItem,
+    salesOrder, salesOrderItem, purchaseBill, purchaseBillItem,
     purchaseAllocation, enquiry, enquiryProduct, changeRequest, notification, mediaAsset,
     user, permission,
   ] = await Promise.all([
-    prisma.product.count(), prisma.inventoryItem.count(),
     prisma.salesOrder.count(), prisma.salesOrderItem.count(),
     prisma.purchaseBill.count(), prisma.purchaseBillItem.count(),
     prisma.purchaseAllocation.count(), prisma.productEnquiry.count(),
@@ -49,7 +47,7 @@ async function businessSnapshot() {
     prisma.user.count(), prisma.userModulePermission.count(),
   ]);
   return {
-    product, inventory, salesOrder, salesOrderItem, purchaseBill, purchaseBillItem,
+    salesOrder, salesOrderItem, purchaseBill, purchaseBillItem,
     purchaseAllocation, enquiry, enquiryProduct, changeRequest, notification, mediaAsset,
     user, permission,
   };
@@ -69,9 +67,6 @@ afterAll(async () => {
   }
   if (createdWebhookIds.length) {
     await prisma.shopifyWebhookEvent.deleteMany({ where: { id: { in: createdWebhookIds } } });
-  }
-  if (createdProductIds.length) {
-    await prisma.product.deleteMany({ where: { id: { in: createdProductIds } } });
   }
 
   // Nothing this suite created may survive it.
@@ -95,7 +90,6 @@ afterAll(async () => {
   expect(
     await prisma.shopifyWebhookEvent.count({ where: { id: { in: createdWebhookIds } } }),
   ).toBe(0);
-  expect(await prisma.product.count({ where: { id: { in: createdProductIds } } })).toBe(0);
 });
 
 describe('RsProduct identity', () => {
@@ -371,95 +365,39 @@ describe('ShopifyWebhookEvent idempotency', () => {
   });
 });
 
-describe('the bridge to the legacy Product Master', () => {
-  it('defaults to null — nothing is migrated in this phase', async () => {
-    const id = await makeRsProduct();
-    const row = await prisma.rsProduct.findUniqueOrThrow({ where: { id } });
-    expect(row.productId).toBeNull();
+describe('there is no bridge to a legacy Product Master', () => {
+  /*
+    The bridge was added so a controlled migration would have somewhere to land,
+    and it was never populated — nought of five hundred and two rows. The
+    migration happened without it: Sales, Procurement and allocation moved onto
+    RsProduct.id directly, so there is no second identity left to bridge to and
+    the column is gone.
+  */
+  it('has no productId column', async () => {
+    const columns = await prisma.$queryRawUnsafe<{ column_name: string }[]>(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = 'RsProduct' AND column_name = 'productId'`,
+    );
+    expect(columns).toEqual([]);
   });
 
-  it('links to a legacy product when set, and reads back through the relation', async () => {
-    const name = `${tag()} legacy`;
-    const legacy = await prisma.product.create({
-      data: { name, normalizedName: name.toLowerCase().replace(/\s+/g, '') },
-      select: { id: true },
-    });
-    createdProductIds.push(legacy.id);
-
-    const id = await makeRsProduct({ productId: legacy.id });
-
-    const row = await prisma.rsProduct.findUniqueOrThrow({
-      where: { id },
-      include: { product: true },
-    });
-    expect(row.productId).toBe(legacy.id);
-    expect(row.product?.id).toBe(legacy.id);
-  });
-
-  it('survives deletion of the legacy product by nulling the bridge', async () => {
-    // SET NULL, never cascade: retiring a legacy product must not delete a
-    // catalogue row that may already be referenced elsewhere.
-    const name = `${tag()} legacy doomed`;
-    const legacy = await prisma.product.create({
-      data: { name, normalizedName: name.toLowerCase().replace(/\s+/g, '') },
-      select: { id: true },
-    });
-    const id = await makeRsProduct({ productId: legacy.id });
-
-    await prisma.product.delete({ where: { id: legacy.id } });
-
-    const row = await prisma.rsProduct.findUniqueOrThrow({ where: { id } });
-    expect(row.productId).toBeNull();
-  });
-
-  it('refuses a bridge pointing at a product that does not exist', async () => {
-    await expect(
-      makeRsProduct({ productId: 'clx0000000000000000000000' }),
-    ).rejects.toMatchObject({ code: 'P2003' });
+  it('has no foreign key to Product', async () => {
+    const fks = await prisma.$queryRawUnsafe<{ constraint_name: string }[]>(
+      `SELECT tc.constraint_name
+       FROM information_schema.table_constraints tc
+       JOIN information_schema.constraint_column_usage ccu
+         ON ccu.constraint_name = tc.constraint_name
+       WHERE tc.constraint_type = 'FOREIGN KEY'
+         AND tc.table_name = 'RsProduct' AND ccu.table_name = 'Product'`,
+    );
+    expect(fks).toEqual([]);
   });
 });
 
 describe('existing modules are untouched by this phase', () => {
-  it('leaves Product and InventoryItem structurally unchanged', async () => {
-    // The RS Products tables are separate precisely so Procurement's identity
-    // rules keep working. Both of these uniques must still bite.
-    const name = `${tag()} unique check`;
-    const normalizedName = name.toLowerCase().replace(/\s+/g, '');
-    const first = await prisma.product.create({
-      data: { name, normalizedName },
-      select: { id: true },
-    });
-    createdProductIds.push(first.id);
-
-    await expect(
-      prisma.product.create({ data: { name, normalizedName } }),
-    ).rejects.toMatchObject({ code: 'P2002' });
-  });
-
-  it('does not let an RS Products row reach InventoryItem', async () => {
-    const inventoryBefore = await prisma.inventoryItem.count();
-
-    const rsProductId = await makeRsProduct();
-    await prisma.shopifyVariant.create({
-      data: { rsProductId, price: '99.00', inventoryQty: 500 },
-    });
-
-    // Shopify quantity lives on the variant. Procurement's warehouse count is a
-    // different number and must not have moved.
-    expect(await prisma.inventoryItem.count()).toBe(inventoryBefore);
-  });
-
   it('leaves every existing business table at the count it started with', async () => {
     const now = await businessSnapshot();
 
-    // The bridge tests create and delete legacy products, so Product is
-    // compared after this suite's own rows are accounted for.
-    const outstanding = await prisma.product.count({
-      where: { id: { in: createdProductIds } },
-    });
-
-    expect(now.product - outstanding).toBe(before.product);
-    expect(now.inventory).toBe(before.inventory);
     expect(now.salesOrder).toBe(before.salesOrder);
     expect(now.salesOrderItem).toBe(before.salesOrderItem);
     expect(now.purchaseBill).toBe(before.purchaseBill);

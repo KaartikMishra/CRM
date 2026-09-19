@@ -4,8 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { Link2, Loader2, Lock, Search } from 'lucide-react';
 import { toast } from 'sonner';
-import type { OrderRequirementView, ProductView, PurchaseBillItemView } from '@rs/shared';
-import { normalizeProductName } from '@rs/shared';
+import type { OrderRequirementView, PurchaseBillItemView } from '@rs/shared';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -19,29 +18,33 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { ErrorMessage } from '@/components/common/error-message';
+import { RsProductPicker, type PickedProduct } from '@/components/products/rs-product-picker';
 import { FulfillmentBadge, PendingQty } from './procurement-badges';
 import {
   allocateAction,
   linkOrderLineAction,
-  linkPurchaseItemAction,
   lookupOrderAction,
-  putInCatalogueAction,
 } from '@/app/(app)/procurement/actions';
-
 
 /**
  * Mapping purchased stock onto a customer order.
  *
  * The flow starts from the order number, because that is how the work actually
  * arrives: someone is chasing a customer who is still waiting. Asking which
- * catalogue entry the goods correspond to *before* knowing which order they are
- * for is a question out of order — it interrupts the task with bookkeeping.
+ * product the goods correspond to *before* knowing which order they are for is
+ * a question out of order — it interrupts the task with bookkeeping.
  *
- * So the catalogue is settled only where it genuinely blocks progress: at the
- * moment a specific order line is chosen and one of the two sides turns out to
- * have no product identity. Allocation matches on product id and never on
- * spelling, so both sides must be linked before stock can move — but the user
- * is asked about it against a concrete line, not upfront and in the abstract.
+ * So the product is settled only where it genuinely blocks progress: at the
+ * moment a specific order line is chosen and one of the two sides turns out not
+ * to be mapped. Allocation matches on `RsProduct.id` and never on spelling, so
+ * both sides must name a product before stock can move — but the user is asked
+ * about it against a concrete line, not upfront and in the abstract.
+ *
+ * One identity, on both sides. This panel used to carry a second catalogue: the
+ * legacy Product master, which Sales and Procurement each linked to separately
+ * and which Procurement could create entries in. Both sides name an RsProduct
+ * now, so there is one picker, one comparison, and no catalogue to maintain
+ * here — a product that does not exist is created in RS Products.
  *
  * Nothing here decides business outcomes. Every rule — mismatched products,
  * over-allocation, standing limits, the freeze on fulfilled lines, permissions
@@ -50,14 +53,11 @@ import {
 export function AllocationPanel({
   billId,
   item,
-  products,
   canEdit,
   isAdmin,
 }: {
   billId: string;
   item: PurchaseBillItemView;
-  /** The catalogue, for the linking step when a line turns out to need it. */
-  products: ProductView[];
   canEdit: boolean;
   isAdmin: boolean;
 }) {
@@ -70,16 +70,16 @@ export function AllocationPanel({
   const [quantities, setQuantities] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
 
-  /** The order line the user is resolving a catalogue link for, if any. */
-  const [linkingLineId, setLinkingLineId] = useState<string | null>(null);
-  const [productQuery, setProductQuery] = useState('');
+  /** The order line the user is choosing a product for, if any. */
+  const [mappingLineId, setMappingLineId] = useState<string | null>(null);
+  const [picked, setPicked] = useState<PickedProduct | null>(null);
 
-  const product = item.product;
+  const rsProduct = item.rsProduct;
 
   function findOrder(): void {
     setError(null);
     setOrder(null);
-    setLinkingLineId(null);
+    setMappingLineId(null);
     startTransition(async () => {
       const result = await lookupOrderAction(orderNumber.trim());
       if (!result.ok) {
@@ -98,61 +98,24 @@ export function AllocationPanel({
   }
 
   /**
-   * Attaches this *purchase* line to a catalogue product.
+   * Says which RS Product an *order* line is for.
    *
-   * Needed when the bill was typed in the vendor's words and nobody has said
-   * yet what those words refer to. Chosen explicitly: two products can share a
-   * name, and inferring one would pool their stock silently.
+   * Chosen explicitly, never inferred. Two products can share a title and RS
+   * SKUs legitimately repeat, so anything derived from the line's wording would
+   * be a guess — and an allocation that lands on the wrong goods cannot be
+   * undone once its stock is spent.
    */
-  function linkPurchaseLine(productId: string): void {
+  function mapOrderLine(salesOrderItemId: string, rsProductId: string): void {
     setError(null);
     startTransition(async () => {
-      const result = await linkPurchaseItemAction(billId, item.id, { productId });
+      const result = await linkOrderLineAction({ salesOrderItemId, rsProductId });
       if (!result.ok) {
         setError(result.message);
         return;
       }
-      toast.success('Purchase line linked.');
-      setLinkingLineId(null);
-      await refreshOrder();
-      router.refresh();
-    });
-  }
-
-  /** The same, for an *order* line that predates the product master. */
-  function linkOrderLine(salesOrderItemId: string, productId: string): void {
-    setError(null);
-    startTransition(async () => {
-      const result = await linkOrderLineAction({ salesOrderItemId, productId });
-      if (!result.ok) {
-        setError(result.message);
-        return;
-      }
-      toast.success('Order line linked.');
-      setLinkingLineId(null);
-      setOrder(result.data.order);
-      router.refresh();
-    });
-  }
-
-  /**
-   * Catalogues the order line's own wording, then links the line to it.
-   *
-   * Offered only when nothing in the catalogue already represents the product.
-   * The server still decides — it re-checks the folded name and reuses an
-   * existing entry if one appeared in the meantime — so this button cannot
-   * create a duplicate even if the list here is a moment out of date.
-   */
-  function putInCatalogue(salesOrderItemId: string): void {
-    setError(null);
-    startTransition(async () => {
-      const result = await putInCatalogueAction({ salesOrderItemId });
-      if (!result.ok) {
-        setError(result.message);
-        return;
-      }
-      toast.success('Added to the catalogue and linked.');
-      setLinkingLineId(null);
+      toast.success('Order line mapped.');
+      setMappingLineId(null);
+      setPicked(null);
       setOrder(result.data.order);
       router.refresh();
     });
@@ -180,39 +143,6 @@ export function AllocationPanel({
     });
   }
 
-  /*
-    Every matching active product, with no cap on how many are listed.
-
-    A count that stops at six answers a question nobody asked: the picker has a
-    search box, so the list's job is to be complete and let the reader scroll or
-    type. Capping it meant an empty box showed six of thirteen products and read
-    as the whole catalogue.
-
-    Matching uses the shared fold — lowercase, every space removed — so the
-    picker agrees with the catalogue's own uniqueness rule and can never offer
-    to create a product the database would refuse. Product.name is never
-    rewritten. Inactive products stay out of the list: they cannot be linked,
-    so offering one would only invite a rejected click.
-  */
-  const term = normalizeProductName(productQuery);
-  const catalogueMatches = products.filter(
-    (p) => p.isActive && (term === '' || normalizeProductName(p.name).includes(term)),
-  );
-
-  /**
-   * Whether the catalogue already holds the line's product, under any spelling.
-   *
-   * Exact on the folded name, not a substring: "thali" appearing inside "kansa
-   * thali" is a different product, and offering to reuse it would pool two
-   * things that only look alike. An inactive hit still counts — the unique
-   * index would refuse a rival regardless, so the UI says so rather than
-   * offering a button that cannot work.
-   */
-  function catalogueEntryFor(productName: string): ProductView | undefined {
-    const key = normalizeProductName(productName);
-    return products.find((p) => normalizeProductName(p.name) === key);
-  }
-
   return (
     <>
       <Button
@@ -228,12 +158,27 @@ export function AllocationPanel({
       <Dialog open={open} onOpenChange={(next) => !pending && setOpen(next)}>
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Map {item.productName}</DialogTitle>
+            <DialogTitle>Map {rsProduct?.title ?? item.productName}</DialogTitle>
             <DialogDescription>
               {item.standingQty} unit{item.standingQty === 1 ? '' : 's'} unallocated on this
               purchase line. Find the order waiting for them.
             </DialogDescription>
           </DialogHeader>
+
+          {/*
+            The purchase side, stated before anything else. Stock cannot move
+            from a line nobody has said the product of, so saying so here saves
+            the user working through an order only to be refused at the end.
+          */}
+          {!rsProduct && (
+            <div className="rounded-md border border-line bg-surface-2 px-3 py-2.5 text-sm text-ink-2">
+              <Badge variant="warning">Not mapped to RS Products</Badge>
+              <p className="mt-1.5 text-xs text-muted">
+                This purchase line has no product, so its stock cannot be allocated. Close this and
+                use <span className="text-ink">Map product</span> on the line first.
+              </p>
+            </div>
+          )}
 
           {/* Step one, always: which order is this for? */}
           <div className="flex items-end gap-2">
@@ -274,21 +219,12 @@ export function AllocationPanel({
 
               <div className="flex flex-col gap-2">
                 {order.lines.map((line) => {
-                  // Both sides need an identity before stock can move. Which
-                  // side is missing decides what to ask for.
-                  const orderLineLinked = line.linked;
-                  const bothLinked = orderLineLinked && product !== null;
-                  const sameProduct = bothLinked && line.productId === product!.id;
+                  // Both sides need a product before stock can move. Which side
+                  // is missing decides what to ask for.
+                  const bothMapped = line.linked && rsProduct !== null;
+                  const sameProduct = bothMapped && line.rsProductId === rsProduct!.id;
                   const cap = Math.min(line.pendingQty, item.standingQty);
-                  /*
-                    The catalogue entry this purchase line plainly names, even
-                    though nobody has linked it yet: "Brasscooker" on the bill
-                    and "Brass Cooker" in the catalogue fold to one key. Offered
-                    as a one-click link rather than applied silently — the write
-                    stays a decision someone makes having seen both spellings.
-                  */
-                  const purchaseMatch = product ? null : catalogueEntryFor(item.productName);
-                  const isLinking = linkingLineId === line.salesOrderItemId;
+                  const isMapping = mappingLineId === line.salesOrderItemId;
 
                   return (
                     <div
@@ -321,64 +257,21 @@ export function AllocationPanel({
                             <Lock className="size-3" />
                             {isAdmin ? 'Fulfilled' : 'Fulfilled — locked'}
                           </span>
-                        ) : !orderLineLinked ? (
+                        ) : !line.linked ? (
                           <Button
                             size="sm"
                             variant="outline"
                             disabled={pending}
                             onClick={() => {
-                              setLinkingLineId(isLinking ? null : line.salesOrderItemId);
-                              // Opens on the whole catalogue: see the note at
-                              // the purchase-line button below.
-                              setProductQuery('');
+                              setMappingLineId(isMapping ? null : line.salesOrderItemId);
+                              setPicked(null);
                             }}
                           >
                             <Link2 className="size-3.5" />
-                            Link to catalogue
+                            Map product
                           </Button>
-                        ) : purchaseMatch?.isActive ? (
-                          /*
-                            The bill's wording already names a catalogue
-                            product, so the whole picker would be ceremony:
-                            offer the link itself. One click, and the quantity
-                            input below becomes reachable.
-                          */
-                          <Button
-                            size="sm"
-                            disabled={pending}
-                            onClick={() => linkPurchaseLine(purchaseMatch.id)}
-                            title={`Link this purchase line to “${purchaseMatch.name}”`}
-                          >
-                            {pending && <Loader2 className="size-3.5 animate-spin" />}
-                            <Link2 className="size-3.5" />
-                            Link to {purchaseMatch.name}
-                          </Button>
-                        ) : !product ? (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={pending}
-                            onClick={() => {
-                              setLinkingLineId(isLinking ? null : line.salesOrderItemId);
-                              /*
-                                Opens empty, so the picker shows the whole
-                                active catalogue.
-
-                                It used to prefill the box with the line's own
-                                free text. That looked helpful and was the
-                                opposite: "ganesh iDol" matches no catalogue
-                                name, so the list opened empty and the user had
-                                to clear a field they never typed in before any
-                                product appeared. The name is already shown in
-                                the prompt above the box; searching for it is
-                                the user's choice, not the default.
-                              */
-                              setProductQuery('');
-                            }}
-                          >
-                            <Link2 className="size-3.5" />
-                            Link purchase line
-                          </Button>
+                        ) : !rsProduct ? (
+                          <span className="text-xs text-muted">Purchase line not mapped</span>
                         ) : !sameProduct ? (
                           <span className="text-xs text-muted">Different product</span>
                         ) : (
@@ -410,116 +303,51 @@ export function AllocationPanel({
                       </div>
 
                       {/*
-                        The catalogue step, asked only about the line the user
+                        The product step, asked only about the line the user
                         actually picked — and never answered for them. A name
                         match would be a guess presented as a fact, and
                         "brassdinnerset" is not evidence of anything.
                       */}
-                      {isLinking && (
+                      {isMapping && (
                         <div className="flex flex-col gap-2 rounded-md bg-surface-2 p-3">
                           <p className="text-xs text-muted">
-                            {!orderLineLinked
-                              ? 'This order line is not linked to the catalogue. Choose the product it refers to.'
-                              : `This purchase line is not linked. Choose the catalogue product for “${item.productName}”.`}
+                            This order line is not mapped to RS Products. Choose the product it
+                            refers to — search by name or SKU.
                           </p>
 
-                          {/*
-                            Three answers, decided by what the catalogue already
-                            holds for this line's wording:
-
-                              active match    → offer it, do not offer creation
-                              inactive match  → say so; neither reuse nor rival
-                              nothing         → offer Put in Catalogue
-
-                            The button never appears beside a match, so the
-                            obvious way to create a duplicate is simply absent.
-                          */}
-                          {!orderLineLinked &&
-                            (() => {
-                              const match = catalogueEntryFor(line.productName);
-                              if (match?.isActive) {
-                                return (
-                                  <div className="flex flex-wrap items-center gap-2 rounded-md border border-line bg-surface px-3 py-2">
-                                    <span className="text-xs text-muted">Already in the catalogue as</span>
-                                    <span className="text-sm font-medium text-ink">{match.name}</span>
-                                    <Button
-                                      size="sm"
-                                      disabled={pending}
-                                      onClick={() => linkOrderLine(line.salesOrderItemId, match.id)}
-                                    >
-                                      Link to it
-                                    </Button>
-                                  </div>
-                                );
-                              }
-                              if (match) {
-                                return (
-                                  <div className="rounded-md border border-line bg-surface px-3 py-2">
-                                    <Badge variant="warning">Inactive catalogue product</Badge>
-                                    <p className="mt-1.5 text-xs text-muted">
-                                      “{match.name}” already represents this product but is
-                                      inactive. Reactivate it from the products list — adding a
-                                      second entry would split its stock.
-                                    </p>
-                                  </div>
-                                );
-                              }
-                              return (
-                                <div className="flex flex-wrap items-center gap-2 rounded-md border border-line bg-surface px-3 py-2">
-                                  <span className="min-w-0 flex-1 text-xs text-muted">
-                                    Nothing in the catalogue matches “{line.productName}”.
-                                  </span>
-                                  <Button
-                                    size="sm"
-                                    disabled={pending}
-                                    onClick={() => putInCatalogue(line.salesOrderItemId)}
-                                  >
-                                    {pending && <Loader2 className="size-3.5 animate-spin" />}
-                                    Put in Catalogue
-                                  </Button>
-                                </div>
-                              );
-                            })()}
-
-                          <Input
-                            value={productQuery}
-                            onChange={(e) => setProductQuery(e.target.value)}
-                            placeholder="Search the catalogue"
+                          <RsProductPicker
+                            value={picked}
+                            onChange={setPicked}
+                            disabled={pending}
+                            triggerLabel={line.productName}
                           />
 
-                          {/*
-                            The list scrolls inside its own box rather than
-                            growing the dialog: the search input above stays put
-                            while the results move, so a long catalogue never
-                            pushes it off screen.
-                          */}
-                          <div className="flex max-h-64 flex-col gap-1.5 overflow-y-auto">
-                            {catalogueMatches.length === 0 ? (
-                              <p className="py-1 text-xs text-muted">
-                                No catalogue product matches. Create one from the products list
-                                first.
-                              </p>
-                            ) : (
-                              catalogueMatches.map((p) => (
-                                <button
-                                  key={p.id}
-                                  type="button"
-                                  disabled={pending}
-                                  onClick={() =>
-                                    orderLineLinked
-                                      ? linkPurchaseLine(p.id)
-                                      : linkOrderLine(line.salesOrderItemId, p.id)
-                                  }
-                                  className="flex items-center justify-between rounded-md border border-line bg-surface px-3 py-2 text-left text-sm transition-colors hover:bg-surface-2 disabled:opacity-60"
-                                >
-                                  <span className="min-w-0 truncate text-ink">{p.name}</span>
-                                  <span className="ml-3 shrink-0 text-xs text-muted tabular">
-                                    {p.onHand} on hand
-                                  </span>
-                                </button>
-                              ))
-                            )}
+                          <div className="flex items-center justify-end gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={pending}
+                              onClick={() => {
+                                setMappingLineId(null);
+                                setPicked(null);
+                              }}
+                            >
+                              Cancel
+                            </Button>
+                            <Button
+                              size="sm"
+                              disabled={pending || !picked}
+                              onClick={() => mapOrderLine(line.salesOrderItemId, picked!.id)}
+                            >
+                              {pending && <Loader2 className="size-3.5 animate-spin" />}
+                              Map to this product
+                            </Button>
                           </div>
+
+                          <p className="text-[11px] text-muted">
+                            A SKU can belong to more than one product, so the search may return
+                            several. Nothing is matched for you.
+                          </p>
                         </div>
                       )}
                     </div>

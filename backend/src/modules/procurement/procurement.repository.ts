@@ -38,39 +38,69 @@ export async function lockOrderLine(tx: Prisma.TransactionClient, id: string): P
 }
 
 // ---------------------------------------------------------------------------
-//  Products & inventory
+//  RS Products — the canonical catalogue
 // ---------------------------------------------------------------------------
 
-export const productSelect = {
+/**
+ * Everything Procurement shows about an RS Product, and nothing more.
+ *
+ * Variants appear here only so the product-level figures can be derived from
+ * them — the SKU of the first, and the two summed stock counts. None of them
+ * reaches the API: `RsProductRef` carries one product, one SKU string and two
+ * numbers, so no variant concept escapes into Procurement.
+ *
+ * BOTH stock columns are selected, because they are two different facts:
+ * `crmStockQty` is the hand-maintained CRM count and `inventoryQty` is
+ * Shopify's sellable quantity. Procurement shows them side by side under
+ * separate labels; selecting only one and captioning it with the other's name
+ * is exactly the conflation the separate columns exist to prevent.
+ *
+ * Ordered by position for both, so "the first variant" and "the first image"
+ * mean the same thing here as they do in the RS Products catalogue itself.
+ */
+export const rsProductRefSelect = {
   id: true,
-  name: true,
-  description: true,
-  isActive: true,
-  createdAt: true,
-  inventory: { select: { onHand: true } },
-} as const;
+  title: true,
+  variants: {
+    select: { sku: true, crmStockQty: true, inventoryQty: true },
+    orderBy: { position: 'asc' },
+  },
+  images: {
+    select: { url: true },
+    orderBy: { position: 'asc' },
+    take: 1,
+  },
+} as const satisfies Prisma.RsProductSelect;
 
-export function findProducts(where: Prisma.ProductWhereInput, take: number) {
-  return prisma.product.findMany({
-    where,
-    select: productSelect,
-    orderBy: [{ isActive: 'desc' }, { name: 'asc' }],
-    take,
+/** One RS Product, for mapping a line — a purchase line or an order line — to it. */
+export function findRsProduct(id: string, client: Prisma.TransactionClient | typeof prisma = prisma) {
+  return client.rsProduct.findUnique({
+    where: { id },
+    select: { ...rsProductRefSelect, status: true },
   });
 }
 
-export function findProduct(id: string, client: Prisma.TransactionClient | typeof prisma = prisma) {
-  return client.product.findUnique({ where: { id }, select: productSelect });
+/**
+ * The RS Products named by a set of ids, for the shortage board's spine.
+ *
+ * The board used to be built by scanning the legacy catalogue and keying demand
+ * onto it. There is no catalogue to scan now — RS Products holds five hundred
+ * rows and will hold more, and almost none of them are on an open order — so
+ * the rows are the products demand and supply actually name, fetched by id.
+ */
+export function findRsProductsByIds(ids: string[]) {
+  if (ids.length === 0) return Promise.resolve([]);
+  return prisma.rsProduct.findMany({ where: { id: { in: ids } }, select: rsProductRefSelect });
 }
 
-export function findProductByName(name: string) {
-  return prisma.product.findUnique({ where: { name }, select: { id: true } });
-}
-
-/** Locks the stock row before a correction, so two counts cannot clobber. */
-export async function lockInventory(tx: Prisma.TransactionClient, productId: string): Promise<void> {
-  await tx.$queryRaw`SELECT 1 FROM "InventoryItem" WHERE "productId" = ${productId} FOR UPDATE`;
-}
+/*
+ * The legacy Product master and InventoryItem have no accessors here any more.
+ *
+ * `productSelect`, `findProducts`, `findProduct`, `findProductByName`,
+ * `lockInventory` and the two normalised-name lookups all went with them. There
+ * is one product identity — RsProduct.id — so there is nothing left to look a
+ * product up in, and nothing to fold a name onto.
+ */
 
 // ---------------------------------------------------------------------------
 //  Purchase bills
@@ -88,12 +118,42 @@ const allocationSelect = {
       quantity: true,
       // Needed to say whether the line is fully met, and so frozen.
       alreadyFulfilled: true,
-      product: { select: { inventory: { select: { onHand: true } } } },
       allocations: { select: { quantity: true } },
       order: { select: { id: true, orderId: true, customer: { select: { name: true } } } },
     },
   },
 } as const;
+
+/**
+ * One re-mapping request, with both products and both people resolved.
+ *
+ * The products are fetched in full rather than as ids because every consumer —
+ * the approval queue, the bill line, the audit entry — needs to show a person
+ * which goods are being moved, and a cuid shows nobody anything.
+ */
+export const productChangeSelect = {
+  id: true,
+  billId: true,
+  itemId: true,
+  reason: true,
+  status: true,
+  requestedAt: true,
+  reviewedAt: true,
+  reviewNote: true,
+  fromRsProduct: { select: rsProductRefSelect },
+  toRsProduct: { select: rsProductRefSelect },
+  requestedBy: { select: { id: true, name: true } },
+  reviewedBy: { select: { id: true, name: true } },
+  bill: { select: { billNumber: true } },
+  item: {
+    select: {
+      productName: true,
+      // So an approver can see that the line's stock is already promised, and
+      // that approving would therefore be refused.
+      allocations: { select: { quantity: true } },
+    },
+  },
+} as const satisfies Prisma.PurchaseItemProductChangeSelect;
 
 const billItemSelect = {
   id: true,
@@ -102,9 +162,21 @@ const billItemSelect = {
   orderedQty: true,
   receivedQty: true,
   rate: true,
-  product: { select: productSelect },
+  rsProduct: { select: rsProductRefSelect },
   productImage: { select: { id: true, secureUrl: true } },
   allocations: { select: allocationSelect, orderBy: { createdAt: 'asc' } },
+  /*
+    The undecided request on this line, if there is one.
+
+    `take: 1` is safe rather than arbitrary: a partial unique index permits at
+    most one PENDING row per item, so this is "the" pending request and not the
+    first of several.
+  */
+  productChanges: {
+    where: { status: 'PENDING' as const },
+    select: productChangeSelect,
+    take: 1,
+  },
 } as const;
 
 export const billDetailSelect = {
@@ -112,6 +184,10 @@ export const billDetailSelect = {
   billNumber: true,
   billType: true,
   status: true,
+  approvalStatus: true,
+  reviewedAt: true,
+  reviewNote: true,
+  reviewedBy: { select: { id: true, name: true } },
   billDate: true,
   expectedBy: true,
   isDelayed: true,
@@ -165,13 +241,98 @@ export function findBillItem(
     select: {
       id: true,
       billId: true,
-      productId: true,
+      rsProductId: true,
       productName: true,
       orderedQty: true,
       receivedQty: true,
       allocations: { select: { id: true, quantity: true, salesOrderItemId: true } },
+      // The parent bill's sign-off, read with the line so allocation can refuse
+      // an unapproved bill inside the same lock it already takes, rather than
+      // in a second query that could see a different answer.
+      bill: { select: { approvalStatus: true } },
     },
   });
+}
+
+/**
+ * Everything needed to decide what one line currently stands for in CRM stock.
+ *
+ * The bill's approval and the line's own allocations come back with it, because
+ * the target is a function of all three and reading them separately would let
+ * the parts disagree under concurrency.
+ */
+export function findLineForStock(tx: Prisma.TransactionClient, id: string) {
+  return tx.purchaseBillItem.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      rsProductId: true,
+      receivedQty: true,
+      stockedQty: true,
+      allocations: { select: { quantity: true } },
+      bill: { select: { approvalStatus: true } },
+    },
+  });
+}
+
+/** Every line on a bill, for reconciling the whole bill at approval. */
+export function findBillLineIds(tx: Prisma.TransactionClient, billId: string) {
+  return tx.purchaseBillItem.findMany({ where: { billId }, select: { id: true } });
+}
+
+/**
+ * Where a product's CRM stock is actually written.
+ *
+ * Procurement maps at product level, but `crmStockQty` is a column on
+ * ShopifyVariant and the product-level figure is the SUM across variants. So a
+ * product-level delta has to land on some variant, and this picks the lowest
+ * `position` — the same variant `RsProductListRow` and `RsProductRef` already
+ * take their SKU from, so "the first variant" means one thing throughout.
+ *
+ * This is a storage detail, not variant mapping: nothing selects, stores or
+ * exposes a variant id, and every reader still sees only the product-level sum.
+ */
+export async function firstVariantId(
+  tx: Prisma.TransactionClient,
+  rsProductId: string,
+): Promise<string | null> {
+  const variant = await tx.shopifyVariant.findFirst({
+    where: { rsProductId },
+    select: { id: true },
+    orderBy: { position: 'asc' },
+  });
+  return variant?.id ?? null;
+}
+
+/**
+ * Moves a product's CRM stock by a delta.
+ *
+ * `increment` rather than a read-then-write, so two transactions touching the
+ * same product from different bill lines cannot each read the old value and
+ * overwrite one another. The database does the addition.
+ */
+export async function moveCrmStock(
+  tx: Prisma.TransactionClient,
+  variantId: string,
+  delta: number,
+): Promise<void> {
+  await tx.shopifyVariant.update({
+    where: { id: variantId },
+    data: { crmStockQty: { increment: delta } },
+  });
+}
+
+/** One bill's approval state, for deciding it under a lock. */
+export function findBillForReview(tx: Prisma.TransactionClient, id: string) {
+  return tx.purchaseBill.findUnique({
+    where: { id },
+    select: { id: true, approvalStatus: true, createdById: true, billNumber: true },
+  });
+}
+
+/** Locks a bill so two reviewers cannot decide it at once. */
+export async function lockBill(tx: Prisma.TransactionClient, id: string): Promise<void> {
+  await tx.$queryRaw`SELECT 1 FROM "PurchaseBill" WHERE "id" = ${id} FOR UPDATE`;
 }
 
 /**
@@ -184,7 +345,7 @@ export function findOrderLine(tx: Prisma.TransactionClient, id: string) {
     where: { id },
     select: {
       id: true,
-      productId: true,
+      rsProductId: true,
       productName: true,
       quantity: true,
       alreadyFulfilled: true,
@@ -211,10 +372,9 @@ export function findOrderByNumber(orderId: string) {
           id: true,
           lineNo: true,
           productName: true,
-          productId: true,
+          rsProductId: true,
           quantity: true,
           alreadyFulfilled: true,
-          product: { select: { inventory: { select: { onHand: true } } } },
           allocations: { select: { quantity: true } },
         },
         orderBy: { lineNo: 'asc' },
@@ -235,6 +395,44 @@ export function findAllocation(tx: Prisma.TransactionClient, id: string) {
   });
 }
 
+// ---------------------------------------------------------------------------
+//  Product change requests
+// ---------------------------------------------------------------------------
+
+/** The approval queue, newest first. Filtered by status and/or bill. */
+export function findProductChanges(where: Prisma.PurchaseItemProductChangeWhereInput) {
+  return prisma.purchaseItemProductChange.findMany({
+    where,
+    select: productChangeSelect,
+    orderBy: [{ requestedAt: 'desc' }],
+    take: 200,
+  });
+}
+
+/** One request, read inside the reviewer's transaction before it is decided. */
+export function findProductChange(tx: Prisma.TransactionClient, id: string) {
+  return tx.purchaseItemProductChange.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      billId: true,
+      itemId: true,
+      status: true,
+      fromRsProductId: true,
+      toRsProductId: true,
+      requestedById: true,
+    },
+  });
+}
+
+/** Whether this line already has an undecided request, for a readable message. */
+export function findPendingChangeForItem(tx: Prisma.TransactionClient, itemId: string) {
+  return tx.purchaseItemProductChange.findFirst({
+    where: { itemId, status: 'PENDING' },
+    select: { id: true },
+  });
+}
+
 /**
  * Every ACTIVE order line on an order that is not yet dispatched, grouped by
  * product — the raw material for the shortage board.
@@ -247,7 +445,7 @@ export function findOpenRequirements() {
     // link decides how a row is *keyed*, not whether it counts.
     where: { status: 'ACTIVE', order: { status: 'OPEN' } },
     select: {
-      productId: true,
+      rsProductId: true,
       productName: true,
       quantity: true,
       alreadyFulfilled: true,
@@ -257,15 +455,20 @@ export function findOpenRequirements() {
 }
 
 /**
- * Purchase lines that have no catalogue link, for the free-text side of the
- * shortage board. Keyed by the vendor's wording, exactly as recorded.
+ * Every purchase line, with both identities and the RS Product behind the new
+ * one — the supply side of the shortage board.
+ *
+ * One query rather than the two this replaced (linked lines, then unlinked
+ * ones). A line now carries up to two keys and the board has to key each row on
+ * whichever it actually has, so splitting the fetch by which key is null would
+ * mean deciding the same question twice in two places.
  */
-export function findUnlinkedBillItems() {
+export function findBillItemsForShortages() {
   return prisma.purchaseBillItem.findMany({
-    where: { productId: null },
     select: {
       productName: true,
       receivedQty: true,
+      rsProduct: { select: rsProductRefSelect },
       allocations: { select: { quantity: true } },
     },
   });
@@ -284,7 +487,7 @@ export function findSalesRequirements() {
     select: {
       id: true,
       productName: true,
-      productId: true,
+      rsProductId: true,
       quantity: true,
       alreadyFulfilled: true,
       allocations: { select: { quantity: true } },
@@ -356,30 +559,6 @@ export async function findFulfillmentEvents(
   return latest;
 }
 
-/** A catalogue entry by its folded name — the identity the unique index holds. */
-export function findProductByNormalizedName(normalizedName: string) {
-  return prisma.product.findUnique({
-    where: { normalizedName },
-    select: { ...productSelect, normalizedName: true },
-  });
-}
-
-/**
- * Catalogue entries for a set of folded names, in one query.
- *
- * The batch form exists because the shortage board resolves every free-text
- * line at once: one round trip beats one per name, and Neon is a network hop
- * away. Callers that already hold the catalogue should build their own map
- * from it rather than calling this at all.
- */
-export function findProductsByNormalizedNames(normalizedNames: string[]) {
-  if (normalizedNames.length === 0) return Promise.resolve([]);
-  return prisma.product.findMany({
-    where: { normalizedName: { in: normalizedNames } },
-    select: { ...productSelect, normalizedName: true },
-  });
-}
-
 /**
  * One order line with everything behind its fulfilment.
  *
@@ -398,7 +577,7 @@ export function findFulfillmentDetail(salesOrderItemId: string) {
       quantity: true,
       alreadyFulfilled: true,
       createdAt: true,
-      product: { select: productSelect },
+      rsProduct: { select: rsProductRefSelect },
       order: {
         select: {
           id: true,

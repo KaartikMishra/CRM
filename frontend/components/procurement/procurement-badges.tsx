@@ -1,4 +1,9 @@
-import type { FulfillmentStatus, PurchaseBillStatus, PurchaseBillType } from '@rs/shared';
+import type {
+  BillApprovalStatus,
+  FulfillmentStatus,
+  PurchaseBillStatus,
+  PurchaseBillType,
+} from '@rs/shared';
 import { Badge } from '@/components/ui/badge';
 
 /**
@@ -19,6 +24,25 @@ const BILL_STATUS: Record<PurchaseBillStatus, { label: string; variant: 'neutral
 export function BillStatusBadge({ status }: { status: PurchaseBillStatus }) {
   const { label, variant } = BILL_STATUS[status];
   return <Badge variant={variant}>{label}</Badge>;
+}
+
+/**
+ * Whether a bill has been signed off — a separate badge from the status one
+ * above, because they say separate things. That one reports how much of the
+ * goods have arrived; this reports whether the bill is trusted. A bill can be
+ * fully Received and still Pending approval, and both badges then show at once,
+ * which is the honest reading of its state.
+ *
+ * Approved renders as nothing. Once the queue is cleared it is the ordinary
+ * case, and a green tick on every row would leave nothing for the eye to catch.
+ */
+export function BillApprovalBadge({ status }: { status: BillApprovalStatus }) {
+  if (status === 'APPROVED') return null;
+  return (
+    <Badge variant={status === 'REJECTED' ? 'critical' : 'warning'}>
+      {status === 'REJECTED' ? 'Rejected' : 'Awaiting approval'}
+    </Badge>
+  );
 }
 
 export function BillTypeBadge({ type }: { type: PurchaseBillType }) {

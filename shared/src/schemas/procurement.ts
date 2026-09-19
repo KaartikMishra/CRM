@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { PURCHASE_BILL_TYPES, PURCHASE_BILL_STATUSES } from '../enums.js';
+import { BILL_APPROVAL_STATUSES, PURCHASE_BILL_TYPES, PURCHASE_BILL_STATUSES } from '../enums.js';
 import { amountSchema, cuidSchema, paginationSchema } from './common.js';
 
 /**
@@ -33,45 +33,13 @@ export const receivedQuantitySchema = z
   .min(0, 'Received quantity cannot be negative')
   .max(1_000_000, 'Received quantity looks too large — check the value');
 
-// ---------------------------------------------------------------------------
-//  Product master
-// ---------------------------------------------------------------------------
-
-export const createProductSchema = z.object({
-  name: z.string().trim().min(1, 'Product name is required').max(200),
-  description: z.string().trim().max(1000).optional(),
-  /** Opening stock. Absent means zero — an uncounted shelf is not a guess. */
-  onHand: z.number().int().min(0).max(10_000_000).optional(),
-});
-
-export const updateProductSchema = z
-  .object({
-    name: z.string().trim().min(1).max(200).optional(),
-    description: z.string().trim().max(1000).nullable().optional(),
-    isActive: z.boolean().optional(),
-  })
-  .refine((v) => Object.keys(v).length > 0, 'Nothing to update');
-
-/**
- * Stock correction, as a signed delta rather than an absolute value.
+/*
+ * The legacy product master has no contract here at all any more.
  *
- * Two people counting the same shelf minutes apart would otherwise overwrite
- * each other with stale totals; a delta composes, and the row lock makes it
- * exact.
+ * Listing it, creating one, editing one and correcting its stock by hand have
+ * all gone. RS Products is the catalogue: a product that is not in it is
+ * created there, and Procurement identifies goods by `RsProduct.id` alone.
  */
-export const adjustInventorySchema = z.object({
-  delta: z
-    .number({ invalid_type_error: 'Adjustment must be a number' })
-    .int('Adjustment must be a whole number')
-    .refine((v) => v !== 0, 'Adjustment cannot be zero'),
-  reason: z.string().trim().min(1, 'Give a reason for the adjustment').max(500),
-});
-
-export const productListQuerySchema = z.object({
-  q: z.string().trim().max(200).optional(),
-  isActive: z.enum(['true', 'false']).transform((v) => v === 'true').optional(),
-  limit: z.coerce.number().int().min(1).max(200).default(50),
-});
 
 // ---------------------------------------------------------------------------
 //  Purchase bills
@@ -87,17 +55,36 @@ export const productListQuerySchema = z.object({
 export const purchaseBillItemInputSchema = z
   .object({
     /**
-     * The vendor's own description, typed from the bill. Free text on purpose:
-     * a bill is a record of a document, and the supplier's wording is what
-     * makes the entry checkable against the paper.
+     * The vendor's own description, as it appears on the document.
+     *
+     * OPTIONAL, and that is the change. The field itself stays — a purchase
+     * bill is a record of a piece of paper, and the supplier's wording is what
+     * makes the recorded entry checkable against it, so historical rows keep
+     * theirs and nothing is dropped. What went is its role in *mapping*: no UI
+     * asks a person to type a product name any more, because a typed name is
+     * not an identity and treating it as one is what let a line mean whatever
+     * its spelling happened to match.
+     *
+     * When it is omitted the server takes the chosen RS Product's title. So a
+     * line still always has a readable description; it simply comes from the
+     * catalogue entry somebody deliberately picked rather than from free text.
+     * Omitting both this and `rsProductId` is refused — that line would name
+     * nothing at all.
      */
-    productName: z.string().trim().min(1, 'Product name is required').max(200),
+    productName: z.string().trim().min(1, 'Product name is required').max(200).optional(),
     /**
-     * Optional catalogue link. Usually absent at entry — the goods are matched
-     * to a catalogue entry later, when stock is allocated to an order, because
-     * that is the point at which product identity actually matters.
+     * The RS Product this line is for — Procurement's canonical identity.
+     *
+     * An `RsProduct.id`, chosen from the RS Products picker. Never a
+     * ShopifyVariant id and never a SKU: Procurement maps at product level, and
+     * a SKU is nullable and legitimately duplicated, so it identifies nothing.
+     *
+     * Optional, because a bill is typed up from a piece of paper and the person
+     * recording it may not yet have decided what a line refers to. An unmapped
+     * line is recorded and received exactly as before; it is simply shown as
+     * unmapped until somebody picks the product.
      */
-    productId: cuidSchema.optional(),
+    rsProductId: cuidSchema.optional(),
     orderedQty: procurementQuantitySchema,
     receivedQty: receivedQuantitySchema.default(0),
     rate: amountSchema,
@@ -106,6 +93,17 @@ export const purchaseBillItemInputSchema = z
   .refine((v) => v.receivedQty <= v.orderedQty, {
     path: ['receivedQty'],
     message: 'Received quantity cannot exceed the quantity ordered',
+  })
+  /*
+    A line has to name its goods somehow. With the free-text mapping input gone
+    the normal answer is the RS Product, and the server takes the title from it;
+    a caller may still send a bare `productName` instead, which is what a
+    historical import does. Sending neither leaves a line that describes nothing
+    and can never be allocated, so it is refused at the edge.
+  */
+  .refine((v) => Boolean(v.rsProductId) || Boolean(v.productName), {
+    path: ['rsProductId'],
+    message: 'Choose the RS Product this line is for',
   });
 
 /**
@@ -157,11 +155,26 @@ export const purchaseDelaySchema = z.object({
   reason: z.string().trim().min(1, 'Give a reason for the delay').max(1000),
 });
 
+/**
+ * Signing a bill off, or refusing it.
+ *
+ * The note is optional on an approval and expected on a rejection, where it is
+ * the only thing telling the person who recorded the bill what to correct.
+ * Deliberately the same shape as `reviewProductChangeSchema`, because it is the
+ * same kind of act — but a separate endpoint and a separate decision: that one
+ * decides a proposed edit to one line, this one decides the bill itself.
+ */
+export const reviewPurchaseBillSchema = z.object({
+  note: z.string().trim().max(1000).optional(),
+});
+
 export const purchaseBillListQuerySchema = z
   .object({
     q: z.string().trim().max(200).optional(),
     vendorId: cuidSchema.optional(),
     status: z.enum(PURCHASE_BILL_STATUSES).optional(),
+    /** Filter the list to one approval state — the queue an approver works. */
+    approvalStatus: z.enum(BILL_APPROVAL_STATUSES).optional(),
     billType: z.enum(PURCHASE_BILL_TYPES).optional(),
     isDelayed: z.enum(['true', 'false']).transform((v) => v === 'true').optional(),
   })
@@ -195,25 +208,66 @@ export const updateAllocationSchema = z.object({
 });
 
 /**
- * Attaching an existing order line to a catalogue product.
+ * Mapping an existing order line to an RS Product.
  *
- * For lines written before the Product master existed, or typed as free text.
- * Only `productId` is settable: the line's name, quantity, price and status are
- * the order's own record of what was agreed, and a catalogue link is not a
- * licence to edit any of them.
+ * For lines written as free text, which is most of them — an order records what
+ * a customer asked for, and that is not always something in the catalogue at
+ * the time. Only `rsProductId` is settable: the line's name, quantity, price
+ * and status are the order's own record of what was agreed, and saying what the
+ * goods are is not a licence to edit any of them.
  */
 export const linkOrderLineSchema = z.object({
   salesOrderItemId: cuidSchema,
-  productId: cuidSchema,
+  rsProductId: cuidSchema,
 });
 
 /**
- * Attaching a purchase line to a catalogue product.
+ * Mapping a purchase line to an RS Product — the canonical identity.
  *
- * Recording a bill needs no catalogue decision; allocating from it does, since
- * stock is matched to a requirement by identity and never by spelling.
+ * An `RsProduct.id` and nothing else. Not a variant id, not a SKU, not a title:
+ * RS SKUs are nullable and repeat across products, so a SKU cannot decide which
+ * product a line means. The person picks the exact product; the server never
+ * infers one from the vendor's wording or from a matching SKU.
+ *
+ * Recording a bill needs no such decision; allocating from it does, since stock
+ * is matched to a requirement by identity and never by spelling.
  */
-export const linkPurchaseItemSchema = z.object({ productId: cuidSchema });
+export const mapPurchaseItemSchema = z.object({ rsProductId: cuidSchema });
+
+/**
+ * Asking to move an already-mapped purchase line to a different RS Product.
+ *
+ * The separate endpoint is the whole point. `mapPurchaseItemSchema` above gives
+ * an unmapped line its first product and applies immediately; this one records a
+ * request and applies nothing. Which of the two a caller reaches is decided by
+ * the server from the line's current state, never by the caller — so there is no
+ * shape of request that maps straight over an existing mapping.
+ *
+ * The reason is mandatory. An approver is judging whether goods were
+ * misidentified on a document they did not see, and two product titles are not
+ * enough to decide that on.
+ */
+export const requestProductChangeSchema = z.object({
+  rsProductId: cuidSchema,
+  reason: z
+    .string()
+    .trim()
+    .min(10, 'Explain why this line should be re-mapped — at least a sentence')
+    .max(1000),
+});
+
+/**
+ * Deciding one. The note is optional on an approval and expected on a rejection,
+ * where it is the only thing telling the requester what to do differently.
+ */
+export const reviewProductChangeSchema = z.object({
+  note: z.string().trim().max(1000).optional(),
+});
+
+export const productChangeListQuerySchema = z.object({
+  status: z.enum(['PENDING', 'APPROVED', 'REJECTED']).optional(),
+  billId: cuidSchema.optional(),
+});
 
 /**
  * Recording fulfilment that happened outside procurement.
@@ -244,14 +298,6 @@ export const orderRequirementQuerySchema = z.object({
  * midnight and silently shift the boundary by five and a half hours. The
  * server pairs this string with the IST offset itself.
  */
-/**
- * Cataloguing an order line's product. Only the line is named: its own
- * productName becomes the catalogue entry, so the two cannot disagree.
- */
-export const putInCatalogueSchema = z.object({
-  salesOrderItemId: cuidSchema,
-});
-
 export const salesRequirementQuerySchema = z.object({
   date: z
     .string()
@@ -260,21 +306,20 @@ export const salesRequirementQuerySchema = z.object({
     .optional(),
 });
 
-export type CreateProductInput = z.infer<typeof createProductSchema>;
-export type UpdateProductInput = z.infer<typeof updateProductSchema>;
-export type AdjustInventoryInput = z.infer<typeof adjustInventorySchema>;
-export type ProductListQuery = z.infer<typeof productListQuerySchema>;
 export type PurchaseBillItemInput = z.infer<typeof purchaseBillItemInputSchema>;
 export type CreatePurchaseBillInput = z.infer<typeof createPurchaseBillSchema>;
 export type UpdatePurchaseBillInput = z.infer<typeof updatePurchaseBillSchema>;
 export type ReceiveItemInput = z.infer<typeof receiveItemSchema>;
 export type PurchaseDelayInput = z.infer<typeof purchaseDelaySchema>;
 export type PurchaseBillListQuery = z.infer<typeof purchaseBillListQuerySchema>;
+export type ReviewPurchaseBillInput = z.infer<typeof reviewPurchaseBillSchema>;
 export type CreateAllocationInput = z.infer<typeof createAllocationSchema>;
 export type UpdateAllocationInput = z.infer<typeof updateAllocationSchema>;
 export type OrderRequirementQuery = z.infer<typeof orderRequirementQuerySchema>;
 export type SalesRequirementQuery = z.infer<typeof salesRequirementQuerySchema>;
-export type PutInCatalogueInput = z.infer<typeof putInCatalogueSchema>;
 export type LinkOrderLineInput = z.infer<typeof linkOrderLineSchema>;
-export type LinkPurchaseItemInput = z.infer<typeof linkPurchaseItemSchema>;
+export type MapPurchaseItemInput = z.infer<typeof mapPurchaseItemSchema>;
+export type RequestProductChangeInput = z.infer<typeof requestProductChangeSchema>;
+export type ReviewProductChangeInput = z.infer<typeof reviewProductChangeSchema>;
+export type ProductChangeListQuery = z.infer<typeof productChangeListQuerySchema>;
 export type RecordFulfillmentInput = z.infer<typeof recordFulfillmentSchema>;
