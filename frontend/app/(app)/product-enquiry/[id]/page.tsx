@@ -69,32 +69,59 @@ export default async function EnquiryDetailPage({ params }: { params: Params }) 
   const canAssign = can(user, 'PRODUCT_ENQUIRY', 'ASSIGN') && isAdmin;
   const canReopen = canAssign && !open;
 
+  /*
+    Three fields follow Raiser access and nothing else does: who the customer
+    is, and the two ways to reach them.
+
+    Where they are withheld the rows are simply absent — no placeholder, no
+    note explaining why. "Not recorded" would be untrue about a number that
+    exists, and a sentence saying the value is hidden would tell the reader
+    something about their own permissions that the page has no business
+    discussing. Everything else about the enquiry — address, state, GST,
+    customer type, source, dates, Towards — is shown to everybody, because
+    none of it says who the buyer is.
+
+    `name` is the signal: the server sends it as null exactly when the other
+    two are withheld, so one check covers all three.
+  */
+  const identityShown = enquiry.customer.name !== null;
+
+  const identityFacts: { label: string; value: React.ReactNode }[] = identityShown
+    ? [
+        { label: 'Customer', value: enquiry.customer.name },
+        {
+          label: 'Phone',
+          value: enquiry.customer.phone ? (
+            <a
+              href={`tel:${enquiry.customer.phone}`}
+              className="tabular text-accent hover:underline"
+            >
+              {enquiry.customer.phone}
+            </a>
+          ) : (
+            <span className="text-faint">Not recorded</span>
+          ),
+        },
+        {
+          label: 'Email',
+          value: enquiry.customer.email ? (
+            <a
+              href={`mailto:${enquiry.customer.email}`}
+              className="break-all text-accent hover:underline"
+            >
+              {enquiry.customer.email}
+            </a>
+          ) : (
+            <span className="text-faint">Not recorded</span>
+          ),
+        },
+      ]
+    : [];
+
   const facts: { label: string; value: React.ReactNode }[] = [
-    { label: 'Customer', value: enquiry.customer.name },
+    ...identityFacts,
+    // Shown to everybody — none of these identifies the buyer.
     { label: 'Customer type', value: label(enquiry.customer.type) },
-    {
-      label: 'Phone',
-      value: enquiry.customer.phone ? (
-        <a href={`tel:${enquiry.customer.phone}`} className="tabular text-accent hover:underline">
-          {enquiry.customer.phone}
-        </a>
-      ) : (
-        <span className="text-faint">Not recorded</span>
-      ),
-    },
-    {
-      label: 'Email',
-      value: enquiry.customer.email ? (
-        <a
-          href={`mailto:${enquiry.customer.email}`}
-          className="break-all text-accent hover:underline"
-        >
-          {enquiry.customer.email}
-        </a>
-      ) : (
-        <span className="text-faint">Not recorded</span>
-      ),
-    },
     {
       label: 'Address',
       // Free text as the customer gave it, so newlines are kept rather than
@@ -158,7 +185,14 @@ export default async function EnquiryDetailPage({ params }: { params: Params }) 
                   breached={enquiry.sla.breached}
                 />
               </div>
-              <p className="mt-1.5 text-[15px] text-ink-2">{enquiry.customer.name}</p>
+              {/*
+                The enquiry number above is the identity an Answerer works by,
+                so the subtitle simply goes rather than being replaced with a
+                placeholder that says nothing.
+              */}
+              {enquiry.customer.name !== null && (
+                <p className="mt-1.5 text-[15px] text-ink-2">{enquiry.customer.name}</p>
+              )}
             </div>
 
             <div className="flex shrink-0 flex-col items-end gap-1">

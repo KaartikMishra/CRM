@@ -22,6 +22,7 @@ import {
   PERMISSION_ACTIONS,
   type AppModule,
   type CreateUserInput,
+  type EnquiryAccess,
   type ManagedUser,
   type PermissionAction,
   type Role,
@@ -83,6 +84,31 @@ function modulesFor(
   );
 }
 
+/**
+ * Which Product Enquiry capabilities this person holds, read back from the rows.
+ *
+ * The two are independent, so each is resolved on its own:
+ *
+ *   CREATE  →  raiser
+ *   EDIT    →  answerer
+ *
+ * An absent row falls through to the role default, which is how an
+ * administrator — who has no override rows at all — reports as holding both.
+ */
+function enquiryAccessFor(
+  role: Role,
+  overrides: { module: AppModule; action: PermissionAction; allowed: boolean }[],
+): EnquiryAccess {
+  const resolve = (action: PermissionAction): boolean => {
+    const row = overrides.find((o) => o.module === 'PRODUCT_ENQUIRY' && o.action === action);
+    return row ? row.allowed : roleDefault(role, 'PRODUCT_ENQUIRY', action);
+  };
+
+  // An administrator has no override rows at all, so both fall through to the
+  // role default and they report as holding everything — which they do.
+  return { raiser: resolve('CREATE'), answerer: resolve('EDIT') };
+}
+
 function toManagedUser(
   row: SafeRow,
   overrides: { module: AppModule; action: PermissionAction; allowed: boolean }[],
@@ -98,6 +124,7 @@ function toManagedUser(
     lastLoginAt: row.lastLoginAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
     modules: modulesFor(row.role, overrides),
+    enquiryAccess: enquiryAccessFor(row.role, overrides),
   };
 }
 
@@ -116,6 +143,7 @@ function userNotFound(): AppError {
 function permissionRows(
   userId: string,
   granted: AppModule[],
+  enquiryAccess: EnquiryAccess,
 ): { userId: string; module: AppModule; action: PermissionAction; allowed: boolean }[] {
   const grantedSet = new Set(granted);
 
@@ -124,7 +152,24 @@ function permissionRows(
       userId,
       module,
       action,
-      allowed: grantedSet.has(module) && GRANTED_ACTIONS.includes(action),
+      /*
+        Product Enquiry carries two independent capabilities; every other
+        module keeps the flat grant.
+
+          CREATE  →  Raiser    raising an enquiry IS the create action
+          EDIT    →  Answerer  a vendor response IS an edit of the enquiry
+
+        Each lands on the action that already describes it, so nothing is
+        overloaded and no new action — and therefore no migration — is needed.
+        VIEW stays with the module itself: everybody granted it may read.
+      */
+      allowed: !grantedSet.has(module)
+        ? false
+        : module === 'PRODUCT_ENQUIRY'
+          ? action === 'VIEW' ||
+            (action === 'CREATE' && enquiryAccess.raiser) ||
+            (action === 'EDIT' && enquiryAccess.answerer)
+          : GRANTED_ACTIONS.includes(action),
     })),
   );
 }
@@ -140,9 +185,12 @@ async function writeModules(
   tx: Prisma.TransactionClient,
   userId: string,
   granted: AppModule[],
+  enquiryAccess: EnquiryAccess,
 ): Promise<void> {
   await tx.userModulePermission.deleteMany({ where: { userId } });
-  await tx.userModulePermission.createMany({ data: permissionRows(userId, granted) });
+  await tx.userModulePermission.createMany({
+    data: permissionRows(userId, granted, enquiryAccess),
+  });
 }
 
 /** Derives RS-style employee ids when the administrator does not supply one. */
@@ -240,7 +288,7 @@ export async function createUser(
       select: SAFE_SELECT,
     });
 
-    await writeModules(tx, user.id, input.modules);
+    await writeModules(tx, user.id, input.modules, input.enquiryAccess);
     return user;
   });
 
@@ -310,9 +358,16 @@ export async function updateUser(
       await tx.user.update({ where: { id }, data });
     }
 
-    // An absent `modules` means "leave access alone"; an empty array means
-    // "revoke everything". The two are deliberately different.
-    if (input.modules !== undefined) {
+    /*
+      Access rows are rewritten when EITHER the module list or the Product
+      Enquiry job changes.
+
+      An absent `modules` still means "leave the modules alone" — but the rows
+      are written all-or-nothing, so switching somebody Raiser → Answerer
+      without resending their modules has to read the current ones back rather
+      than silently revoking them.
+    */
+    if (input.modules !== undefined || input.enquiryAccess !== undefined) {
       // Module rows on an ADMIN would be read as a *restriction* by the
       // resolver, quietly removing the full access §13 requires.
       if (target.role === 'ADMIN') {
@@ -321,7 +376,18 @@ export async function updateUser(
           'Administrators always have every module. Their access cannot be edited.',
         );
       }
-      await writeModules(tx, id, input.modules);
+
+      const current = await tx.userModulePermission.findMany({
+        where: { userId: id },
+        select: { module: true, action: true, allowed: true },
+      });
+
+      await writeModules(
+        tx,
+        id,
+        input.modules ?? modulesFor(target.role, current),
+        input.enquiryAccess ?? enquiryAccessFor(target.role, current),
+      );
     }
   });
 
@@ -359,7 +425,7 @@ export async function setUserModules(
     );
   }
 
-  await prisma.$transaction((tx) => writeModules(tx, id, input.modules));
+  await prisma.$transaction((tx) => writeModules(tx, id, input.modules, input.enquiryAccess));
 
   await recordAudit(req, {
     action: 'user.modules.updated',

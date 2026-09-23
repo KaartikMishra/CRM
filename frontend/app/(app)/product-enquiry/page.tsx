@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ClipboardList, Plus } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { PageHeader } from '@/components/common/page-header';
@@ -56,11 +57,30 @@ export default async function ProductEnquiryListPage({
     params.q || params.status || params.assignedToId || params.efficiency,
   );
 
+  /*
+    What this person holds in the module, from the same two capabilities the
+    server resolves — so somebody who cannot raise an enquiry, or cannot answer
+    one, can see that rather than hunting for a button that was never there.
+
+    Additive: holding both prints both, which is what holding both means. Empty
+    for somebody with neither, and then nothing is rendered — a badge reading
+    "none" would be a label for an absence nobody needs pointed out.
+  */
+  const capabilities = [
+    canCreate && 'Raiser',
+    can(user, 'PRODUCT_ENQUIRY', 'EDIT') && 'Answerer',
+  ].filter((c): c is string => typeof c === 'string');
+
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
         eyebrow="Operations"
         title="Product Enquiry"
+        badge={
+          capabilities.length > 0 && (
+            <Badge variant="outline">{capabilities.join(' + ')}</Badge>
+          )
+        }
         description="Customer requests and their vendor responses, against a 15-minute response window."
         actions={
           canCreate && (

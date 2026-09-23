@@ -65,16 +65,41 @@ export async function makeUser(role: Role = 'USER', isActive = true): Promise<Te
  */
 export async function makeCustomer(
   type: CustomerType = 'RETAIL',
-  contact: { phone?: string; email?: string } = {},
-): Promise<{ id: string; name: string; phone: string | null; email: string | null }> {
+  contact: {
+    phone?: string;
+    email?: string;
+    address?: string;
+    state?: string;
+    gstNumber?: string;
+  } = {},
+): Promise<{
+  id: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  state: string | null;
+  gstNumber: string | null;
+}> {
   const customer = await prisma.customer.create({
     data: {
       name: `${TEST_PREFIX}-customer-${short()}`,
       type,
       phone: contact.phone ?? null,
       email: contact.email ?? null,
+      address: contact.address ?? null,
+      state: contact.state ?? null,
+      gstNumber: contact.gstNumber ?? null,
     },
-    select: { id: true, name: true, phone: true, email: true },
+    select: {
+      id: true,
+      name: true,
+      phone: true,
+      email: true,
+      address: true,
+      state: true,
+      gstNumber: true,
+    },
   });
   created.customerIds.push(customer.id);
   return customer;

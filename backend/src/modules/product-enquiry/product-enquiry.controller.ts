@@ -42,6 +42,7 @@ export async function assignees(_req: Request, res: Response): Promise<void> {
 
 export async function list(req: Request, res: Response): Promise<void> {
   const { items, nextCursor, serverTime } = await enquiries.listEnquiries(
+    currentUser(req),
     validatedQuery<EnquiryListQuery>(req),
   );
   // serverTime travels with every list so countdown timers correct against the
@@ -51,7 +52,7 @@ export async function list(req: Request, res: Response): Promise<void> {
 
 export async function detail(req: Request, res: Response): Promise<void> {
   const { id } = validatedParams<IdParam>(req);
-  const { enquiry, serverTime } = await enquiries.getEnquiry(id);
+  const { enquiry, serverTime } = await enquiries.getEnquiry(currentUser(req), id);
   sendSuccess(res, { enquiry }, 200, { serverTime });
 }
 

@@ -39,6 +39,39 @@ export function canViewEnquiry(): boolean {
 }
 
 /**
+ * Whether this person may see WHO the customer is.
+ *
+ * Three fields and no others follow this: name, phone, email. They move
+ * together — a phone number identifies a person as surely as a name does — and
+ * they follow the CREATE capability:
+ *
+ *   Raiser  holds PRODUCT_ENQUIRY CREATE. They took the enquiry, so they are
+ *           the one who has to ring the customer back.
+ *
+ * Address, state, GST number and customer type are NOT governed by this. An
+ * Answerer is sourcing and pricing goods: where the goods are going and how the
+ * sale is taxed is part of that job, and none of it says who the buyer is.
+ *
+ * So identity follows the right to raise, not the right to read — everybody
+ * granted the module still sees every enquiry, and everything about it except
+ * those three fields.
+ *
+ * Takes the already-resolved capability rather than an Actor, matching
+ * `canReviewChange` in sales-access: resolving a permission needs the database,
+ * and these functions stay pure so they can be reasoned about on their own. It
+ * also means a per-user override behaves here exactly as it does on the routes —
+ * revoke CREATE from one person and the identity goes with it, with no second
+ * switch to remember.
+ *
+ * Deliberately NOT a role check. `Role` is ADMIN | USER and neither names these
+ * two jobs; inventing a third role would have duplicated a permission system
+ * that already expresses this.
+ */
+export function canViewCustomerContact(mayRaiseEnquiry: boolean): boolean {
+  return mayRaiseEnquiry;
+}
+
+/**
  * §22/§24 — a USER may edit an enquiry they created or are Towards on, and
  * never once it is CLOSED. An ADMIN may edit any open enquiry; reopening a
  * closed one is a separate, audited action rather than an ordinary edit.

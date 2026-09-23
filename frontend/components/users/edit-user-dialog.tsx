@@ -4,7 +4,12 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useId, useState, useTransition } from 'react';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { updateUserSchema, type AppModule, type ManagedUser } from '@rs/shared';
+import {
+  updateUserSchema,
+  type AppModule,
+  type EnquiryAccess,
+  type ManagedUser,
+} from '@rs/shared';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -20,6 +25,7 @@ import { Separator } from '@/components/ui/separator';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ErrorMessage } from '@/components/common/error-message';
 import { ModuleAccessField } from './module-access-field';
+import { EnquiryAccessField } from './enquiry-access-field';
 import { updateUserAction } from '@/app/(app)/users/actions';
 
 /**
@@ -50,6 +56,10 @@ export function EditUserDialog({
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [modules, setModules] = useState<AppModule[]>([]);
+  const [enquiryAccess, setEnquiryAccess] = useState<EnquiryAccess>({
+    raiser: true,
+    answerer: true,
+  });
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
@@ -61,6 +71,7 @@ export function EditUserDialog({
     setName(user.name);
     setIsActive(user.isActive);
     setModules(user.modules);
+    setEnquiryAccess(user.enquiryAccess);
     setPassword('');
     setConfirmPassword('');
     setError(null);
@@ -87,6 +98,20 @@ export function EditUserDialog({
     // Never send module edits for an administrator — the API refuses them, and
     // the grid is read-only above.
     if (!isAdmin && !sameModules) payload.modules = modules;
+    /*
+      Sent only when it changed and only when the module is actually granted.
+
+      Including it otherwise would rewrite the whole override matrix for
+      somebody whose Product Enquiry access the administrator never touched —
+      the rows are written all-or-nothing on the server.
+    */
+    const sameAccess =
+      enquiryAccess.raiser === user.enquiryAccess.raiser &&
+      enquiryAccess.answerer === user.enquiryAccess.answerer;
+
+    if (!isAdmin && modules.includes('PRODUCT_ENQUIRY') && !sameAccess) {
+      payload.enquiryAccess = enquiryAccess;
+    }
 
     if (Object.keys(payload).length === 0) {
       onClose();
@@ -202,6 +227,20 @@ export function EditUserDialog({
                 onChange={setModules}
                 disabled={pending}
                 idPrefix={`${formId}-module`}
+              />
+            )}
+
+            {/*
+              Only once Product Enquiry is actually granted: the choice decides
+              what somebody may do *inside* the module, so it has nothing to say
+              until they are in it.
+            */}
+            {!isAdmin && modules.includes('PRODUCT_ENQUIRY') && (
+              <EnquiryAccessField
+                value={enquiryAccess}
+                onChange={setEnquiryAccess}
+                disabled={pending}
+                idPrefix={formId}
               />
             )}
 

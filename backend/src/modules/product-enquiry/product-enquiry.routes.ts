@@ -21,7 +21,10 @@ import {
   updateEnquiryProductSchema,
 } from '@rs/shared';
 import { requireAuth } from '../../middleware/requireAuth.js';
-import { requirePermission } from '../../middleware/requirePermission.js';
+import {
+  requireAnyPermission,
+  requirePermission,
+} from '../../middleware/requirePermission.js';
 import { validate } from '../../middleware/validate.js';
 import * as controller from './product-enquiry.controller.js';
 
@@ -68,21 +71,21 @@ productEnquiryRoutes.get(
 
 productEnquiryRoutes.patch(
   '/:id',
-  requirePermission('PRODUCT_ENQUIRY', 'EDIT'),
+  requireAnyPermission(['PRODUCT_ENQUIRY', 'CREATE'], ['PRODUCT_ENQUIRY', 'EDIT']),
   validate({ params: idParam, body: updateEnquirySchema }),
   controller.update,
 );
 
 productEnquiryRoutes.post(
   '/:id/products',
-  requirePermission('PRODUCT_ENQUIRY', 'EDIT'),
+  requireAnyPermission(['PRODUCT_ENQUIRY', 'CREATE'], ['PRODUCT_ENQUIRY', 'EDIT']),
   validate({ params: idParam, body: addEnquiryProductSchema }),
   controller.addProduct,
 );
 
 productEnquiryRoutes.patch(
   '/:id/products/:productId',
-  requirePermission('PRODUCT_ENQUIRY', 'EDIT'),
+  requireAnyPermission(['PRODUCT_ENQUIRY', 'CREATE'], ['PRODUCT_ENQUIRY', 'EDIT']),
   validate({ params: productParams, body: updateEnquiryProductSchema }),
   controller.updateProduct,
 );
@@ -114,7 +117,7 @@ productEnquiryRoutes.post(
  */
 productEnquiryRoutes.post(
   '/:id/delay-reason',
-  requirePermission('PRODUCT_ENQUIRY', 'EDIT'),
+  requireAnyPermission(['PRODUCT_ENQUIRY', 'CREATE'], ['PRODUCT_ENQUIRY', 'EDIT']),
   validate({ params: idParam, body: delayReasonSchema }),
   controller.delayReason,
 );

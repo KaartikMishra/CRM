@@ -179,7 +179,7 @@ async function submit(
     return at;
   }, TX_OPTIONS);
 
-  return detailAfterCommit(id, now);
+  return detailAfterCommit(actor, id, now);
 }
 
 export function partialSubmit(actor: AuthenticatedUser, id: string): Promise<EnquiryDetail> {
@@ -235,5 +235,5 @@ export async function recordDelayReason(
     return at;
   }, TX_OPTIONS);
 
-  return detailAfterCommit(id, now);
+  return detailAfterCommit(actor, id, now);
 }

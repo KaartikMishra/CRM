@@ -131,5 +131,5 @@ export async function addVendorResponse(
     return at;
   }, TX_OPTIONS);
 
-  return detailAfterCommit(enquiryId, now);
+  return detailAfterCommit(actor, enquiryId, now);
 }

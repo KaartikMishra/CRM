@@ -63,6 +63,57 @@ export type CustomerContactRef = CustomerRef & {
   gstNumber: string | null;
 };
 
+/**
+ * The customer as Product Enquiry reports them — identity that may be withheld.
+ *
+ * Product Enquiry carries two independent capabilities, and this one follows
+ * the Raiser half:
+ *
+ *   Raiser    holds PRODUCT_ENQUIRY CREATE. Took the enquiry, so has to be
+ *             able to ring the customer back — sees the name.
+ *   Answerer  holds PRODUCT_ENQUIRY EDIT. Sources and prices the goods, which
+ *             needs the product lines and not the buyer.
+ *
+ * Somebody may hold both, in which case they see the name: the capabilities are
+ * a union, never a subtraction.
+ *
+ * `name` is NULLABLE here where `CustomerRef.name` is not. Nulling it — rather
+ * than substituting a placeholder string — is what makes the absence visible to
+ * the type checker at every render site instead of silently readable.
+ *
+ * Deliberately separate from `CustomerRef` rather than a widening of it: Sales
+ * shows customer identity to everyone who may see an order, and widening the
+ * shared type would force that module to handle an absence it never has.
+ */
+export type EnquiryCustomerRef = {
+  id: string;
+  /** Null when the viewer may not see customer identity. */
+  name: string | null;
+  type: CustomerType;
+};
+
+/**
+ * The same, plus the ways to reach them — detail payloads only.
+ *
+ * EXACTLY THREE FIELDS ARE WITHHELD from somebody without Raiser access:
+ * `name`, `phone` and `email` — who the customer is and how to reach them.
+ *
+ * Address, state, GST number and customer type are NOT withheld. An Answerer
+ * is sourcing and pricing goods, and where they are going and how the sale is
+ * taxed are part of that job; who the buyer is is not.
+ *
+ * All of these are nullable anyway, because any may genuinely be unrecorded.
+ */
+export type EnquiryCustomerContactRef = EnquiryCustomerRef & {
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  /** One of `INDIA_STATES`, or null where it was never recorded. */
+  state: string | null;
+  /** The GSTIN, uppercase, or null where the customer has none. */
+  gstNumber: string | null;
+};
+
 export type VendorRef = {
   id: string;
   name: string;
@@ -160,7 +211,8 @@ export type EnquirySlaView = {
 export type EnquirySummary = {
   id: string;
   enquiryNo: string;
-  customer: CustomerRef;
+  /** Identity only, and withheld entirely from an Answerer — see the type. */
+  customer: EnquiryCustomerRef;
   source: EnquirySource;
   status: EnquiryStatus;
   assignedTo: UserRef;
@@ -180,9 +232,13 @@ export type EnquiryDetail = {
   /**
    * Contact details travel with the detail payload, not with list rows: the
    * detail page is where someone decides to ring or write to the customer.
-   * Summaries keep the bare CustomerRef.
+   * Summaries keep the bare identity.
+   *
+   * Without Raiser access, three of these arrive null — name, phone and email —
+   * withheld by the server rather than by the page. Address, state and GST are
+   * sent to everybody.
    */
-  customer: CustomerContactRef;
+  customer: EnquiryCustomerContactRef;
   source: EnquirySource;
   sourceDetail: string | null;
   status: EnquiryStatus;

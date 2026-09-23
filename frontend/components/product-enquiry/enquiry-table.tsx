@@ -82,7 +82,15 @@ export function EnquiryTable({
             </TableCell>
 
             <TableCell>
-              <span className="block font-medium text-ink">{enquiry.customer.name}</span>
+              {/*
+                Null where the viewer has no Raiser access. The cell is left
+                empty rather than carrying a note about why: the row still
+                identifies the enquiry by its number, and explaining the
+                absence would tell the reader about their own permissions.
+              */}
+              {enquiry.customer.name !== null && (
+                <span className="block font-medium text-ink">{enquiry.customer.name}</span>
+              )}
               <span className="mt-0.5 block text-xs text-muted">
                 {label(enquiry.customer.type)} · {label(enquiry.source)}
               </span>

@@ -13,8 +13,8 @@
 import { Prisma } from '@rs/database';
 import { prisma } from '../../config/database.js';
 import type {
-  CustomerContactRef,
-  CustomerRef,
+  EnquiryCustomerContactRef,
+  EnquiryCustomerRef,
   DelayRecordView,
   DimensionView,
   EnquiryDetail,
@@ -215,13 +215,59 @@ function toSla(row: DetailRow | SummaryRow, now: Date): EnquirySlaView {
   };
 }
 
-function toSummary(row: SummaryRow, now: Date): EnquirySummary {
+/**
+ * The customer as this viewer is allowed to see them.
+ *
+ * One place, used by both projections, so the list and the detail page cannot
+ * come to disagree about what an Answerer is shown. `id` and `type` stay: an id
+ * is an opaque cuid that reaches no contact detail on its own — the customer
+ * directory is gated separately — and the type describes the enquiry's
+ * commercial shape rather than the person.
+ */
+function visibleCustomer(
+  row: { id: string; name: string; type: EnquiryCustomerRef['type'] },
+  canSeeCustomer: boolean,
+): EnquiryCustomerRef {
+  return { id: row.id, name: canSeeCustomer ? row.name : null, type: row.type };
+}
+
+/**
+ * The same, with the three identifying fields withheld where they must be.
+ *
+ * Name, phone and email only. Address, state, GST number and customer type go
+ * to everybody: an Answerer needs to know where goods are going and how the
+ * sale is taxed, and neither of those says who the buyer is.
+ *
+ * The three move together or not at all — a phone number identifies a person
+ * as surely as a name does, so withholding one and not the others would be no
+ * protection at all.
+ */
+function visibleCustomerContact(
+  row: {
+    id: string; name: string; type: EnquiryCustomerRef['type'];
+    phone: string | null; email: string | null; address: string | null;
+    state: string | null; gstNumber: string | null;
+  },
+  canSeeCustomer: boolean,
+): EnquiryCustomerContactRef {
+  return {
+    ...visibleCustomer(row, canSeeCustomer),
+    phone: canSeeCustomer ? row.phone : null,
+    email: canSeeCustomer ? row.email : null,
+    // Never withheld.
+    address: row.address,
+    state: row.state,
+    gstNumber: row.gstNumber,
+  };
+}
+
+function toSummary(row: SummaryRow, now: Date, canSeeCustomer: boolean): EnquirySummary {
   const thumbnail = row.products.find((p) => p.image !== null)?.image ?? null;
 
   return {
     id: row.id,
     enquiryNo: row.enquiryNo,
-    customer: row.customer as CustomerRef,
+    customer: visibleCustomer(row.customer, canSeeCustomer),
     source: row.source,
     status: row.status,
     assignedTo: row.assignedTo as UserRef,
@@ -271,11 +317,11 @@ function toProduct(p: DetailRow['products'][number]): EnquiryProductView {
   };
 }
 
-function toDetail(row: DetailRow, now: Date): EnquiryDetail {
+function toDetail(row: DetailRow, now: Date, canSeeCustomer: boolean): EnquiryDetail {
   return {
     id: row.id,
     enquiryNo: row.enquiryNo,
-    customer: row.customer as CustomerContactRef,
+    customer: visibleCustomerContact(row.customer, canSeeCustomer),
     source: row.source,
     sourceDetail: row.sourceDetail,
     status: row.status,
@@ -347,9 +393,13 @@ export function findForPolicy(
   });
 }
 
-export async function findDetail(id: string, now: Date): Promise<EnquiryDetail | null> {
+export async function findDetail(
+  id: string,
+  now: Date,
+  canSeeCustomer: boolean,
+): Promise<EnquiryDetail | null> {
   const row = await prisma.productEnquiry.findUnique({ where: { id }, select: detailSelect });
-  return row ? toDetail(row, now) : null;
+  return row ? toDetail(row, now, canSeeCustomer) : null;
 }
 
 export type ListResult = {
@@ -363,7 +413,11 @@ export type ListResult = {
  * Keyset rather than offset so page 40 costs the same as page 1, and the tie
  * breaker is the cuid primary key so a stable order survives equal sort values.
  */
-export async function list(query: EnquiryListQuery, now: Date): Promise<ListResult> {
+export async function list(
+  query: EnquiryListQuery,
+  now: Date,
+  canSeeCustomer: boolean,
+): Promise<ListResult> {
   const where: Prisma.ProductEnquiryWhereInput = {};
 
   if (query.status) where.status = query.status;
@@ -385,11 +439,27 @@ export async function list(query: EnquiryListQuery, now: Date): Promise<ListResu
   }
 
   if (query.q) {
+    /*
+      Free-text search reaches into the customer for a Raiser, and deliberately
+      not for an Answerer.
+
+      Matching on name, phone or email is a disclosure even when the row that
+      comes back is redacted: a search for a phone number that returns one
+      enquiry confirms that number belongs to that customer, one query at a
+      time. So an Answerer searches the enquiry number and the product lines —
+      the things their job is actually about.
+    */
+    const customerFields: Prisma.ProductEnquiryWhereInput[] = canSeeCustomer
+      ? [
+          { customer: { name: { contains: query.q, mode: 'insensitive' } } },
+          { customer: { phone: { contains: query.q, mode: 'insensitive' } } },
+          { customer: { email: { contains: query.q, mode: 'insensitive' } } },
+        ]
+      : [];
+
     where.OR = [
       { enquiryNo: { contains: query.q, mode: 'insensitive' } },
-      { customer: { name: { contains: query.q, mode: 'insensitive' } } },
-      { customer: { phone: { contains: query.q, mode: 'insensitive' } } },
-      { customer: { email: { contains: query.q, mode: 'insensitive' } } },
+      ...customerFields,
       { products: { some: { name: { contains: query.q, mode: 'insensitive' } } } },
     ];
   }
@@ -406,7 +476,7 @@ export async function list(query: EnquiryListQuery, now: Date): Promise<ListResu
   const page = hasMore ? rows.slice(0, query.limit) : rows;
 
   return {
-    items: page.map((row) => toSummary(row, now)),
+    items: page.map((row) => toSummary(row, now, canSeeCustomer)),
     nextCursor: hasMore ? (page[page.length - 1]?.id ?? null) : null,
   };
 }

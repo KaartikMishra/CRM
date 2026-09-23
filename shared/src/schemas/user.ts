@@ -30,6 +30,38 @@ export const userPasswordSchema = z
   .min(10, 'Password must be at least 10 characters')
   .max(200, 'Password is too long');
 
+/**
+ * The two Product Enquiry capabilities, held independently.
+ *
+ * They are not a choice between two jobs — somebody can hold both, one, or
+ * neither — so this is a pair of flags rather than an enum:
+ *
+ *   raiser    may raise an enquiry, and sees who the customer is.
+ *   answerer  may work the vendor-response side: add a response, submit.
+ *
+ * Both map onto permission rows that already exist, which is why no migration
+ * and no new table are needed:
+ *
+ *   raiser    ←→  PRODUCT_ENQUIRY CREATE
+ *   answerer  ←→  PRODUCT_ENQUIRY EDIT
+ *
+ * The mapping is not arbitrary. Raising an enquiry IS the CREATE action, and a
+ * vendor response IS an edit of an existing enquiry — so each capability lands
+ * on the action that already describes it, and nothing is overloaded.
+ *
+ * Deliberately NOT Roles. `Role` stays ADMIN | USER: this lives inside one
+ * module, and it is never derived from another module's access.
+ */
+export const enquiryAccessSchema = z.object({
+  raiser: z.boolean(),
+  answerer: z.boolean(),
+});
+
+export type EnquiryAccess = z.infer<typeof enquiryAccessSchema>;
+
+/** What a newly granted module means unless the administrator says otherwise. */
+export const DEFAULT_ENQUIRY_ACCESS: EnquiryAccess = { raiser: true, answerer: true };
+
 /** Which modules a person may reach. Order and duplicates do not matter. */
 export const moduleAccessSchema = z
   .array(z.enum(APP_MODULES))
@@ -55,6 +87,7 @@ export const createUserSchema = z
     password: userPasswordSchema,
     confirmPassword: z.string(),
     modules: moduleAccessSchema.default([]),
+    enquiryAccess: enquiryAccessSchema.default(DEFAULT_ENQUIRY_ACCESS),
   })
   .refine((value) => value.password === value.confirmPassword, {
     path: ['confirmPassword'],
@@ -79,6 +112,8 @@ export const updateUserSchema = z
     password: userPasswordSchema.optional(),
     confirmPassword: z.string().optional(),
     modules: moduleAccessSchema.optional(),
+    /** Absent leaves the current choice alone, exactly like `modules`. */
+    enquiryAccess: enquiryAccessSchema.optional(),
   })
   .refine(
     (value) => value.password === undefined || value.password === value.confirmPassword,
@@ -89,7 +124,10 @@ export const updateUserSchema = z
   });
 
 /** The dedicated module-access endpoint, for the checkbox grid alone. */
-export const setUserModulesSchema = z.object({ modules: moduleAccessSchema });
+export const setUserModulesSchema = z.object({
+  modules: moduleAccessSchema,
+  enquiryAccess: enquiryAccessSchema.default(DEFAULT_ENQUIRY_ACCESS),
+});
 
 export const userListQuerySchema = z.object({
   q: z.string().trim().max(160).optional(),
@@ -124,6 +162,14 @@ export type ManagedUser = {
   createdAt: string;
   /** The modules this person can reach, resolved the same way the API resolves them. */
   modules: (typeof APP_MODULES)[number][];
+  /**
+   * Their job in Product Enquiry, read back from PRODUCT_ENQUIRY CREATE.
+   *
+   * Reported for every user — administrators included — so the edit screen
+   * always has something to render; it only means anything once the module is
+   * actually granted.
+   */
+  enquiryAccess: EnquiryAccess;
 };
 
 /** Present so a compile error fires if PERMISSION_ACTIONS ever changes shape. */

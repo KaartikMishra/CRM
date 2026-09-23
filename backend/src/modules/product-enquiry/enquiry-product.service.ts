@@ -95,7 +95,7 @@ export async function addProduct(
     return at;
   }, TX_OPTIONS);
 
-  return detailAfterCommit(enquiryId, now);
+  return detailAfterCommit(actor, enquiryId, now);
 }
 
 export async function updateProduct(
@@ -170,7 +170,7 @@ export async function updateProduct(
     return at;
   }, TX_OPTIONS);
 
-  return detailAfterCommit(enquiryId, now);
+  return detailAfterCommit(actor, enquiryId, now);
 }
 
 export { productNotFound };

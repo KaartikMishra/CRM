@@ -24,7 +24,9 @@ import {
   canEditEnquiry,
   canReassignEnquiry,
   canReopenEnquiry,
+  canViewCustomerContact,
 } from '../../policies/enquiry-access.js';
+import { resolvePermission } from '../../services/permission.service.js';
 import { recordEvent, recordEvents } from './enquiry-event.service.js';
 import { allocateEnquiryNumber } from './enquiry-number.service.js';
 import { openWindow } from './enquiry-sla.service.js';
@@ -59,6 +61,17 @@ export function forbidden(): AppError {
 export const TX_OPTIONS = { timeout: 15_000, maxWait: 10_000 } as const;
 
 /**
+ * Whether this person may see who the enquiry is for.
+ *
+ * Resolved through the same permission service the routes use, so a per-user
+ * override applies here exactly as it does there: revoke PRODUCT_ENQUIRY CREATE
+ * from somebody and they become an Answerer — able to read every enquiry, able
+ * to see no customer — with nothing else to switch.
+ */
+const mayRaiseEnquiry = (actor: AuthenticatedUser): Promise<boolean> =>
+  resolvePermission(actor.id, actor.role, 'PRODUCT_ENQUIRY', 'CREATE');
+
+/**
  * Reads the detail projection *after* the write transaction has committed.
  *
  * The read is large — products, vendor responses, the event timeline — and it
@@ -66,10 +79,19 @@ export const TX_OPTIONS = { timeout: 15_000, maxWait: 10_000 } as const;
  * enquiry's row lock for the duration of a query nobody is racing on.
  */
 export async function detailAfterCommit(
+  actor: AuthenticatedUser,
   id: string,
   now: Date,
 ): Promise<EnquiryDetail> {
-  const detail = await repo.findDetail(id, now);
+  /*
+    Resolved here rather than trusted from the caller, because an Answerer
+    legitimately reaches this path: adding a vendor response and submitting are
+    exactly their job, and both return the detail payload. Taking the actor and
+    deciding inside means no write route can hand back an unredacted customer by
+    forgetting to ask.
+  */
+  const canSeeCustomer = canViewCustomerContact(await mayRaiseEnquiry(actor));
+  const detail = await repo.findDetail(id, now, canSeeCustomer);
   if (!detail) throw notFound();
   return detail;
 }
@@ -187,7 +209,7 @@ export async function createEnquiry(
   // to fail an enquiry that has already been created.
   await notification.deliver([assignedToId], 'ENQUIRY_ASSIGNED', id);
 
-  return detailAfterCommit(id, now);
+  return detailAfterCommit(actor, id, now);
 }
 
 // ---------------------------------------------------------------------------
@@ -195,18 +217,22 @@ export async function createEnquiry(
 // ---------------------------------------------------------------------------
 
 export async function listEnquiries(
+  actor: AuthenticatedUser,
   query: EnquiryListQuery,
 ): Promise<{ items: EnquirySummary[]; nextCursor: string | null; serverTime: string }> {
+  const canSeeCustomer = canViewCustomerContact(await mayRaiseEnquiry(actor));
   const now = await databaseNow();
-  const { items, nextCursor } = await repo.list(query, now);
+  const { items, nextCursor } = await repo.list(query, now, canSeeCustomer);
   return { items, nextCursor, serverTime: now.toISOString() };
 }
 
 export async function getEnquiry(
+  actor: AuthenticatedUser,
   id: string,
 ): Promise<{ enquiry: EnquiryDetail; serverTime: string }> {
+  const canSeeCustomer = canViewCustomerContact(await mayRaiseEnquiry(actor));
   const now = await databaseNow();
-  const enquiry = await repo.findDetail(id, now);
+  const enquiry = await repo.findDetail(id, now, canSeeCustomer);
   if (!enquiry) throw notFound();
   return { enquiry, serverTime: now.toISOString() };
 }
@@ -285,7 +311,7 @@ export async function updateEnquiry(
     return at;
   }, TX_OPTIONS);
 
-  return detailAfterCommit(id, now);
+  return detailAfterCommit(actor, id, now);
 }
 
 // ---------------------------------------------------------------------------
@@ -357,7 +383,7 @@ export async function assignEnquiry(
     await notification.deliver([input.assignedToId], 'ENQUIRY_ASSIGNED', id);
   }
 
-  return detailAfterCommit(id, now);
+  return detailAfterCommit(actor, id, now);
 }
 
 // ---------------------------------------------------------------------------
@@ -405,5 +431,5 @@ export async function reopenEnquiry(
     return at;
   }, TX_OPTIONS);
 
-  return detailAfterCommit(id, now);
+  return detailAfterCommit(actor, id, now);
 }
