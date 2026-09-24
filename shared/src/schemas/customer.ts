@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { GSTIN_PATTERN, INDIA_STATES } from '../constants/index.js';
+import { COUNTRIES, GSTIN_PATTERN, INDIA_STATES } from '../constants/index.js';
 import { CUSTOMER_TYPES } from '../enums.js';
 import { cuidSchema } from './common.js';
 
@@ -36,7 +36,29 @@ export const customerAddressSchema = z
   .max(500, 'Keep the address under 500 characters');
 
 /**
- * The customer's State, closed to the 28 States of India.
+ * The trading or registered name the customer bills under.
+ *
+ * Separate from `name`, never a replacement for it: `name` is who is dealt
+ * with and is required, while this is who the invoice is made out to and a
+ * retail buyer has none.
+ */
+export const customerCompanySchema = z
+  .string()
+  .trim()
+  .max(160, 'Keep the company name under 160 characters');
+
+/**
+ * The country, closed to the COUNTRIES reference list.
+ *
+ * A closed list rather than free text so that 'UAE', 'U.A.E.' and 'United
+ * Arab Emirates' cannot become three countries in the same database.
+ */
+export const customerCountrySchema = z.enum(COUNTRIES, {
+  errorMap: () => ({ message: 'Choose a country from the list' }),
+});
+
+/**
+ * The customer's State, closed to the States and Union Territories of India.
  *
  * A closed list rather than free text: a state typed by hand becomes "U.P.",
  * "Uttar pradesh" and "UP" in three rows and stops being groupable. The list
@@ -65,7 +87,7 @@ export const createCustomerSchema = z.object({
     errorMap: () => ({ message: 'Choose a customer type' }),
   }),
   /**
-   * All five stay optional on the wire so no existing customer record and no
+   * All seven stay optional on the wire so no existing customer record and no
    * existing caller becomes invalid. Where a form needs one of them — both
    * add-customer dialogs require a phone — that is enforced at the form, which
    * is the layer that knows what it is asking for.
@@ -73,10 +95,12 @@ export const createCustomerSchema = z.object({
    * `gstNumber` is optional by business rule rather than by compatibility: a
    * retail customer has no GSTIN, so blank must always be a valid answer.
    */
+  companyName: customerCompanySchema.optional(),
   phone: customerPhoneSchema.optional(),
   email: customerEmailSchema.optional(),
   address: customerAddressSchema.optional(),
   state: customerStateSchema.optional(),
+  country: customerCountrySchema.optional(),
   gstNumber: customerGstSchema.optional(),
 });
 

@@ -9,10 +9,13 @@ import {
   GST_RATES,
   GST_RATE_LABELS,
   HSN_CODE_MAX_LENGTH,
+  COUNTRIES,
+  DEFAULT_COUNTRY,
   INDIA_STATES,
   MAX_ITEMS_PER_SALES_ORDER,
   createSalesOrderSchema,
   customerAddressSchema,
+  customerCompanySchema,
   customerEmailSchema,
   customerGstSchema,
   customerPhoneSchema,
@@ -20,8 +23,12 @@ import {
   isValidAmount,
   lineTotal,
   subtractAmount,
+  computeSalesTotals,
   sumItemTotals,
+  GST_MODES,
+  GST_MODE_LABELS,
   type CreateSalesOrderInput,
+  type GstMode,
   type GstRate,
 } from '@rs/shared';
 import { Button } from '@/components/ui/button';
@@ -52,6 +59,10 @@ import {
 import { ErrorMessage } from '@/components/common/error-message';
 import { EntityPicker, type PickerOption } from '@/components/product-enquiry/entity-picker';
 import { ImageUploadField } from '@/components/product-enquiry/image-upload-field';
+import { ChargesEditor, usableCharges } from './charges-editor';
+import type { ChargeDraft } from './charges-editor';
+import { MoneyBreakdown } from './money-breakdown';
+import { cn } from '@/lib/utils';
 import { formatCurrency, label } from '@/lib/format';
 import { createSalesCustomerAction, createSalesOrderAction } from '@/app/(app)/sales/actions';
 
@@ -84,6 +95,7 @@ type ItemDraft = {
    * different statements, and the form never turns one into the other.
    */
   gstRate: GstRate;
+  gstMode: GstMode;
 };
 
 /**
@@ -103,6 +115,7 @@ const emptyItem = (key: string): ItemDraft => ({
   rsProduct: null,
   hsnCode: '',
   gstRate: 'NONE',
+  gstMode: 'EXCLUSIVE',
 });
 
 /**
@@ -126,6 +139,8 @@ export function CreateSalesOrderForm() {
   const [orderId, setOrderId] = useState('');
   const [customer, setCustomer] = useState<PickerOption | null>(null);
   const [items, setItems] = useState<ItemDraft[]>(() => [emptyItem('i0')]);
+
+  const [charges, setCharges] = useState<ChargeDraft[]>([]);
   const [paidAmount, setPaidAmount] = useState('');
   const [orderDate, setOrderDate] = useState(today);
   const [dispatchBy, setDispatchBy] = useState(today);
@@ -143,6 +158,10 @@ export function CreateSalesOrderForm() {
   const [newCustomerAddress, setNewCustomerAddress] = useState('');
   /** Empty means "not recorded", and is what makes the Select show its placeholder. */
   const [newCustomerState, setNewCustomerState] = useState('');
+  /** Blank means the customer bills under their own name. */
+  const [newCustomerCompany, setNewCustomerCompany] = useState('');
+  /** Nearly every customer is domestic, so the form starts on India. */
+  const [newCustomerCountry, setNewCustomerCountry] = useState<string>(DEFAULT_COUNTRY);
   const [newCustomerGst, setNewCustomerGst] = useState('');
   const [creatingCustomer, setCreatingCustomer] = useState(false);
   const [customerErrors, setCustomerErrors] = useState<Record<string, string>>({});
@@ -158,13 +177,17 @@ export function CreateSalesOrderForm() {
   const addressOk =
     newCustomerAddress.trim() === '' ||
     customerAddressSchema.safeParse(newCustomerAddress).success;
-  // The dropdown can only offer the 28 names the schema accepts, so this holds
+  // The dropdown can only offer names the schema accepts, so this holds
   // by construction; it is checked anyway so the rule lives in one place and a
   // future change to the options cannot quietly diverge from the server.
   const stateOk = newCustomerState === '' || customerStateSchema.safeParse(newCustomerState).success;
+  const companyOk =
+    newCustomerCompany.trim() === '' ||
+    customerCompanySchema.safeParse(newCustomerCompany).success;
   const gstOk =
     newCustomerGst.trim() === '' || customerGstSchema.safeParse(newCustomerGst).success;
-  const customerReady = nameOk && phoneOk && emailOk && addressOk && stateOk && gstOk;
+  const customerReady =
+    nameOk && companyOk && phoneOk && emailOk && addressOk && stateOk && gstOk;
 
   const atCap = items.length >= MAX_ITEMS_PER_SALES_ORDER;
 
@@ -193,7 +216,39 @@ export function CreateSalesOrderForm() {
     priceable(item) ? lineTotal(item.price.trim(), Number(item.quantity)) : null;
 
   const allPriceable = items.every(priceable);
-  const total = allPriceable
+
+  /*
+    The whole preview, from the same function the API and the create schema
+    use. It is not a second statement of the arithmetic — it is the same one,
+    so what the form shows is what the server will compute.
+
+    Each line is read on its own terms — its own slab and its own mode — so a
+    5% exclusive line and an 18% inclusive line on the same order each come
+    out right.
+
+    The split is assumed intra-state here. The browser does not know the
+    seller's registered State, and CGST+SGST versus IGST changes only which
+    heads the tax is posted to, never the payable. The API reports the real
+    split back on the created order.
+  */
+  const totals = allPriceable
+    ? computeSalesTotals({
+        split: 'CGST_SGST',
+        items: items.map((i) => ({
+          quantity: Number(i.quantity),
+          price: i.price.trim(),
+          gstRate: i.gstRate ?? null,
+          gstMode: i.gstMode,
+        })),
+        charges: usableCharges(charges),
+      })
+    : null;
+
+  /** What the customer owes. Was the bare line sum before GST entered it. */
+  const total = totals ? totals.payable : null;
+
+  /** The goods alone, still shown so a reader can see where the tax started. */
+  const goodsTotal = allPriceable
     ? sumItemTotals(items.map((i) => ({ quantity: Number(i.quantity), price: i.price.trim() })))
     : null;
 
@@ -222,7 +277,11 @@ export function CreateSalesOrderForm() {
         // Always sent, and always the stable string. 'NONE' travels as 'NONE'
         // — never as 0, and never converted to a number.
         gstRate: item.gstRate,
+        // Always sent, and per line: this order may mix the two readings.
+        gstMode: item.gstMode,
       })),
+      // Order level, and only these: GST now travels on each line.
+      charges: usableCharges(charges),
       paidAmount: paidAmount.trim() === '' ? '0' : paidAmount.trim(),
       orderDate,
       toBeDispatchedBy: dispatchBy,
@@ -298,7 +357,9 @@ export function CreateSalesOrderForm() {
         ...(newCustomerPhone.trim() ? { phone: newCustomerPhone.trim() } : {}),
         ...(newCustomerEmail.trim() ? { email: newCustomerEmail.trim() } : {}),
         ...(newCustomerAddress.trim() ? { address: newCustomerAddress.trim() } : {}),
+        ...(newCustomerCompany.trim() ? { companyName: newCustomerCompany.trim() } : {}),
         ...(newCustomerState ? { state: newCustomerState } : {}),
+        ...(newCustomerCountry ? { country: newCustomerCountry } : {}),
         // Sent as typed; the shared schema trims and uppercases it server-side,
         // so the canonical casing is decided in exactly one place.
         ...(newCustomerGst.trim() ? { gstNumber: newCustomerGst.trim() } : {}),
@@ -584,8 +645,46 @@ export function CreateSalesOrderForm() {
                       {err(`items.${index}.gstRate`) ? (
                         <p className="text-xs text-critical">{err(`items.${index}.gstRate`)}</p>
                       ) : (
-                        <p className="text-xs text-muted">Not added to the line total.</p>
+                        <p className="text-xs text-muted">The slab for this product.</p>
                       )}
+                    </div>
+
+                    {/*
+                      Per line, and deliberately. One order routinely carries a
+                      product quoted plus tax beside one quoted all-in; forcing
+                      a single reading on the document made somebody re-type a
+                      quotation to say what it already said.
+                    */}
+                    <div className="flex flex-col gap-1.5">
+                      <Label htmlFor={`${formId}-gstmode-${item.key}`}>GST mode</Label>
+                      <Select
+                        value={item.gstMode}
+                        onValueChange={(value) =>
+                          updateItem(item.key, { gstMode: value as GstMode })
+                        }
+                        disabled={item.gstRate === 'NONE'}
+                      >
+                        <SelectTrigger
+                          id={`${formId}-gstmode-${item.key}`}
+                          aria-label={`GST mode for product ${index + 1}`}
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {GST_MODES.map((mode) => (
+                            <SelectItem key={mode} value={mode}>
+                              {GST_MODE_LABELS[mode]}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted">
+                        {item.gstRate === 'NONE'
+                          ? 'No GST on this line.'
+                          : item.gstMode === 'INCLUSIVE'
+                            ? 'Price already contains the GST.'
+                            : 'GST is added to the price.'}
+                      </p>
                     </div>
                   </div>
 
@@ -645,6 +744,43 @@ export function CreateSalesOrderForm() {
         </CardContent>
       </Card>
 
+      {/* ---------------- GST, charges and the payable ---------------- */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">GST &amp; charges</CardTitle>
+        </CardHeader>
+
+        <CardContent className="flex flex-col gap-5">
+          <div className="flex flex-col gap-2">
+            <Label>Additional charges &amp; adjustments</Label>
+            <ChargesEditor charges={charges} onChange={setCharges} disabled={pending} />
+          </div>
+
+          {/* The preview, from the same function the server will use. */}
+          <div className="rounded-md border border-line p-4 sm:max-w-md sm:self-end">
+            {totals ? (
+              <MoneyBreakdown
+                taxSplit={totals.split}
+                taxableSubtotal={totals.taxableSubtotal}
+                taxTotal={totals.taxTotal}
+                cgstTotal={totals.cgstTotal}
+                sgstTotal={totals.sgstTotal}
+                igstTotal={totals.igstTotal}
+                byRate={totals.byRate}
+                chargesTotal={totals.chargesTotal}
+                discountTotal={totals.discountTotal}
+                charges={usableCharges(charges)}
+                payable={totals.payable}
+              />
+            ) : (
+              <p className="text-sm text-muted">
+                Enter a quantity and price on every line to see the breakup.
+              </p>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
       {/* ---------------- Money & dates ---------------- */}
       <Card>
         <CardHeader>
@@ -652,13 +788,15 @@ export function CreateSalesOrderForm() {
         </CardHeader>
 
         <CardContent className="grid gap-5 sm:grid-cols-4">
-          {/* Derived, never submitted — the sum of every line. */}
+          {/* Derived, never submitted — goods + GST + charges − discount. */}
           <div className="flex flex-col gap-1.5">
-            <span className="text-sm font-medium text-ink-2">Order total</span>
+            <span className="text-sm font-medium text-ink-2">Total payable</span>
             <div className="flex h-10 items-center rounded-md border border-line bg-surface-2 px-3 font-mono text-sm font-medium text-ink tabular">
               {total ? formatCurrency(total) : '—'}
             </div>
-            <p className="text-xs text-muted">Calculated automatically</p>
+            <p className="text-xs text-muted">
+              {goodsTotal ? `Goods ${formatCurrency(goodsTotal)} + GST and charges` : 'Calculated automatically'}
+            </p>
           </div>
 
           <div className="flex flex-col gap-1.5">
@@ -769,6 +907,19 @@ export function CreateSalesOrderForm() {
 
             {/* Optional, but worth asking for now: an order that needs chasing
                 is far easier to chase with a number attached to it. */}
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="newCustomerCompany">Company Name</Label>
+              <Input
+                id="newCustomerCompany"
+                value={newCustomerCompany}
+                onChange={(e) => setNewCustomerCompany(e.target.value)}
+                placeholder="Optional — who the invoice is made out to"
+              />
+              {customerErrors.companyName && (
+                <p className="text-xs text-critical">{customerErrors.companyName}</p>
+              )}
+            </div>
+
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="newCustomerPhone">Phone *</Label>
@@ -800,9 +951,9 @@ export function CreateSalesOrderForm() {
               </div>
             </div>
 
-            {/* Both optional: the state is needed for GST-relevant billing, and
-                a retail customer has no GSTIN at all. */}
-            <div className="grid gap-4 sm:grid-cols-2">
+            {/* All three optional. The State decides whether a sale is taxed
+                CGST + SGST or IGST, and a retail customer has no GSTIN. */}
+            <div className="grid gap-4 sm:grid-cols-3">
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="newCustomerState">State</Label>
                 <Select value={newCustomerState} onValueChange={setNewCustomerState}>
@@ -819,6 +970,25 @@ export function CreateSalesOrderForm() {
                 </Select>
                 {customerErrors.state && (
                   <p className="text-xs text-critical">{customerErrors.state}</p>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="newCustomerCountry">Country</Label>
+                <Select value={newCustomerCountry} onValueChange={setNewCustomerCountry}>
+                  <SelectTrigger id="newCustomerCountry">
+                    <SelectValue placeholder="Select country" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {COUNTRIES.map((c) => (
+                      <SelectItem key={c} value={c}>
+                        {c}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {customerErrors.country && (
+                  <p className="text-xs text-critical">{customerErrors.country}</p>
                 )}
               </div>
 

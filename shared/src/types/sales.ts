@@ -7,7 +7,12 @@
  * database models, so the two tiers cannot drift.
  */
 
-import type { GstRate } from '../constants/index.js';
+import type {
+  GstMode,
+  GstRate,
+  SalesChargeType,
+  TaxSplit,
+} from '../constants/index.js';
 import type {
   SalesChangeStatus,
   SalesChangeType,
@@ -51,6 +56,12 @@ export type SalesOrderItemView = {
    * zero percent". Stored and displayed only — no total is derived from it.
    */
   gstRate: GstRate | null;
+  /** How this line's price was read. Independent of every other line. */
+  gstMode: GstMode;
+  /** The value taxed. Lower than `lineTotal` when the price includes GST. */
+  taxableAmount: DecimalString;
+  /** The GST on this line alone, before it is split into heads. */
+  gstAmount: DecimalString;
 
   status: SalesItemStatus;
   /** Who put this line forward. */
@@ -70,9 +81,53 @@ export type SalesOrderItemView = {
  * renders them; it never computes the authoritative value, and it never parses
  * any of these back into a number for arithmetic.
  */
+/** One order-level charge or adjustment, as the API reports it. */
+export type SalesChargeView = {
+  id: string;
+  type: SalesChargeType;
+  label: string | null;
+  /** Always positive. DISCOUNT is what makes it subtract. */
+  amount: DecimalString;
+};
+
+/** One GST slab's contribution, for the rate-by-rate table on an invoice. */
+export type TaxRateBreakupView = {
+  /** A whole number of percent. Never zero, and never 'NONE'. */
+  rate: number;
+  taxable: DecimalString;
+  tax: DecimalString;
+  cgst: DecimalString;
+  sgst: DecimalString;
+  igst: DecimalString;
+};
+
 export type SalesMoneyView = {
-  /** Sum of the ACTIVE line totals. Excludes anything awaiting approval. */
+  /**
+   * What the customer owes: taxable goods + GST + charges - discount.
+   *
+   * This is the figure `paid` is measured against and the one the order must
+   * match to close. It was previously the bare sum of the line totals; GST
+   * and charges now form part of it, and the money guard trigger enforces the
+   * same definition in the database.
+   */
   total: DecimalString;
+  /** The goods before tax. Lower than the line sum when prices are inclusive. */
+  taxableSubtotal: DecimalString;
+  /** What the lines come to as typed, whichever way they are read. */
+  lineSubtotal: DecimalString;
+
+  /** Which heads the tax posts to, from the seller's and customer's states. */
+  taxSplit: TaxSplit;
+  taxTotal: DecimalString;
+  cgstTotal: DecimalString;
+  sgstTotal: DecimalString;
+  igstTotal: DecimalString;
+  /** Slab by slab, for the invoice table. Empty when nothing is taxed. */
+  taxByRate: TaxRateBreakupView[];
+  /** Everything added beyond the goods. */
+  chargesTotal: DecimalString;
+  /** What was taken off. Positive. */
+  discountTotal: DecimalString;
   paid: DecimalString;
   /** total − paid */
   pending: DecimalString;
@@ -169,4 +224,6 @@ export type SalesOrderDetail = {
   createdBy: UserRef;
   createdAt: IsoDateTime;
   updatedAt: IsoDateTime;
+  /** Order-level charges and adjustments, in the order they were entered. */
+  charges: SalesChargeView[];
 };

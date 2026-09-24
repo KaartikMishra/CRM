@@ -66,6 +66,7 @@ export async function makeUser(role: Role = 'USER', isActive = true): Promise<Te
 export async function makeCustomer(
   type: CustomerType = 'RETAIL',
   contact: {
+    companyName?: string;
     phone?: string;
     email?: string;
     address?: string;
@@ -75,6 +76,7 @@ export async function makeCustomer(
 ): Promise<{
   id: string;
   name: string;
+  companyName: string | null;
   phone: string | null;
   email: string | null;
   address: string | null;
@@ -85,6 +87,7 @@ export async function makeCustomer(
     data: {
       name: `${TEST_PREFIX}-customer-${short()}`,
       type,
+      companyName: contact.companyName ?? null,
       phone: contact.phone ?? null,
       email: contact.email ?? null,
       address: contact.address ?? null,
@@ -94,6 +97,7 @@ export async function makeCustomer(
     select: {
       id: true,
       name: true,
+      companyName: true,
       phone: true,
       email: true,
       address: true,

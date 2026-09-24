@@ -44,6 +44,8 @@ const customerContactRef = {
   address: true,
   state: true,
   gstNumber: true,
+  companyName: true,
+  country: true,
 } as const;
 const mediaRef = { id: true, secureUrl: true, publicId: true } as const;
 
@@ -234,7 +236,7 @@ function visibleCustomer(
 /**
  * The same, with the three identifying fields withheld where they must be.
  *
- * Name, phone and email only. Address, state, GST number and customer type go
+ * Name, company name, phone and email only. Address, state, country, GST
  * to everybody: an Answerer needs to know where goods are going and how the
  * sale is taxed, and neither of those says who the buyer is.
  *
@@ -245,19 +247,28 @@ function visibleCustomer(
 function visibleCustomerContact(
   row: {
     id: string; name: string; type: EnquiryCustomerRef['type'];
+    companyName: string | null;
     phone: string | null; email: string | null; address: string | null;
-    state: string | null; gstNumber: string | null;
+    state: string | null; gstNumber: string | null; country: string | null;
   },
   canSeeCustomer: boolean,
 ): EnquiryCustomerContactRef {
   return {
     ...visibleCustomer(row, canSeeCustomer),
+    /*
+      companyName travels with the identity, not with the address. A firm's
+      name says who the buyer is at least as plainly as a person's does, so
+      sending it to somebody who may not see `name` would undo the rule
+      rather than extend it.
+    */
+    companyName: canSeeCustomer ? row.companyName : null,
     phone: canSeeCustomer ? row.phone : null,
     email: canSeeCustomer ? row.email : null,
-    // Never withheld.
+    // Never withheld. Where goods go and how the sale is taxed is not who buys.
     address: row.address,
     state: row.state,
     gstNumber: row.gstNumber,
+    country: row.country,
   };
 }
 

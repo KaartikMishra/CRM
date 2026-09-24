@@ -100,8 +100,20 @@ describe('the GST select', () => {
     expect(block).not.toMatch(/<SelectItem value="(0|5|12|18|28|NONE)"/);
   });
 
-  it('says the rate is not part of the total', () => {
-    expect(form).toContain('Not added to the line total.');
+  it('names the slab as the slab for that product', () => {
+    /*
+      This used to assert 'Not added to the line total.' -- true when the
+      rate was recorded and nothing more. GST now forms part of what the
+      customer owes, so saying it is excluded would be false. The line
+      total is still quantity x price; the order's payable is what moved.
+    */
+    expect(form).toContain('The slab for this product.');
+    expect(form).not.toContain('Not added to the line total.');
+  });
+
+  it('offers a GST mode beside the slab, per line', () => {
+    expect(form).toContain('GST mode');
+    expect(form).toContain('gstMode: value as GstMode');
   });
 });
 
@@ -381,10 +393,20 @@ describe('GST does not enter any calculation', () => {
 // ---------------------------------------------------------------------------
 
 describe('excluded surfaces were not touched', () => {
-  it('leaves the order detail item list alone', () => {
+  it('now shows the per-line tax position on the order detail item list', () => {
+    /*
+      This used to assert the item list mentioned neither HSN nor a rate,
+      which was right when both were recorded and shown nowhere. The detail
+      page is now required to show each line's slab, mode, taxable value and
+      GST, because an order can mix them and a reader has to see which line
+      was taxed how.
+    */
     const detail = read('components/sales/sales-item-list.tsx');
-    expect(detail).not.toMatch(/\bhsn/i);
-    expect(detail).not.toMatch(/gstRate/);
+    expect(detail).toContain('item.hsnCode');
+    expect(detail).toContain('item.gstRate');
+    expect(detail).toContain('item.gstMode');
+    expect(detail).toContain('item.taxableAmount');
+    expect(detail).toContain('item.gstAmount');
   });
 
   it('leaves the change-request dialogs alone', () => {

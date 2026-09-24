@@ -65,6 +65,7 @@ const EMAIL = 'zz-test-contact@test.invalid';
 const ADDRESS = 'zz-test 14 Brigade Road\nSecond floor';
 const STATE = 'Karnataka';
 const GSTIN = '29ZZTEST0001Z5';
+const COMPANY = 'zz-test Royal Traders Pvt Ltd';
 
 let customerId: string;
 let customerName: string;
@@ -124,6 +125,7 @@ beforeAll(async () => {
   ]);
 
   const customer = await makeCustomer('RETAIL', {
+    companyName: COMPANY,
     phone: PHONE,
     email: EMAIL,
     address: ADDRESS,
@@ -230,6 +232,7 @@ describe('Raiser access carries the customer identity', () => {
     const customer = (await detailAs(raiserToken)).body.data!.enquiry.customer;
 
     expect(customer.name).toBe(customerName);
+    expect(customer.companyName).toBe(COMPANY);
     expect(customer.phone).toBe(PHONE);
     expect(customer.email).toBe(EMAIL);
   });
@@ -254,10 +257,16 @@ describe('Raiser access carries the customer identity', () => {
 });
 
 describe('without Raiser access exactly three fields are withheld', () => {
-  it('name, phone and email arrive null — and nothing else does', async () => {
+  it('name, company name, phone and email arrive null', async () => {
     const customer = (await detailAs(answererToken)).body.data!.enquiry.customer;
 
     expect(customer.name).toBeNull();
+    /*
+      companyName follows the identity, not the address. A firm's name says
+      who the buyer is at least as plainly as a person's does, so sending it
+      to somebody who may not see `name` would undo the rule, not extend it.
+    */
+    expect(customer.companyName).toBeNull();
     expect(customer.phone).toBeNull();
     expect(customer.email).toBeNull();
   });
@@ -270,6 +279,7 @@ describe('without Raiser access exactly three fields are withheld', () => {
     */
     const customer = (await detailAs(answererToken)).body.data!.enquiry.customer;
 
+    expect(customer.country).toBeNull(); // never set on this fixture, never withheld
     expect(customer.address).toBe(ADDRESS);
     expect(customer.state).toBe(STATE);
     expect(customer.gstNumber).toBe(GSTIN);
@@ -295,6 +305,7 @@ describe('without Raiser access exactly three fields are withheld', () => {
     const raw = JSON.stringify((await detailAs(answererToken)).body);
 
     expect(raw).not.toContain(customerName);
+    expect(raw).not.toContain(COMPANY);
     expect(raw).not.toContain(PHONE);
     expect(raw).not.toContain(EMAIL);
   });

@@ -14,11 +14,13 @@ import { prisma } from '../../config/database.js';
 const view = {
   id: true,
   name: true,
+  companyName: true,
   type: true,
   phone: true,
   email: true,
   address: true,
   state: true,
+  country: true,
   gstNumber: true,
   createdAt: true,
 } as const;
@@ -26,11 +28,13 @@ const view = {
 type Row = {
   id: string;
   name: string;
+  companyName: string | null;
   type: CustomerView['type'];
   phone: string | null;
   email: string | null;
   address: string | null;
   state: string | null;
+  country: string | null;
   gstNumber: string | null;
   createdAt: Date;
 };
@@ -38,11 +42,13 @@ type Row = {
 const toView = (row: Row): CustomerView => ({
   id: row.id,
   name: row.name,
+  companyName: row.companyName,
   type: row.type,
   phone: row.phone,
   email: row.email,
   address: row.address,
   state: row.state,
+  country: row.country,
   gstNumber: row.gstNumber,
   createdAt: row.createdAt.toISOString(),
 });
@@ -69,6 +75,7 @@ export async function createCustomer(input: CreateCustomerInput): Promise<Custom
   const row = await prisma.customer.create({
     data: {
       name: input.name,
+      companyName: input.companyName ?? null,
       type: input.type,
       phone: input.phone ?? null,
       email: input.email ?? null,
@@ -79,6 +86,7 @@ export async function createCustomer(input: CreateCustomerInput): Promise<Custom
       // of the 28 official names, the GSTIN trimmed and uppercased — so there
       // is nothing left to clean up here.
       state: input.state ?? null,
+      country: input.country ?? null,
       gstNumber: input.gstNumber ?? null,
     },
     select: view,

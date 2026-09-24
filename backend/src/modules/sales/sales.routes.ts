@@ -15,6 +15,7 @@ import {
   recordPaymentSchema,
   reviewChangeRequestSchema,
   salesOrderListQuerySchema,
+  setSalesChargesSchema,
   updateSalesOrderSchema,
 } from '@rs/shared';
 import { requireAuth } from '../../middleware/requireAuth.js';
@@ -58,6 +59,20 @@ salesRoutes.patch(
   requirePermission('SALES', 'EDIT'),
   validate({ params: idParam, body: updateSalesOrderSchema }),
   controller.update,
+);
+
+/**
+ * Charges and adjustments, sent as a set.
+ *
+ * EDIT rather than a permission of its own: a charge moves what the customer
+ * owes exactly as a line does, and anybody trusted to change the lines is
+ * trusted to change these.
+ */
+salesRoutes.put(
+  '/:id/charges',
+  requirePermission('SALES', 'EDIT'),
+  validate({ params: idParam, body: setSalesChargesSchema }),
+  controller.setCharges,
 );
 
 salesRoutes.post(

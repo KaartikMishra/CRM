@@ -47,6 +47,8 @@ export type CustomerRef = {
  * every row of a table. Detail payloads use this; summaries keep CustomerRef.
  */
 export type CustomerContactRef = CustomerRef & {
+  /** The name the invoice is made out to, where it differs from `name`. */
+  companyName: string | null;
   phone: string | null;
   email: string | null;
   address: string | null;
@@ -61,6 +63,8 @@ export type CustomerContactRef = CustomerRef & {
   state: string | null;
   /** The GSTIN, uppercase, or null where the customer has none. */
   gstNumber: string | null;
+  /** One of `COUNTRIES`, or null where it was never recorded. */
+  country: string | null;
 };
 
 /**
@@ -105,6 +109,15 @@ export type EnquiryCustomerRef = {
  * All of these are nullable anyway, because any may genuinely be unrecorded.
  */
 export type EnquiryCustomerContactRef = EnquiryCustomerRef & {
+  /**
+   * WITHHELD with the identity, not with the address.
+   *
+   * A company name says who the buyer is at least as plainly as a personal
+   * name does — often more so — so it follows the same capability. Sending
+   * it to somebody who may not see `name` would undo the rule rather than
+   * extend it.
+   */
+  companyName: string | null;
   phone: string | null;
   email: string | null;
   address: string | null;
@@ -112,6 +125,8 @@ export type EnquiryCustomerContactRef = EnquiryCustomerRef & {
   state: string | null;
   /** The GSTIN, uppercase, or null where the customer has none. */
   gstNumber: string | null;
+  /** One of `COUNTRIES`. Never withheld — where goods go is not who buys. */
+  country: string | null;
 };
 
 export type VendorRef = {
@@ -263,6 +278,7 @@ export type FullSubmitBlocker = {
 
 /** The customer master as the picker sees it. */
 export type CustomerView = CustomerRef & {
+  companyName: string | null;
   phone: string | null;
   email: string | null;
   address: string | null;
@@ -270,6 +286,8 @@ export type CustomerView = CustomerRef & {
   state: string | null;
   /** The GSTIN, uppercase, or null where the customer has none. */
   gstNumber: string | null;
+  /** One of `COUNTRIES`, or null where it was never recorded. */
+  country: string | null;
   createdAt: IsoDateTime;
 };
 

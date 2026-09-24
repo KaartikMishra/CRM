@@ -11,6 +11,7 @@ import type {
   RecordPaymentInput,
   ReviewChangeRequestInput,
   SalesOrderListQuery,
+  SetSalesChargesInput,
   UpdateSalesOrderInput,
 } from '@rs/shared';
 import { sendCreated, sendSuccess } from '../../utils/apiResponse.js';
@@ -55,6 +56,16 @@ export async function update(req: Request, res: Response): Promise<void> {
   sendSuccess(res, { order });
 }
 
+/** Replaces the order's charges and adjustments with the set that was sent. */
+export async function setCharges(req: Request, res: Response): Promise<void> {
+  const { id } = validatedParams<IdParam>(req);
+  const order = await sales.setSalesCharges(
+    currentUser(req),
+    id,
+    validatedBody<SetSalesChargesInput>(req),
+  );
+  sendSuccess(res, { order });
+}
 export async function payment(req: Request, res: Response): Promise<void> {
   const { id } = validatedParams<IdParam>(req);
   const order = await sales.recordPayment(

@@ -117,6 +117,18 @@ export const INDIA_STATES = [
   'Uttar Pradesh',
   'Uttarakhand',
   'West Bengal',
+
+  // The eight Union Territories. A GSTIN is issued against these exactly as
+  // it is against a State, and a customer in Delhi or Chandigarh has to be
+  // recordable, so they belong in the same list rather than a parallel one.
+  'Andaman and Nicobar Islands',
+  'Chandigarh',
+  'Dadra and Nagar Haveli and Daman and Diu',
+  'Delhi',
+  'Jammu and Kashmir',
+  'Ladakh',
+  'Lakshadweep',
+  'Puducherry',
 ] as const;
 
 export type IndiaState = (typeof INDIA_STATES)[number];
@@ -203,3 +215,129 @@ export const GST_RATE_LABELS = {
  * pattern and no numeric coercion.
  */
 export const HSN_CODE_MAX_LENGTH = 20;
+
+/**
+ * Countries, for the customer's postal address.
+ *
+ * Plain text and a fixed reference list, exactly like INDIA_STATES and for the
+ * same reasons: `Customer.country` is a nullable String, and a Postgres enum
+ * would charge an ALTER TYPE migration every time a name changed.
+ *
+ * Names, not ISO codes. The column is read by people preparing shipping and
+ * invoice documents, and a document says "United Arab Emirates" rather than
+ * "AE". Anything that needs a code later can map from this.
+ */
+export const COUNTRIES = [
+  'Afghanistan', 'Albania', 'Algeria', 'Andorra', 'Angola', 'Antigua and Barbuda',
+  'Argentina', 'Armenia', 'Australia', 'Austria', 'Azerbaijan', 'Bahamas', 'Bahrain',
+  'Bangladesh', 'Barbados', 'Belarus', 'Belgium', 'Belize', 'Benin', 'Bhutan',
+  'Bolivia', 'Bosnia and Herzegovina', 'Botswana', 'Brazil', 'Brunei', 'Bulgaria',
+  'Burkina Faso', 'Burundi', 'Cabo Verde', 'Cambodia', 'Cameroon', 'Canada',
+  'Central African Republic', 'Chad', 'Chile', 'China', 'Colombia', 'Comoros',
+  'Congo', 'Costa Rica', 'Croatia', 'Cuba', 'Cyprus', 'Czechia',
+  'Democratic Republic of the Congo', 'Denmark', 'Djibouti', 'Dominica',
+  'Dominican Republic', 'Ecuador', 'Egypt', 'El Salvador', 'Equatorial Guinea',
+  'Eritrea', 'Estonia', 'Eswatini', 'Ethiopia', 'Fiji', 'Finland', 'France',
+  'Gabon', 'Gambia', 'Georgia', 'Germany', 'Ghana', 'Greece', 'Grenada',
+  'Guatemala', 'Guinea', 'Guinea-Bissau', 'Guyana', 'Haiti', 'Honduras', 'Hungary',
+  'Iceland', 'India', 'Indonesia', 'Iran', 'Iraq', 'Ireland', 'Israel', 'Italy',
+  'Ivory Coast', 'Jamaica', 'Japan', 'Jordan', 'Kazakhstan', 'Kenya', 'Kiribati',
+  'Kuwait', 'Kyrgyzstan', 'Laos', 'Latvia', 'Lebanon', 'Lesotho', 'Liberia',
+  'Libya', 'Liechtenstein', 'Lithuania', 'Luxembourg', 'Madagascar', 'Malawi',
+  'Malaysia', 'Maldives', 'Mali', 'Malta', 'Marshall Islands', 'Mauritania',
+  'Mauritius', 'Mexico', 'Micronesia', 'Moldova', 'Monaco', 'Mongolia',
+  'Montenegro', 'Morocco', 'Mozambique', 'Myanmar', 'Namibia', 'Nauru', 'Nepal',
+  'Netherlands', 'New Zealand', 'Nicaragua', 'Niger', 'Nigeria', 'North Korea',
+  'North Macedonia', 'Norway', 'Oman', 'Pakistan', 'Palau', 'Palestine', 'Panama',
+  'Papua New Guinea', 'Paraguay', 'Peru', 'Philippines', 'Poland', 'Portugal',
+  'Qatar', 'Romania', 'Russia', 'Rwanda', 'Saint Kitts and Nevis', 'Saint Lucia',
+  'Saint Vincent and the Grenadines', 'Samoa', 'San Marino',
+  'Sao Tome and Principe', 'Saudi Arabia', 'Senegal', 'Serbia', 'Seychelles',
+  'Sierra Leone', 'Singapore', 'Slovakia', 'Slovenia', 'Solomon Islands',
+  'Somalia', 'South Africa', 'South Korea', 'South Sudan', 'Spain', 'Sri Lanka',
+  'Sudan', 'Suriname', 'Sweden', 'Switzerland', 'Syria', 'Taiwan', 'Tajikistan',
+  'Tanzania', 'Thailand', 'Timor-Leste', 'Togo', 'Tonga', 'Trinidad and Tobago',
+  'Tunisia', 'Turkey', 'Turkmenistan', 'Tuvalu', 'Uganda', 'Ukraine',
+  'United Arab Emirates', 'United Kingdom', 'United States of America', 'Uruguay',
+  'Uzbekistan', 'Vanuatu', 'Vatican City', 'Venezuela', 'Vietnam', 'Yemen',
+  'Zambia', 'Zimbabwe',
+] as const;
+
+export type Country = (typeof COUNTRIES)[number];
+
+/** What a new customer form starts on. Nearly every customer is domestic. */
+export const DEFAULT_COUNTRY: Country = 'India';
+
+/**
+ * How the price typed onto a sales line is to be read.
+ *
+ * EXCLUSIVE  the price is the taxable value; GST is added on top.
+ * INCLUSIVE  the price is what the customer pays; the taxable value and the
+ *            tax are worked back out of it.
+ *
+ * One setting for the whole order rather than one per line. A quotation is
+ * given on one basis or the other, and mixing the two on a single document is
+ * a mistake rather than a feature.
+ *
+ * Worth being exact about what changes: the mode never alters what the
+ * customer pays for the goods, only how that figure is broken up. Ten rupees
+ * inclusive of 5% is ₹9.52 of goods and ₹0.48 of tax; ten rupees exclusive is
+ * ₹10.00 of goods and ₹0.50 of tax, totalling ₹10.50.
+ */
+export const GST_MODES = ['EXCLUSIVE', 'INCLUSIVE'] as const;
+
+export type GstMode = (typeof GST_MODES)[number];
+
+export const GST_MODE_LABELS = {
+  EXCLUSIVE: 'GST Excluded',
+  INCLUSIVE: 'GST Included',
+} as const satisfies Record<GstMode, string>;
+
+/**
+ * What a rate is called once it has been split for an intra-state sale.
+ *
+ * Under Indian GST a sale within the seller's own state carries CGST and SGST
+ * at half the rate each; a sale to another state carries IGST at the whole
+ * rate. The total tax is identical either way — only the heads differ, and an
+ * invoice has to name them correctly.
+ */
+export const TAX_SPLITS = ['CGST_SGST', 'IGST'] as const;
+
+export type TaxSplit = (typeof TAX_SPLITS)[number];
+
+/**
+ * Order-level charges and adjustments, beyond the goods themselves.
+ *
+ * DISCOUNT is the one that subtracts. It is kept in the same list rather than
+ * given a field of its own because it behaves like the others in every other
+ * respect — it is entered, labelled and shown the same way — and because an
+ * order may legitimately carry more than one.
+ */
+export const SALES_CHARGE_TYPES = [
+  'DUTY',
+  'PACKING',
+  'SHIPPING',
+  'CUSTOMIZATION',
+  'DISCOUNT',
+  'OTHER',
+] as const;
+
+export type SalesChargeType = (typeof SALES_CHARGE_TYPES)[number];
+
+export const SALES_CHARGE_TYPE_LABELS = {
+  DUTY: 'Duty',
+  PACKING: 'Packing',
+  SHIPPING: 'Shipping',
+  CUSTOMIZATION: 'Customization',
+  DISCOUNT: 'Discount',
+  OTHER: 'Other',
+} as const satisfies Record<SalesChargeType, string>;
+
+/** The only charge type that reduces the payable amount. */
+export const DISCOUNT_CHARGE_TYPE: SalesChargeType = 'DISCOUNT';
+
+/** How many charge lines one order may carry. Generous; a guard, not a rule. */
+export const SALES_CHARGE_MAX = 20;
+
+/** Free-text note beside a charge, e.g. "Air freight, Mumbai–Dubai". */
+export const SALES_CHARGE_LABEL_MAX_LENGTH = 120;

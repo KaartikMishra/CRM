@@ -8,11 +8,14 @@ import {
   CUSTOMER_TYPES,
   DIMENSION_UNITS,
   ENQUIRY_SOURCES,
+  COUNTRIES,
+  DEFAULT_COUNTRY,
   INDIA_STATES,
   MAX_PRODUCTS_PER_ENQUIRY,
   WEIGHT_UNITS,
   createEnquirySchema,
   customerAddressSchema,
+  customerCompanySchema,
   customerEmailSchema,
   customerGstSchema,
   customerPhoneSchema,
@@ -139,6 +142,10 @@ export function CreateEnquiryForm({
   const [newCustomerAddress, setNewCustomerAddress] = useState('');
   /** Empty means "not recorded", and is what makes the Select show its placeholder. */
   const [newCustomerState, setNewCustomerState] = useState('');
+  /** Blank means the customer bills under their own name. */
+  const [newCustomerCompany, setNewCustomerCompany] = useState('');
+  /** Nearly every customer is domestic, so the form starts on India. */
+  const [newCustomerCountry, setNewCustomerCountry] = useState<string>(DEFAULT_COUNTRY);
   const [newCustomerGst, setNewCustomerGst] = useState('');
   const [creatingCustomer, setCreatingCustomer] = useState(false);
   const [customerErrors, setCustomerErrors] = useState<Record<string, string>>({});
@@ -154,13 +161,17 @@ export function CreateEnquiryForm({
   const addressOk =
     newCustomerAddress.trim() === '' ||
     customerAddressSchema.safeParse(newCustomerAddress).success;
-  // The dropdown can only offer the 28 names the schema accepts, so this holds
+  // The dropdown can only offer names the schema accepts, so this holds
   // by construction; it is checked anyway so the rule lives in one place and a
   // future change to the options cannot quietly diverge from the server.
   const stateOk = newCustomerState === '' || customerStateSchema.safeParse(newCustomerState).success;
+  const companyOk =
+    newCustomerCompany.trim() === '' ||
+    customerCompanySchema.safeParse(newCustomerCompany).success;
   const gstOk =
     newCustomerGst.trim() === '' || customerGstSchema.safeParse(newCustomerGst).success;
-  const customerReady = nameOk && phoneOk && emailOk && addressOk && stateOk && gstOk;
+  const customerReady =
+    nameOk && companyOk && phoneOk && emailOk && addressOk && stateOk && gstOk;
 
   const atCap = products.length >= MAX_PRODUCTS_PER_ENQUIRY;
 
@@ -273,7 +284,9 @@ export function CreateEnquiryForm({
         // an empty string would fail its format check rather than mean "none".
         ...(newCustomerEmail.trim() ? { email: newCustomerEmail.trim() } : {}),
         ...(newCustomerAddress.trim() ? { address: newCustomerAddress.trim() } : {}),
+        ...(newCustomerCompany.trim() ? { companyName: newCustomerCompany.trim() } : {}),
         ...(newCustomerState ? { state: newCustomerState } : {}),
+        ...(newCustomerCountry ? { country: newCustomerCountry } : {}),
         // Sent as typed; the shared schema trims and uppercases it server-side,
         // so the canonical casing is decided in exactly one place.
         ...(newCustomerGst.trim() ? { gstNumber: newCustomerGst.trim() } : {}),
@@ -611,6 +624,19 @@ export function CreateEnquiryForm({
               </Select>
             </div>
 
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="newCustomerCompany">Company Name</Label>
+              <Input
+                id="newCustomerCompany"
+                value={newCustomerCompany}
+                onChange={(e) => setNewCustomerCompany(e.target.value)}
+                placeholder="Optional — who the invoice is made out to"
+              />
+              {customerErrors.companyName && (
+                <p className="text-xs text-critical">{customerErrors.companyName}</p>
+              )}
+            </div>
+
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="newCustomerPhone">Phone *</Label>
@@ -642,9 +668,9 @@ export function CreateEnquiryForm({
               </div>
             </div>
 
-            {/* Both optional: the state is needed for GST-relevant billing, and
-                a retail customer has no GSTIN at all. */}
-            <div className="grid gap-4 sm:grid-cols-2">
+            {/* All three optional. The State decides whether a sale is taxed
+                CGST + SGST or IGST, and a retail customer has no GSTIN. */}
+            <div className="grid gap-4 sm:grid-cols-3">
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="newCustomerState">State</Label>
                 <Select value={newCustomerState} onValueChange={setNewCustomerState}>
@@ -661,6 +687,25 @@ export function CreateEnquiryForm({
                 </Select>
                 {customerErrors.state && (
                   <p className="text-xs text-critical">{customerErrors.state}</p>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="newCustomerCountry">Country</Label>
+                <Select value={newCustomerCountry} onValueChange={setNewCustomerCountry}>
+                  <SelectTrigger id="newCustomerCountry">
+                    <SelectValue placeholder="Select country" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {COUNTRIES.map((c) => (
+                      <SelectItem key={c} value={c}>
+                        {c}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {customerErrors.country && (
+                  <p className="text-xs text-critical">{customerErrors.country}</p>
                 )}
               </div>
 

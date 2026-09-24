@@ -16,6 +16,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { EmptyState } from '@/components/common/empty-state';
+import { GST_MODE_LABELS } from '@rs/shared';
 import { formatCurrency, formatDateTime, label } from '@/lib/format';
 import {
   approveChangeRequestAction,
@@ -148,8 +149,32 @@ export function SalesItemList({
                       <span className="block font-medium text-ink">{item.productName}</span>
                       <span className="mt-0.5 block text-xs text-muted">
                         Line {item.lineNo}
+                        {item.hsnCode && ` · HSN ${item.hsnCode}`}
                         {locked && ' · change awaiting approval'}
                       </span>
+
+                      {/*
+                        This line's own tax position. Both halves matter and
+                        neither is an order-level fact: the slab says how much,
+                        the mode says whether the price above already contains
+                        it. Two lines of one order can differ on both.
+                      */}
+                      {item.gstRate && item.gstRate !== 'NONE' ? (
+                        <span className="mt-1 flex flex-wrap items-center gap-1.5">
+                          <Badge variant="outline">GST {item.gstRate}%</Badge>
+                          <Badge variant={item.gstMode === 'INCLUSIVE' ? 'accent' : 'neutral'}>
+                            {GST_MODE_LABELS[item.gstMode]}
+                          </Badge>
+                          <span className="font-mono text-xs text-muted tabular">
+                            taxable {formatCurrency(item.taxableAmount, currency)} · GST{' '}
+                            {formatCurrency(item.gstAmount, currency)}
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="mt-1 block text-xs text-muted">
+                          {item.gstRate === 'NONE' ? 'No GST on this line' : 'GST not recorded'}
+                        </span>
+                      )}
                     </TableCell>
 
                     <TableCell className="text-right tabular">{item.quantity}</TableCell>

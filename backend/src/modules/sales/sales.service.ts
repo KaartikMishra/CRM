@@ -20,6 +20,7 @@ import {
   type SalesOrderDetail,
   type SalesOrderListQuery,
   type SalesOrderSummary,
+  type SetSalesChargesInput,
   type UpdateSalesOrderInput,
 } from '@rs/shared';
 import { databaseNow, prisma } from '../../config/database.js';
@@ -163,7 +164,19 @@ export async function createSalesOrder(
       data: {
         orderId: input.orderId,
         customerId: input.customerId,
+
         paidAmount: new Prisma.Decimal(input.paidAmount),
+        ...(input.charges.length > 0
+          ? {
+              charges: {
+                create: input.charges.map((charge) => ({
+                  type: charge.type,
+                  label: charge.label ?? null,
+                  amount: new Prisma.Decimal(charge.amount),
+                })),
+              },
+            }
+          : {}),
         orderDate: input.orderDate,
         toBeDispatchedBy: input.toBeDispatchedBy,
         createdById: actor.id,
@@ -175,11 +188,14 @@ export async function createSalesOrder(
             productImageId: item.productImageAssetId ?? null,
             quantity: item.quantity,
             price: new Prisma.Decimal(item.price),
-            // Recorded as chosen, and nothing is derived from either. An
-            // omitted field stays null rather than acquiring a default: "not
-            // recorded" is a different statement from an explicit 'NONE', and
-            // the line total is still quantity × price alone.
+            // An omitted field stays null rather than acquiring a default:
+            // "not recorded" is a different statement from an explicit
+            // 'NONE'. The line total is still quantity × price; the rate is
+            // what the order's GST is worked out from, one slab at a time.
             hsnCode: item.hsnCode ?? null,
+            // How THIS line's price is read, independent of every other line:
+            // one order may carry 5% exclusive beside 18% inclusive.
+            gstMode: item.gstMode,
             gstRate: item.gstRate ?? null,
             status: 'ACTIVE' as const,
             proposedById: actor.id,
@@ -269,8 +285,62 @@ export async function updateSalesOrder(
       data: {
         ...(input.orderDate !== undefined ? { orderDate } : {}),
         ...(input.toBeDispatchedBy !== undefined ? { toBeDispatchedBy } : {}),
+
       },
     });
+
+    return at;
+  }, TX_OPTIONS);
+
+  return detailAfterCommit(id, now);
+}
+
+// ---------------------------------------------------------------------------
+//  Charges and adjustments
+// ---------------------------------------------------------------------------
+
+/**
+ * Replaces the whole set of order-level charges.
+ *
+ * Sent as a set rather than added one at a time, which is how the editor
+ * works: the form holds the list and saves it. A discount that would take the
+ * payable below what the customer has already paid is refused here with a
+ * readable message, and refused again by the money guard if it somehow got
+ * past — the same belt-and-braces the payment path uses.
+ */
+export async function setSalesCharges(
+  actor: AuthenticatedUser,
+  id: string,
+  input: SetSalesChargesInput,
+): Promise<SalesOrderDetail> {
+  const now = await prisma.$transaction(async (tx) => {
+    const at = await databaseNow(tx);
+
+    await repo.lockOrder(tx, id);
+
+    const order = await repo.findForPolicy(id, tx);
+    if (!order) throw notFound();
+    assertNotClosed(order.status);
+    if (!canEditOrder({ id: actor.id, role: actor.role }, order)) throw forbidden();
+
+    await repo.replaceCharges(tx, id, input.charges);
+
+    // Recomputed after the write, so it reflects the set just stored.
+    const payable = await repo.activeTotal(tx, id);
+    const paid = order.paidAmount.toString();
+
+    if (compareAmount(payable, '0.00') < 0) {
+      throw AppError.validation('A discount cannot take the order below zero.', [
+        { path: 'charges', message: 'The discount is larger than the order' },
+      ]);
+    }
+
+    if (compareAmount(paid, payable) > 0) {
+      throw AppError.conflict(
+        'PAYMENT_EXCEEDS_TOTAL',
+        `These charges would take the order below the ${paid} already paid.`,
+      );
+    }
 
     return at;
   }, TX_OPTIONS);

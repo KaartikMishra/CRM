@@ -194,30 +194,48 @@ describe('GST rate', () => {
 //  Money is untouched
 // ---------------------------------------------------------------------------
 
-describe('neither field affects any total', () => {
+/*
+  These used to assert that GST reached no total at all — the rule when the
+  field was introduced, and deliberately no longer the rule. GST and
+  order-level charges now form part of what the customer owes, and the money
+  guard trigger enforces the same definition in the database.
+
+  What did NOT change is the line: a line total is still quantity × price and
+  carries no tax term. The tax is an order-level figure computed per slab,
+  which is how it appears on an invoice.
+*/
+describe('what GST does and does not touch', () => {
   it('leaves the line total at quantity × price with GST at 28%', async () => {
     const res = await createWithLine({ quantity: 12, price: '1250.50', gstRate: '28' });
     expect(res.status).toBe(201);
     const item = res.body.data!.order.items[0]!;
-    // 12 × 1250.50 = 15006.00 — no tax term.
+    // 12 × 1250.50 = 15006.00 — still no tax term on the line itself.
     expect(item.lineTotal).toBe('15006.00');
   });
 
-  it('gives the same order total whatever the GST rate', async () => {
-    const totals = new Set<string>();
+  it('moves the order total with the rate, and by the right amount', async () => {
+    // 4 × 250.00 = 1000.00 of goods, prices exclusive of tax.
+    const expected: Record<string, string> = {
+      NONE: '1000.00',
+      '0': '1000.00',
+      '5': '1050.00',
+      '12': '1120.00',
+      '18': '1180.00',
+      '28': '1280.00',
+    };
 
     for (const rate of GST_RATES) {
       const res = await createWithLine({ quantity: 4, price: '250.00', gstRate: rate });
       expect(res.status).toBe(201);
-      totals.add(res.body.data!.order.money.total);
-    }
+      const money = res.body.data!.order.money;
 
-    // One distinct total across all six rates.
-    expect(totals.size).toBe(1);
-    expect([...totals][0]).toBe('1000.00');
+      expect(money.total, `rate ${rate}`).toBe(expected[rate]);
+      // The goods are the same every time; only the tax on them differs.
+      expect(money.taxableSubtotal, `rate ${rate}`).toBe('1000.00');
+    }
   });
 
-  it('leaves pending and paid alone', async () => {
+  it('counts the tax in pending, because the customer owes it', async () => {
     const res = await createWithLine({
       quantity: 2,
       price: '500.00',
@@ -225,13 +243,27 @@ describe('neither field affects any total', () => {
       hsnCode: '7418',
     });
     expect(res.status).toBe(201);
+
     const money = res.body.data!.order.money;
-    expect(money.total).toBe('1000.00');
+    expect(money.taxableSubtotal).toBe('1000.00');
+    expect(money.taxTotal).toBe('180.00');
+    expect(money.total).toBe('1180.00');
     expect(money.paid).toBe('0.00');
-    expect(money.pending).toBe('1000.00');
+    // The whole invoice is outstanding, tax included.
+    expect(money.pending).toBe('1180.00');
+  });
+
+  it('still comes to nothing for NONE and 0, which stay different answers', async () => {
+    const none = await createWithLine({ quantity: 4, price: '250.00', gstRate: 'NONE' });
+    const zero = await createWithLine({ quantity: 4, price: '250.00', gstRate: '0' });
+
+    expect(none.body.data!.order.money.total).toBe('1000.00');
+    expect(zero.body.data!.order.money.total).toBe('1000.00');
+    // Same money, different statement on the document.
+    expect(none.body.data!.order.items[0]!.gstRate).toBe('NONE');
+    expect(zero.body.data!.order.items[0]!.gstRate).toBe('0');
   });
 });
-
 // ---------------------------------------------------------------------------
 //  Persistence, and what did not change
 // ---------------------------------------------------------------------------

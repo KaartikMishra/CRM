@@ -5,6 +5,7 @@ import type {
   CreateChangeRequestInput,
   CreateSalesOrderInput,
   SalesOrderDetail,
+  SetSalesChargesInput,
   UpdateSalesOrderInput,
 } from '@rs/shared';
 import { apiFetch } from '@/lib/api-server';
@@ -59,6 +60,25 @@ export async function updateSalesOrderAction(
   return call(
     `/api/sales/${orderId}`,
     { method: 'PATCH', body: JSON.stringify(input) },
+    `/sales/${orderId}`,
+  );
+}
+
+/**
+ * Replaces the order's charges with the set that was sent.
+ *
+ * A whole set rather than one row at a time, matching the endpoint: the
+ * editor holds the list and saves it, and there is no identity on these rows
+ * anybody refers to. The backend refuses a discount larger than the order and
+ * any set that would drop the payable below what has already been paid.
+ */
+export async function setSalesChargesAction(
+  orderId: string,
+  charges: SetSalesChargesInput['charges'],
+): Promise<ActionResult> {
+  return call(
+    `/api/sales/${orderId}/charges`,
+    { method: 'PUT', body: JSON.stringify({ charges }) },
     `/sales/${orderId}`,
   );
 }

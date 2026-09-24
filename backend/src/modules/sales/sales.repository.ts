@@ -10,23 +10,31 @@
  *
  * This file is also the single place an order's money comes into existence.
  * `total` and `pending` are not columns; `toMoney` below is the one definition
- * of each, so there is no second source of truth to drift. It sums ACTIVE lines
- * only — which is the entire mechanism by which a line awaiting approval cannot
- * move an order's money.
+ * of each, so there is no second source of truth to drift. `total` is what the
+ * customer owes — taxable goods, plus GST, plus order-level charges, less any
+ * discount — and it counts ACTIVE lines only, which is the entire mechanism by
+ * which a line awaiting approval cannot move an order's money.
  */
 
 import { Prisma } from '@rs/database';
 import {
   addAmount,
   compareAmount,
+  computeLineTax,
+  computeSalesTotals,
   lineTotal,
   normaliseAmount,
   subtractAmount,
+  taxSplitFor,
   type CustomerContactRef,
   type CustomerRef,
+  type GstMode,
   type GstRate,
   type MediaRef,
+  type SalesChargeType,
+  type SalesChargeView,
   type SalesMoneyView,
+  type TaxableLine,
   type SalesOrderDetail,
   type SalesOrderItemView,
   type SalesOrderListQuery,
@@ -35,6 +43,7 @@ import {
   type UserRef,
 } from '@rs/shared';
 import { prisma } from '../../config/database.js';
+import { env } from '../../config/env.js';
 import { isOverdue } from './sales-efficiency.js';
 
 // ---------------------------------------------------------------------------
@@ -43,13 +52,18 @@ import { isOverdue } from './sales-efficiency.js';
 
 const userRef = { id: true, name: true, employeeId: true, role: true } as const;
 const customerRef = { id: true, name: true, type: true } as const;
+/** A list row shows no contact details, but its tax heads still depend on
+    where the customer is, so the State travels with the summary too. */
+const customerSummaryRef = { ...customerRef, state: true } as const;
 /** Detail only — a list row has no use for contact details. */
 const customerContactRef = {
   ...customerRef,
+  companyName: true,
   phone: true,
   email: true,
   address: true,
   state: true,
+  country: true,
   gstNumber: true,
 } as const;
 const mediaRef = { id: true, secureUrl: true, publicId: true } as const;
@@ -67,6 +81,7 @@ const itemSelect = {
    */
   hsnCode: true,
   gstRate: true,
+  gstMode: true,
   status: true,
   approvedAt: true,
   createdAt: true,
@@ -84,9 +99,19 @@ const summaryItemSelect = {
   productName: true,
   quantity: true,
   price: true,
+  gstRate: true,
+  gstMode: true,
   status: true,
   productImage: { select: mediaRef },
 } satisfies Prisma.SalesOrderItemSelect;
+
+/** Charges are order level, so both projections carry the same shape. */
+const chargeSelect = {
+  id: true,
+  type: true,
+  label: true,
+  amount: true,
+} satisfies Prisma.SalesOrderChargeSelect;
 
 const summarySelect = {
   id: true,
@@ -98,8 +123,9 @@ const summarySelect = {
   dispatchedAt: true,
   paidAmount: true,
   updatedAt: true,
-  customer: { select: customerRef },
+  customer: { select: customerSummaryRef },
   items: { select: summaryItemSelect, orderBy: { lineNo: 'asc' } },
+  charges: { select: chargeSelect, orderBy: { createdAt: 'asc' } },
 } satisfies Prisma.SalesOrderSelect;
 
 const changeRequestSelect = {
@@ -183,6 +209,7 @@ const detailSelect = {
   createdAt: true,
   updatedAt: true,
   customer: { select: customerContactRef },
+  charges: { select: chargeSelect, orderBy: { createdAt: 'asc' } },
   createdBy: { select: userRef },
   closedBy: { select: userRef },
   items: { select: itemSelect, orderBy: { lineNo: 'asc' } },
@@ -209,34 +236,116 @@ const totalOfLine = (item: { quantity: number; price: Prisma.Decimal }): string 
 /**
  * The one definition of an order's money.
  *
- * `total` sums the ACTIVE lines and nothing else, so a line awaiting approval
- * contributes nothing until someone accepts it. Arithmetic goes through the
- * exact BigInt-paise helpers in @rs/shared — nothing here is ever a float.
+ * `total` is what the customer owes: the taxable goods, plus GST, plus
+ * order-level charges, less any discount. It used to be the bare sum of the
+ * ACTIVE line totals, and it is deliberately no longer — a customer paying
+ * the figure printed on their own invoice has to be able to pay it.
+ *
+ * A line awaiting approval still contributes nothing until somebody accepts
+ * it, exactly as before.
+ *
+ * The arithmetic itself is not here. It lives in computeSalesTotals in
+ * @rs/shared, which the create form previews with, the create schema
+ * validates with, and the money guard trigger mirrors in SQL. Four readers,
+ * one definition.
  */
 export function toMoney(
-  paidAmount: Prisma.Decimal,
-  items: { quantity: number; price: Prisma.Decimal; status: 'ACTIVE' | 'PENDING_APPROVAL' }[],
+  order: { paidAmount: Prisma.Decimal; customer: { state: string | null } },
+  items: {
+    quantity: number;
+    price: Prisma.Decimal;
+    gstRate: string | null;
+    gstMode: string;
+    status: 'ACTIVE' | 'PENDING_APPROVAL';
+  }[],
+  charges: { type: string; amount: Prisma.Decimal }[],
 ): SalesMoneyView {
   const active = items.filter((item) => item.status === 'ACTIVE');
   const awaiting = items.filter((item) => item.status === 'PENDING_APPROVAL');
 
-  const total = active.reduce((running, item) => addAmount(running, totalOfLine(item)), '0.00');
-  const paid = normaliseAmount(paidAmount.toString());
+  // The split is order level — where goods are going does not change from one
+  // line of a document to the next. The MODE does, and travels on each line.
+  const split = taxSplitFor(env.SELLER_STATE ?? null, order.customer.state);
+
+  const asLine = (item: (typeof items)[number]): TaxableLine => ({
+    quantity: item.quantity,
+    price: normaliseAmount(item.price.toString()),
+    gstRate: (item.gstRate as GstRate | null) ?? null,
+    // Narrowed from the column's plain String: the shared z.enum is what
+    // guarantees only permitted values were ever written.
+    gstMode: item.gstMode as GstMode,
+  });
+
+  const totals = computeSalesTotals({
+    split,
+    items: active.map(asLine),
+    charges: charges.map((c) => ({
+      type: c.type as SalesChargeType,
+      amount: normaliseAmount(c.amount.toString()),
+    })),
+  });
+
+  /*
+    What the waiting lines would add once approved — the goods and their tax,
+    but no charges: a charge belongs to the order, not to a line, so approving
+    a line cannot bring one with it.
+  */
+  const awaitingTotals = computeSalesTotals({
+    split,
+    items: awaiting.map(asLine),
+  });
+
+  const paid = normaliseAmount(order.paidAmount.toString());
 
   return {
-    total,
+    total: totals.payable,
+    taxableSubtotal: totals.taxableSubtotal,
+    lineSubtotal: totals.lineSubtotal,
+    taxSplit: split,
+    taxTotal: totals.taxTotal,
+    cgstTotal: totals.cgstTotal,
+    sgstTotal: totals.sgstTotal,
+    igstTotal: totals.igstTotal,
+    taxByRate: totals.byRate,
+    chargesTotal: totals.chargesTotal,
+    discountTotal: totals.discountTotal,
     paid,
-    pending: subtractAmount(total, paid),
-    fullyPaid: compareAmount(paid, total) >= 0,
+    pending: subtractAmount(totals.payable, paid),
+    fullyPaid: compareAmount(paid, totals.payable) >= 0,
     currency: 'INR',
     activeItemCount: active.length,
     pendingApprovalCount: awaiting.length,
-    pendingApprovalTotal: awaiting.reduce(
-      (running, item) => addAmount(running, totalOfLine(item)),
-      '0.00',
-    ),
+    pendingApprovalTotal: awaitingTotals.payable,
   };
 }
+
+/** One charge, as the API reports it. */
+function toCharge(row: {
+  id: string;
+  type: string;
+  label: string | null;
+  amount: Prisma.Decimal;
+}): SalesChargeView {
+  return {
+    id: row.id,
+    type: row.type as SalesChargeType,
+    label: row.label,
+    amount: normaliseAmount(row.amount.toString()),
+  };
+}
+/** One line's own taxable value and GST, read the way that line says to. */
+const lineTax = (row: {
+  quantity: number;
+  price: Prisma.Decimal;
+  gstRate: string | null;
+  gstMode: string;
+}) =>
+  computeLineTax({
+    quantity: row.quantity,
+    price: normaliseAmount(row.price.toString()),
+    gstRate: (row.gstRate as GstRate | null) ?? null,
+    gstMode: row.gstMode as GstMode,
+  });
 
 function toItem(row: DetailRow['items'][number]): SalesOrderItemView {
   return {
@@ -252,6 +361,15 @@ function toItem(row: DetailRow['items'][number]): SalesOrderItemView {
     // Narrowed from the column's plain String: the shared z.enum is what
     // guarantees only the six permitted values were ever written.
     gstRate: (row.gstRate as GstRate | null) ?? null,
+    gstMode: row.gstMode as GstMode,
+    /*
+      This line's own tax, from the same shared function the order total is
+      built out of. Computed here rather than threaded down from the order so
+      that a line always reports the figures it actually contributed — and
+      computed by calling that function, never by restating it.
+    */
+    taxableAmount: lineTax(row).taxable,
+    gstAmount: lineTax(row).tax,
     status: row.status,
     proposedBy: row.proposedBy as UserRef,
     approvedBy: (row.approvedBy as UserRef | null) ?? null,
@@ -271,7 +389,7 @@ function toSummary(row: SummaryRow, now: Date): SalesOrderSummary {
     customer: row.customer as CustomerRef,
     leadProductName: lead ? `${lead.productName}${extra}` : '—',
     thumbnail: (active.find((i) => i.productImage)?.productImage as MediaRef | null) ?? null,
-    money: toMoney(row.paidAmount, row.items),
+    money: toMoney(row, row.items, row.charges),
     status: row.status,
     efficiency: row.efficiency,
     orderDate: iso(row.orderDate),
@@ -288,8 +406,9 @@ function toDetail(row: DetailRow, now: Date): SalesOrderDetail {
     orderId: row.orderId,
     customer: row.customer as CustomerContactRef,
     items: row.items.map(toItem),
+    charges: row.charges.map(toCharge),
     changeRequests: row.changeRequests.map(toChangeRequest),
-    money: toMoney(row.paidAmount, row.items),
+    money: toMoney(row, row.items, row.charges),
     status: row.status,
     efficiency: row.efficiency,
     orderDate: iso(row.orderDate),
@@ -342,17 +461,82 @@ export function findForPolicy(
  * figure from the request, so a line added or approved concurrently is always
  * accounted for.
  */
+/**
+ * What the customer owes, recomputed inside the caller's lock.
+ *
+ * This is the ceiling a payment is measured against and the figure an order
+ * must have paid in full before it can close. It is the payable, not the bare
+ * line sum: GST and order-level charges are part of what was invoiced, and the
+ * money guard trigger defines it the same way. If the two ever disagreed, a
+ * payment the service accepted would be thrown out at COMMIT.
+ *
+ * Reads through the transaction client so it sees this transaction's own
+ * uncommitted writes — a charge added moments earlier counts immediately.
+ */
 export async function activeTotal(
   tx: Prisma.TransactionClient,
   orderId: string,
 ): Promise<string> {
-  const rows = await tx.salesOrderItem.findMany({
-    where: { orderId, status: 'ACTIVE' },
-    select: { quantity: true, price: true },
+  const order = await tx.salesOrder.findUnique({
+    where: { id: orderId },
+    select: { customer: { select: { state: true } } },
   });
-  return rows.reduce((running, item) => addAmount(running, totalOfLine(item)), '0.00');
+  if (!order) return '0.00';
+
+  const [items, charges] = await Promise.all([
+    tx.salesOrderItem.findMany({
+      where: { orderId, status: 'ACTIVE' },
+      select: { quantity: true, price: true, gstRate: true, gstMode: true },
+    }),
+    tx.salesOrderCharge.findMany({
+      where: { orderId },
+      select: { type: true, amount: true },
+    }),
+  ]);
+
+  const { payable } = computeSalesTotals({
+    split: taxSplitFor(env.SELLER_STATE ?? null, order.customer.state),
+    items: items.map((item) => ({
+      quantity: item.quantity,
+      price: normaliseAmount(item.price.toString()),
+      gstRate: (item.gstRate as GstRate | null) ?? null,
+      gstMode: item.gstMode as GstMode,
+    })),
+    charges: charges.map((c) => ({
+      type: c.type as SalesChargeType,
+      amount: normaliseAmount(c.amount.toString()),
+    })),
+  });
+
+  return payable;
 }
 
+/**
+ * Replaces an order's charges wholesale.
+ *
+ * Delete-then-insert rather than a diff: the editor sends the set it wants,
+ * these rows carry no identity anybody refers to, and reconciling them
+ * individually would buy nothing but a chance to get it wrong. The caller's
+ * row lock serialises it, and the deferred money guard checks the result once
+ * at COMMIT rather than midway through.
+ */
+export async function replaceCharges(
+  tx: Prisma.TransactionClient,
+  orderId: string,
+  charges: readonly { type: string; label?: string | undefined; amount: string }[],
+): Promise<void> {
+  await tx.salesOrderCharge.deleteMany({ where: { orderId } });
+  if (charges.length === 0) return;
+
+  await tx.salesOrderCharge.createMany({
+    data: charges.map((charge) => ({
+      orderId,
+      type: charge.type,
+      label: charge.label ?? null,
+      amount: new Prisma.Decimal(charge.amount),
+    })),
+  });
+}
 /** The next free line number on an order. Serialised by the caller's row lock. */
 export async function nextLineNo(
   tx: Prisma.TransactionClient,

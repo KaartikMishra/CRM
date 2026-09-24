@@ -19,6 +19,20 @@ loadDotenv({ path: resolve(here, '../../../.env') });
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+
+  /**
+   * The State or Union Territory the seller is registered in.
+   *
+   * Decides the heads a sale's GST posts to: the same State as the customer
+   * means CGST + SGST at half the rate each, a different one means IGST at
+   * the whole rate. The tax is identical either way — only the names on the
+   * invoice change, and an invoice that names them wrongly is the problem.
+   *
+   * Optional, and unset means CGST + SGST for everybody. That is the common
+   * case for a domestic seller, and the alternative — guessing IGST because
+   * we do not know — would overstate a head on a document somebody files.
+   */
+  SELLER_STATE: z.string().trim().min(1).optional(),
   PORT: z.coerce.number().int().min(1).max(65535).default(4000),
 
   // --- database (Phase 3B) ------------------------------------------------

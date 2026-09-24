@@ -125,19 +125,33 @@ enum CustomerType {
 model Customer {
   id        String       @id @default(cuid())
   name      String
+  /// The trading or registered name, where the customer bills under one.
+  ///
+  /// Separate from `name` rather than folded into it: `name` is who is dealt
+  /// with and appears on every list row, while this is who the invoice is made
+  /// out to. A retail buyer has the first and not the second, so it is
+  /// optional and every existing row predates it.
+  companyName String?
   type      CustomerType
   phone     String?
   email     String?
   /// Where to deliver or invoice. Optional and free-text: an address is written
   /// the way the customer gives it, and every existing row predates this field.
   address   String?
-  /// One of the 28 States of India, stored as the official name.
+  /// One of the States or Union Territories of India, by official name.
   ///
   /// Plain text rather than a Postgres enum: the list is a fixed reference list
   /// that @rs/shared already owns (INDIA_STATES) and validates at the edge, and
   /// an enum would only make correcting that list expensive — a value cannot be
   /// dropped from a Postgres enum. Optional; every existing row predates it.
   state     String?
+  /// One of COUNTRIES in @rs/shared, stored as the country's common name.
+  ///
+  /// Plain text for the same reason as `state`: a fixed reference list that
+  /// @rs/shared owns and validates at the edge. Optional, because every
+  /// existing row predates it — a blank one is read as India by nothing, and
+  /// is simply blank.
+  country   String?
   /// The customer's GSTIN, where they are registered.
   ///
   /// Optional by business rule — a retail customer has none — and stored
@@ -682,6 +696,7 @@ model SalesOrder {
   createdBy User             @relation("SalesOrderCreatedBy", fields: [createdById], references: [id])
   closedBy  User?            @relation("SalesOrderClosedBy", fields: [closedById], references: [id])
   items          SalesOrderItem[]
+  charges        SalesOrderCharge[]
   changeRequests SalesItemChangeRequest[]
 
   @@index([status, toBeDispatchedBy])
@@ -776,6 +791,25 @@ model SalesOrderItem {
    */
   gstRate String?
 
+  /**
+   * How THIS line's price is to be read: 'EXCLUSIVE' or 'INCLUSIVE', one of
+   * GST_MODES in @rs/shared.
+   *
+   * Line level, not order level, and that is the point. One order routinely
+   * carries goods bought on different terms — a product quoted at 5% plus tax
+   * beside one quoted at 18% all-in — and they are still one document. An
+   * order-level setting forced a quotation to be re-typed to say what it
+   * already said.
+   *
+   * A plain String rather than a Prisma enum, following gstRate and state.
+   * NOT NULL with a default, unlike gstRate: there is no honest 'not recorded'
+   * answer, because no total can be worked out until a price is read one way
+   * or the other. Rows that predate this column were backfilled from the
+   * order-level setting they were created under, so no existing order's
+   * arithmetic moved.
+   */
+  gstMode String @default("EXCLUSIVE")
+
   status SalesItemStatus @default(ACTIVE)
 
   /// Who put this line forward. Always set, including for lines created with
@@ -799,6 +833,37 @@ model SalesOrderItem {
   @@unique([orderId, lineNo])
   @@index([orderId, status])
   @@index([rsProductId])
+}
+
+/// An order-level charge or adjustment: duty, packing, shipping, a discount.
+///
+/// A table rather than a column per kind, and deliberately. These are not six
+/// fixed fields — an order can carry two different shipping legs, or none at
+/// all, and the list of kinds is policy that will change. Six nullable columns
+/// would answer 'how many shipping charges' with 'one, always', which is the
+/// wrong shape for the question.
+///
+/// Each row is a positive amount. Whether it adds or subtracts follows from
+/// `type` alone: DISCOUNT subtracts and every other kind adds. Storing a
+/// negative amount for a discount was the alternative, and it makes every
+/// report that sums this table depend on remembering the convention.
+model SalesOrderCharge {
+  id      String @id @default(cuid())
+  orderId String
+
+  /// One of SALES_CHARGE_TYPES in @rs/shared.
+  type   String
+  /// What this charge was for, in the seller's words. Optional.
+  label  String?
+  /// Always positive. The sign is carried by `type`, never by this column.
+  amount Decimal @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  order SalesOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
 }
 
 /// §45 — generic trail for everything without an enquiry parent: logins, user

@@ -187,11 +187,29 @@ describe('customers', () => {
       expect(res.body.data!.customer.gstNumber).toBe('27AAPFU0939F1ZV');
     });
 
-    it('rejects a state outside the 28 States of India', async () => {
-      // A Union Territory is the honest case here: real place, deliberately not
-      // on the list, so it proves the list is closed rather than merely typo-proof.
-      const ut = await create({ ...base, name: `${TEST_PREFIX}-bad-state`, state: 'Delhi' });
-      expect(ut.status).toBe(422);
+    it('accepts a Union Territory, which is a GST jurisdiction like any State', async () => {
+      // Delhi used to be this suite's example of a real place deliberately off
+      // the list. It is on it now: a GSTIN is issued against a Union Territory
+      // exactly as against a State, so a customer there has to be recordable.
+      const ut = await create({ ...base, name: `${TEST_PREFIX}-ut`, state: 'Delhi' });
+      expect(ut.status).toBe(201);
+      created.customers.push(ut.body.data!.customer.id);
+      expect(ut.body.data!.customer.state).toBe('Delhi');
+    });
+
+    it('rejects a state outside the States and Union Territories of India', async () => {
+      /*
+        Pondicherry is the honest case now: a real place, and deliberately not
+        the name on the list — the official one is Puducherry. It proves the
+        list is closed to near-misses rather than merely typo-proof, which is
+        the property Delhi used to demonstrate.
+      */
+      const old = await create({
+        ...base,
+        name: `${TEST_PREFIX}-bad-state`,
+        state: 'Pondicherry',
+      });
+      expect(old.status).toBe(422);
 
       const casing = await create({
         ...base,
@@ -199,6 +217,15 @@ describe('customers', () => {
         state: 'maharashtra',
       });
       expect(casing.status).toBe(422);
+
+      // And the plainly invented case, so the rule is pinned at both ends:
+      // a near-miss and a name that was never a place at all.
+      const invented = await create({
+        ...base,
+        name: `${TEST_PREFIX}-bad-state`,
+        state: 'NotARealState',
+      });
+      expect(invented.status).toBe(422);
     });
 
     it('rejects a malformed GST number', async () => {

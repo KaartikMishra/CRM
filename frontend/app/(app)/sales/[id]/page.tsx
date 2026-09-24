@@ -15,6 +15,8 @@ import { fetchSalesOrder } from '@/lib/sales-api';
 import { can } from '@/lib/current-user';
 import { requireModule } from '@/lib/require-module';
 import { NoModuleAccess } from '@/components/common/no-module-access';
+import { EditChargesDialog } from '@/components/sales/edit-charges-dialog';
+import { MoneyBreakdown } from '@/components/sales/money-breakdown';
 import { formatCurrency, formatDate, formatDateTime, label } from '@/lib/format';
 
 type Params = Promise<{ id: string }>;
@@ -119,10 +121,17 @@ export default async function SalesOrderDetailPage({ params }: { params: Params 
       ),
     },
     {
+      label: 'Country',
+      value: order.customer.country ?? <span className="text-faint">Not recorded</span>,
+    },
+    {
       label: 'Products',
       value: `${order.money.activeItemCount} ${order.money.activeItemCount === 1 ? 'line' : 'lines'}`,
     },
-    { label: 'Order total', value: formatCurrency(order.money.total, order.money.currency) },
+    {
+      label: 'Total payable',
+      value: formatCurrency(order.money.total, order.money.currency),
+    },
     { label: 'Order date', value: formatDate(order.orderDate) },
     { label: 'To be dispatched by', value: formatDate(order.toBeDispatchedBy) },
     {
@@ -209,7 +218,7 @@ export default async function SalesOrderDetailPage({ params }: { params: Params 
       </Card>
 
       {/* ---------------- Products + money ---------------- */}
-      <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
+      <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
         <section className="min-w-0">
           <SalesItemList
             orderId={order.id}
@@ -222,10 +231,55 @@ export default async function SalesOrderDetailPage({ params }: { params: Params 
           />
         </section>
 
-        <aside className="min-w-0">
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-muted">
-            Payment
-          </h2>
+        <aside className="flex min-w-0 flex-col gap-6">
+          <div>
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-muted">
+              Order breakdown
+            </h2>
+            <Card>
+              <CardContent className="p-5">
+                {/*
+                  Every figure comes from the API, which derived them with the
+                  same function the create form previews with and the money
+                  guard trigger mirrors in SQL. Nothing is recomputed here.
+                */}
+                <MoneyBreakdown
+                  taxSplit={order.money.taxSplit}
+                  taxableSubtotal={order.money.taxableSubtotal}
+                  taxTotal={order.money.taxTotal}
+                  cgstTotal={order.money.cgstTotal}
+                  sgstTotal={order.money.sgstTotal}
+                  igstTotal={order.money.igstTotal}
+                  byRate={order.money.taxByRate}
+                  chargesTotal={order.money.chargesTotal}
+                  discountTotal={order.money.discountTotal}
+                  charges={order.charges}
+                  payable={order.money.total}
+                />
+
+                {/*
+                  Charges are editable while the order is open and the viewer
+                  may edit it — the same gate the header actions use. A closed
+                  order is read-only, and the API refuses the write anyway.
+                */}
+                {canEdit && (
+                  <div className="mt-4 border-t border-line pt-3">
+                    <EditChargesDialog
+                      orderId={order.id}
+                      charges={order.charges}
+                      money={order.money}
+                    />
+                  </div>
+                )}
+
+              </CardContent>
+            </Card>
+          </div>
+
+          <div>
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-muted">
+              Payment
+            </h2>
           <Card>
             <CardContent className="p-5">
               <MoneySummary money={order.money} />
@@ -236,6 +290,7 @@ export default async function SalesOrderDetailPage({ params }: { params: Params 
               </p>
             </CardContent>
           </Card>
+          </div>
         </aside>
       </div>
     </div>

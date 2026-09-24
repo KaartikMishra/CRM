@@ -1,13 +1,18 @@
 import { z } from 'zod';
 import {
+  GST_MODES,
   GST_RATES,
   HSN_CODE_MAX_LENGTH,
   MAX_ITEMS_PER_SALES_ORDER,
+  SALES_CHARGE_LABEL_MAX_LENGTH,
+  SALES_CHARGE_MAX,
+  SALES_CHARGE_TYPES,
   SALES_ORDER_ID_MAX_LENGTH,
   SALES_ORDER_ID_PATTERN,
 } from '../constants/index.js';
 import { SALES_EFFICIENCIES, SALES_ORDER_STATUSES } from '../enums.js';
 import { addAmount, compareAmount, isValidAmount, lineTotal } from '../utils/money.js';
+import { computeSalesTotals } from '../utils/sales-total.js';
 import { amountSchema, cuidSchema, dateRangeSchema, paginationSchema } from './common.js';
 
 /**
@@ -51,6 +56,17 @@ export const salesPriceSchema = amountSchema.refine(
 );
 
 /** One product line, as it arrives from a form. */
+/**
+ * How a price is to be read. Line level: one order may carry 5% exclusive
+ * beside 18% inclusive.
+ *
+ * Defaulted rather than optional: a price cannot be totalled until it is read
+ * one way or the other, so there is no honest 'unset' to represent.
+ */
+export const gstModeSchema = z.enum(GST_MODES, {
+  errorMap: () => ({ message: 'Choose whether the price includes GST' }),
+});
+
 export const salesOrderItemInputSchema = z.object({
   productName: z.string().trim().min(1, 'Product name is required').max(200),
   /**
@@ -101,6 +117,15 @@ export const salesOrderItemInputSchema = z.object({
    * distinct again from an explicit 'NONE'.
    */
   gstRate: z.enum(GST_RATES).optional(),
+  /**
+   * How THIS line's price is to be read, independent of every other line.
+   *
+   * Defaulted rather than optional: a price cannot be totalled until it is
+   * read one way or the other, so there is no honest 'unset' to represent.
+   * One order may carry 5% exclusive beside 18% inclusive — goods bought on
+   * different terms are still one document.
+   */
+  gstMode: gstModeSchema.default('EXCLUSIVE'),
 });
 
 /** Exact sum of a set of line totals, in paise. Never a float. */
@@ -119,6 +144,31 @@ const itemsPriceable = (items: { quantity: number; price: string }[]): boolean =
     (item) => Number.isInteger(item.quantity) && item.quantity >= 1 && isValidAmount(item.price),
   );
 
+
+/**
+ * An order-level charge or adjustment.
+ *
+ * `amount` is always positive. DISCOUNT is what makes a row subtract, and the
+ * sign lives in `type` rather than in the number, so no reader of this data
+ * has to remember a convention to add it up.
+ */
+export const salesChargeInputSchema = z.object({
+  type: z.enum(SALES_CHARGE_TYPES, {
+    errorMap: () => ({ message: 'Choose a charge type' }),
+  }),
+  label: z.string().trim().max(SALES_CHARGE_LABEL_MAX_LENGTH).optional(),
+  amount: amountSchema.refine((v) => compareAmount(v, '0.00') > 0, {
+    message: 'Enter an amount greater than zero',
+  }),
+});
+
+export const salesChargesSchema = z
+  .array(salesChargeInputSchema)
+  .max(SALES_CHARGE_MAX, 'Too many charges on one order')
+  .default([]);
+
+/** Replaces the whole set of charges on an order, as the editor sends them. */
+export const setSalesChargesSchema = z.object({ charges: salesChargesSchema });
 export const createSalesOrderSchema = z
   .object({
     orderId: salesOrderIdSchema,
@@ -132,6 +182,7 @@ export const createSalesOrderSchema = z
         `An order can hold at most ${MAX_ITEMS_PER_SALES_ORDER} products`,
       ),
     /** Partial payments are allowed, including none at all. */
+    charges: salesChargesSchema,
     paidAmount: amountSchema.default('0.00'),
     orderDate: z.coerce.date({ invalid_type_error: 'Enter a valid order date' }),
     toBeDispatchedBy: z.coerce.date({ invalid_type_error: 'Enter a valid dispatch deadline' }),
@@ -152,12 +203,31 @@ export const createSalesOrderSchema = z
     // stands down and lets each field's own error speak instead.
     if (!itemsPriceable(value.items) || !isValidAmount(value.paidAmount)) return;
 
-    const total = sumItemTotals(value.items);
-    if (compareAmount(value.paidAmount, total) > 0) {
+    /*
+      Measured against the payable, not the line sum: with GST added on top
+      and shipping beyond that, the amount a customer hands over is routinely
+      larger than the goods came to, and refusing it here would reject a
+      perfectly ordinary order.
+
+      The split is assumed intra-state. This check exists to catch an obvious
+      typo at the edge, and CGST+SGST versus IGST changes only which heads
+      the tax is posted to, never the payable it is being compared against.
+    */
+    const { payable } = computeSalesTotals({
+      split: 'CGST_SGST',
+      items: value.items.map((item) => ({
+        quantity: item.quantity,
+        price: item.price,
+        gstRate: item.gstRate ?? null,
+        gstMode: item.gstMode,
+      })),
+      charges: value.charges,
+    });
+    if (compareAmount(value.paidAmount, payable) > 0) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['paidAmount'],
-        message: 'Paid amount cannot exceed the order total',
+        message: 'Paid amount cannot exceed the amount payable',
       });
     }
   });
@@ -256,6 +326,8 @@ export const salesOrderListQuerySchema = paginationSchema.merge(dateRangeSchema)
 export type SalesOrderItemInput = z.infer<typeof salesOrderItemInputSchema>;
 export type CreateSalesOrderInput = z.infer<typeof createSalesOrderSchema>;
 export type UpdateSalesOrderInput = z.infer<typeof updateSalesOrderSchema>;
+export type SalesChargeInput = z.infer<typeof salesChargeInputSchema>;
+export type SetSalesChargesInput = z.infer<typeof setSalesChargesSchema>;
 export type CreateChangeRequestInput = z.infer<typeof createChangeRequestSchema>;
 export type ReviewChangeRequestInput = z.infer<typeof reviewChangeRequestSchema>;
 export type RecordPaymentInput = z.infer<typeof recordPaymentSchema>;

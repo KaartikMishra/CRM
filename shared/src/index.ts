@@ -21,4 +21,5 @@ export * from './types/vendor-invoice.js';
 export * from './types/notification.js';
 export * from './utils/units.js';
 export * from './utils/money.js';
+export * from './utils/sales-total.js';
 export * from './utils/product-name.js';
