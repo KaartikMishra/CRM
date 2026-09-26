@@ -182,7 +182,13 @@ describe('the Sales page no longer preloads a catalogue', () => {
   });
 
   it('passes no product list to the form', () => {
-    expect(page).toContain('<CreateSalesOrderForm />');
+    /*
+      The form now takes one prop — the seller's registered State, which the
+      browser cannot know otherwise and which decides CGST+SGST against IGST.
+      The point of this test is unchanged: no catalogue is preloaded.
+    */
+    expect(page).toContain('<CreateSalesOrderForm sellerState={user.sellerState} />');
+    expect(page).not.toContain('products={');
   });
 
   it('uses no datalist anywhere in the form', () => {

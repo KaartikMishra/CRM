@@ -93,6 +93,7 @@ const TITLE_CASE: Record<string, string> = {
   PARTIAL_CLOSED: 'Partially Closed',
   DISPATCHED: 'Dispatched',
   CLOSED: 'Closed',
+  CANCELLED: 'Cancelled',
   PENDING: 'Pending',
   RESPONDED: 'Responded',
   NO_VENDOR: 'No Vendor',

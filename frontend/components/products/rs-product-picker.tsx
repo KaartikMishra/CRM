@@ -44,16 +44,18 @@ const DEBOUNCE_MS = 250;
  * session cookie server-side and attaches the bearer. No token reaches browser
  * JavaScript.
  *
- * Shared by Vendor Invoices and Sales, which is why it lives here rather than
- * inside either module: one search path, one debounce, one place to fix a bug.
+ * Shared by Sales, Procurement and Vendor Invoices, which is why it lives here
+ * rather than inside any one module: one search path, one debounce, one place
+ * to fix a bug.
  * What each caller does with the result differs — Vendor Invoices stores the
  * RsProduct id on a mapping, Sales copies the title onto an order line and
  * stores no id at all — so the picker reports the selection and decides
  * nothing about how it is used.
  *
  * Note the permission this depends on: `GET /api/rs-products` admits
- * `RS_PRODUCTS:VIEW` *or* `SALES:CREATE`. Anyone holding neither gets the
- * explanatory message rather than a silent empty box — see `denied`.
+ * `RS_PRODUCTS:VIEW`, `SALES:CREATE`, `PROCUREMENT:CREATE` or
+ * `PROCUREMENT:EDIT`. Anyone holding none of them gets the explanatory message
+ * rather than a silent empty box — see `denied`.
  */
 export function RsProductPicker({
   value,

@@ -9,6 +9,7 @@ import type { ProductChangeView } from '@rs/shared';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { ContentRegion, ContentScrollArea } from '@/components/common/content-page';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { ErrorMessage } from '@/components/common/error-message';
@@ -32,8 +33,8 @@ export function ProductChangeQueue({ changes }: { changes: ProductChangeView[] }
   if (changes.length === 0) return null;
 
   return (
-    <section className="flex flex-col gap-3">
-      <div className="flex items-baseline justify-between gap-3">
+    <ContentRegion>
+      <div className="flex shrink-0 items-baseline justify-between gap-3">
         <h2 className="text-sm font-semibold uppercase tracking-wider text-muted">
           Product changes awaiting approval
         </h2>
@@ -42,12 +43,14 @@ export function ProductChangeQueue({ changes }: { changes: ProductChangeView[] }
         </span>
       </div>
 
-      <div className="flex flex-col gap-3">
+      {/* Its own scroll region, so a long approval queue cannot push
+          requirement vs stock and the purchase bills off the page. */}
+      <ContentScrollArea className="flex flex-col gap-3">
         {changes.map((change) => (
           <ChangeCard key={change.id} change={change} />
         ))}
-      </div>
-    </section>
+      </ContentScrollArea>
+    </ContentRegion>
   );
 }
 

@@ -2,8 +2,10 @@
 
 import { revalidatePath } from 'next/cache';
 import type {
+  CancelSalesItemsInput,
   CreateChangeRequestInput,
   CreateSalesOrderInput,
+  PaymentMethod,
   SalesOrderDetail,
   SetSalesChargesInput,
   UpdateSalesOrderInput,
@@ -83,14 +85,143 @@ export async function setSalesChargesAction(
   );
 }
 
-/** Accumulates onto the paid amount; the backend refuses anything past the total. */
+/**
+ * Accumulates onto the paid amount; the backend refuses anything past the total.
+ *
+ * The reference travels with the instalment rather than with the order, which
+ * is the whole reason SalesPayment is a table: an order collected in three
+ * payments has three UTRs, and a field on the order could hold one of them.
+ *
+ * Every optional field is omitted rather than sent empty. The API reads an
+ * absent `method` as "the arrangement is unchanged", which is the truthful
+ * reading for a second instalment on an order already marked COD — sending an
+ * empty string instead would fail validation for no reason.
+ */
 export async function recordPaymentAction(
   orderId: string,
-  amount: string,
+  input: { amount: string; method?: PaymentMethod; reference?: string; note?: string },
 ): Promise<ActionResult> {
   return call(
     `/api/sales/${orderId}/payments`,
-    { method: 'POST', body: JSON.stringify({ amount }) },
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        amount: input.amount,
+        ...(input.method ? { method: input.method } : {}),
+        ...(input.reference?.trim() ? { reference: input.reference.trim() } : {}),
+        ...(input.note?.trim() ? { note: input.note.trim() } : {}),
+      }),
+    },
+    `/sales/${orderId}`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+//  Cancellation
+// ---------------------------------------------------------------------------
+
+/**
+ * Calls off the whole order. Nothing is deleted.
+ *
+ * The reason is required by the API and by a database constraint, so it is not
+ * a courtesy field. Cancelling moves no money: what the customer has paid
+ * becomes refundable, and a refund is a separate decision recorded below.
+ */
+export async function cancelOrderAction(
+  orderId: string,
+  reason: string,
+): Promise<ActionResult> {
+  return call(
+    `/api/sales/${orderId}/cancel`,
+    { method: 'POST', body: JSON.stringify({ reason }) },
+    `/sales/${orderId}`,
+  );
+}
+
+/**
+ * Calls off some units of some lines.
+ *
+ * Each entry says how many MORE units to cancel, never the new cancelled total
+ * — the API adds them to what is already cancelled and refuses anything that
+ * would take a line past its ordered quantity.
+ */
+export async function cancelSalesItemsAction(
+  orderId: string,
+  input: CancelSalesItemsInput,
+): Promise<ActionResult> {
+  return call(
+    `/api/sales/${orderId}/cancel-items`,
+    { method: 'POST', body: JSON.stringify(input) },
+    `/sales/${orderId}`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+//  Refunds
+// ---------------------------------------------------------------------------
+
+/**
+ * Records that money is owed back. It sends none.
+ *
+ * The refund lands PENDING: agreed, not gone. The API refuses more than the
+ * order's own `refundable` figure, counting refunds already promised, so the
+ * ceiling is never computed here.
+ */
+export async function createRefundAction(
+  orderId: string,
+  input: { amount: string; reason: string; note?: string },
+): Promise<ActionResult> {
+  return call(
+    `/api/sales/${orderId}/refunds`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        amount: input.amount,
+        reason: input.reason,
+        ...(input.note?.trim() ? { note: input.note.trim() } : {}),
+      }),
+    },
+    `/sales/${orderId}`,
+  );
+}
+
+/**
+ * Marks a refund as actually sent.
+ *
+ * The reference is required — by this endpoint and by a CHECK constraint on the
+ * row. Saying money moved without saying how it moved is the one claim the
+ * system cannot check against a statement later.
+ */
+export async function settleRefundAction(
+  orderId: string,
+  refundId: string,
+  input: { reference: string; note?: string },
+): Promise<ActionResult> {
+  return call(
+    `/api/sales/${orderId}/refunds/${refundId}/settle`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        reference: input.reference,
+        ...(input.note?.trim() ? { note: input.note.trim() } : {}),
+      }),
+    },
+    `/sales/${orderId}`,
+  );
+}
+
+/** Refuses a refund that was agreed. The amount becomes refundable again. */
+export async function rejectRefundAction(
+  orderId: string,
+  refundId: string,
+  note?: string,
+): Promise<ActionResult> {
+  return call(
+    `/api/sales/${orderId}/refunds/${refundId}/reject`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ ...(note?.trim() ? { note: note.trim() } : {}) }),
+    },
     `/sales/${orderId}`,
   );
 }
@@ -144,6 +275,38 @@ export async function rejectChangeRequestAction(
 ): Promise<ActionResult> {
   return call(
     `/api/sales/${orderId}/change-requests/${requestId}/reject`,
+    { method: 'POST', body: JSON.stringify(note ? { note } : {}) },
+    `/sales/${orderId}`,
+  );
+}
+
+/**
+ * Deciding a proposed change to an order's charges.
+ *
+ * The same shape as the item change-request actions above, because it is the
+ * same workflow — SALES ASSIGN decides, the service refuses self-review, and a
+ * rejection leaves the charges exactly as they were. Only the endpoint differs.
+ */
+export async function approveChargeChangeAction(
+  orderId: string,
+  requestId: string,
+  note?: string,
+): Promise<ActionResult> {
+  return call(
+    `/api/sales/${orderId}/charge-requests/${requestId}/approve`,
+    { method: 'POST', body: JSON.stringify(note ? { note } : {}) },
+    `/sales/${orderId}`,
+  );
+}
+
+/** Turns one down. The charges in force are left untouched. */
+export async function rejectChargeChangeAction(
+  orderId: string,
+  requestId: string,
+  note?: string,
+): Promise<ActionResult> {
+  return call(
+    `/api/sales/${orderId}/charge-requests/${requestId}/reject`,
     { method: 'POST', body: JSON.stringify(note ? { note } : {}) },
     `/sales/${orderId}`,
   );

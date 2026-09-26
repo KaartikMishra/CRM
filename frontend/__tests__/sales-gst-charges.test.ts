@@ -241,12 +241,46 @@ describe('the tax is posted to the right heads', () => {
   });
 
   it('decides the heads from the two states, order level', () => {
-    expect(taxSplitFor('Karnataka', 'Karnataka')).toBe('CGST_SGST');
-    expect(taxSplitFor('Karnataka', 'Maharashtra')).toBe('IGST');
+    const inIndia = (state: string | null) => ({ state, country: 'India' });
+
+    expect(taxSplitFor('Karnataka', inIndia('Karnataka'))).toBe('CGST_SGST');
+    expect(taxSplitFor('Karnataka', inIndia('Maharashtra'))).toBe('IGST');
     // Unknown either side falls back to intra-state rather than guessing IGST,
     // which would overstate a head on a document somebody files.
-    expect(taxSplitFor('Karnataka', null)).toBe('CGST_SGST');
-    expect(taxSplitFor(null, 'Maharashtra')).toBe('CGST_SGST');
+    expect(taxSplitFor('Karnataka', inIndia(null))).toBe('CGST_SGST');
+    expect(taxSplitFor(null, inIndia('Maharashtra'))).toBe('CGST_SGST');
+  });
+
+  it('applies no Indian head at all to a customer abroad', () => {
+    expect(taxSplitFor('Karnataka', { state: null, country: 'Lesotho' })).toBe('NONE');
+    // The contradiction the customer schema now refuses, asserted here too:
+    // even if such a pair reached this function, it must not become CGST.
+    expect(taxSplitFor('Haryana', { state: 'Haryana', country: 'Lesotho' })).toBe('NONE');
+  });
+
+  it('reads a customer with no country recorded as domestic, not as an export', () => {
+    // Every customer predating the country field has none. Reading those as
+    // foreign would strip the tax off orders that have always carried it.
+    expect(taxSplitFor('Karnataka', { state: 'Karnataka', country: null })).toBe('CGST_SGST');
+    expect(taxSplitFor('Karnataka', { state: 'Maharashtra', country: null })).toBe('IGST');
+  });
+
+  it('matches the country case-insensitively, as it does the state', () => {
+    expect(taxSplitFor('Karnataka', { state: 'Karnataka', country: 'india' })).toBe('CGST_SGST');
+  });
+
+  it('posts nothing to any head when the split is NONE', () => {
+    const totals = computeSalesTotals({
+      split: 'NONE',
+      items: [{ quantity: 2, price: '100.00', gstRate: 'NONE', gstMode: 'EXCLUSIVE' }],
+    });
+
+    expect(totals.taxTotal).toBe('0.00');
+    expect(totals.cgstTotal).toBe('0.00');
+    expect(totals.sgstTotal).toBe('0.00');
+    expect(totals.igstTotal).toBe('0.00');
+    // The goods are still owed for — only the tax is absent.
+    expect(totals.payable).toBe('200.00');
   });
 });
 
@@ -322,6 +356,13 @@ describe('the create schema', () => {
     customerId: 'clh0000000000000000000000',
     orderDate: '2026-09-24',
     toBeDispatchedBy: '2026-09-25',
+    /*
+      Every case below pays something, and a payment now has to say how it
+      arrived. Stated once here so these tests go on testing the payment
+      CEILING, which is what they are for, rather than the new rule beside it —
+      that one has its own tests.
+    */
+    paymentMethod: 'PREPAID',
   };
   const item = (price: string, gstRate: string, gstMode: string) => ({
     productName: 'Brass lamp',
@@ -563,8 +604,10 @@ describe('the detail page can edit charges', () => {
   });
 
   it('warns before saving a set that would fall below what was paid', () => {
+    // The transition flag is `pendingSave` since a `pending` prop joined it —
+    // a charge change already waiting for approval. The guard is unchanged.
     expect(dialog).toContain('belowPaid');
-    expect(dialog).toContain('disabled={pending || belowPaid}');
+    expect(dialog).toContain('disabled={pendingSave || belowPaid || pending}');
   });
 });
 

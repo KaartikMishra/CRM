@@ -9,9 +9,21 @@
  * unit-testable in isolation, and the services call them rather than
  * reimplementing the rules.
  *
- * A sales order has no "Towards" assignee, so ownership reduces to who created
- * it. Every rule also refuses a CLOSED order, which is what makes closing an
- * order actually final.
+ * A sales order has no "Towards" assignee. Operational work on one — its dates,
+ * its payments, dispatching it, closing it — is the SALES EDIT capability and
+ * nothing narrower: an order belongs to the business, not to whoever happened to
+ * type it in, and the person collecting a payment or sending the goods is
+ * routinely not that person. Restricting these to the creator meant a second
+ * salesperson could only watch, and in practice made them Admin-only work.
+ *
+ * Who created the order is still recorded, still shown, and still the answer to
+ * "whose order is this" — it is simply not an authorisation. VIEW-only access
+ * remains unable to do any of this: every one of these actions sits behind
+ * requirePermission('SALES', 'EDIT') on its route, which is the capability these
+ * functions assume has already been resolved.
+ *
+ * Every rule also refuses a CLOSED order, which is what makes closing an order
+ * actually final.
  */
 
 import type { SalesOrderStatus } from '@rs/shared';
@@ -25,8 +37,11 @@ export type SalesOrderOwnership = {
   status: SalesOrderStatus;
 };
 
-const isAdmin = (actor: Actor): boolean => actor.role === 'ADMIN';
+/** Terminal states. Neither is editable, and neither can be returned from. */
+const isSettled = (order: SalesOrderOwnership): boolean =>
+  order.status === 'CLOSED' || order.status === 'CANCELLED';
 
+/** Who typed the order in. Recorded and displayed; never an authorisation. */
 export const isOrderCreator = (actor: Actor, order: SalesOrderOwnership): boolean =>
   order.createdById === actor.id;
 
@@ -36,12 +51,11 @@ export function canViewOrder(): boolean {
 }
 
 /**
- * A USER may edit an order they created; an ADMIN may edit any. Neither may
- * touch a closed one — reopening is not a sanctioned move.
+ * Anybody holding SALES EDIT may edit any open order. Nobody may touch a closed
+ * one — reopening is not a sanctioned move.
  */
-export function canEditOrder(actor: Actor, order: SalesOrderOwnership): boolean {
-  if (order.status === 'CLOSED') return false;
-  return isAdmin(actor) || isOrderCreator(actor, order);
+export function canEditOrder(_actor: Actor, order: SalesOrderOwnership): boolean {
+  return !isSettled(order);
 }
 
 /** Recording money follows the same rule as editing. */
@@ -53,15 +67,37 @@ export function canRecordPayment(actor: Actor, order: SalesOrderOwnership): bool
  * Dispatch is only meaningful from OPEN. The status guard enforces the
  * transition itself; this answers whether *this person* may make it.
  */
-export function canDispatchOrder(actor: Actor, order: SalesOrderOwnership): boolean {
-  if (order.status !== 'OPEN') return false;
-  return isAdmin(actor) || isOrderCreator(actor, order);
+export function canDispatchOrder(_actor: Actor, order: SalesOrderOwnership): boolean {
+  return order.status === 'OPEN';
 }
 
 /** Closing is only meaningful from DISPATCHED. */
-export function canCloseOrder(actor: Actor, order: SalesOrderOwnership): boolean {
-  if (order.status !== 'DISPATCHED') return false;
-  return isAdmin(actor) || isOrderCreator(actor, order);
+export function canCloseOrder(_actor: Actor, order: SalesOrderOwnership): boolean {
+  return order.status === 'DISPATCHED';
+}
+
+/**
+ * Who may call an order off, in whole or in part.
+ *
+ * The same SALES EDIT capability as every other operational action — cancelling
+ * is ordinary sales work, not an administrative override. The status is what
+ * narrows it: a settled order is history, and an order that never left OPEN is
+ * as cancellable as one already on its way.
+ */
+export function canCancelOrder(_actor: Actor, order: SalesOrderOwnership): boolean {
+  return !isSettled(order);
+}
+
+/**
+ * Who may record money going back to the customer.
+ *
+ * Deliberately permitted on a CANCELLED order, and only there does it differ
+ * from the rule above: a refund is settled *after* the goods are called off, so
+ * refusing it on a cancelled order would make the workflow impossible to
+ * finish. A CLOSED order is still refused — that money is settled.
+ */
+export function canRefundOrder(_actor: Actor, order: SalesOrderOwnership): boolean {
+  return order.status !== 'CLOSED';
 }
 
 // ---------------------------------------------------------------------------
@@ -82,7 +118,7 @@ export function canCloseOrder(actor: Actor, order: SalesOrderOwnership): boolean
  * payments, dispatch and close all still go through canEditOrder above.
  */
 export function canRequestItemChange(_actor: Actor, order: SalesOrderOwnership): boolean {
-  return order.status !== 'CLOSED';
+  return !isSettled(order);
 }
 
 /**
@@ -96,7 +132,7 @@ export function canRequestItemChange(_actor: Actor, order: SalesOrderOwnership):
  * which is a separate question and a separate answer.
  */
 export function canReviewChange(mayApprove: boolean, order: SalesOrderOwnership): boolean {
-  if (order.status === 'CLOSED') return false;
+  if (isSettled(order)) return false;
   return mayApprove;
 }
 

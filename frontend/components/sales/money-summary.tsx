@@ -1,3 +1,4 @@
+import { PAYMENT_METHOD_LABELS, compareAmount } from '@rs/shared';
 import type { SalesMoneyView } from '@rs/shared';
 import { cn } from '@/lib/utils';
 import { formatCurrency } from '@/lib/format';
@@ -20,8 +21,21 @@ export function MoneySummary({
   money: SalesMoneyView;
   className?: string;
 }) {
+  /*
+    `total` is what was ORDERED and `activeTotal` is what the customer is
+    actually getting. They are equal on the great majority of orders, so the
+    first cell only changes its wording once something has been called off —
+    showing "Ordered / Active" on every order would be two labels for one
+    number and noise on the screens that never cancel anything.
+
+    Every figure is the API's. Nothing here is recomputed.
+  */
+  const cancelled = compareAmount(money.cancelledTotal, '0.00') > 0;
+
   const cells = [
-    { label: 'Total', value: money.total, tone: 'text-ink' },
+    cancelled
+      ? { label: 'Still ordered', value: money.activeTotal, tone: 'text-ink' }
+      : { label: 'Total', value: money.total, tone: 'text-ink' },
     { label: 'Paid', value: money.paid, tone: 'text-positive' },
     {
       label: 'Pending',
@@ -66,6 +80,46 @@ export function MoneySummary({
           </div>
         ))}
       </dl>
+
+      {/*
+        What was called off, and what that leaves owed back.
+
+        Shown only once something has been cancelled, and deliberately as its
+        own line rather than a fourth amount in the row above: these describe
+        what is NOT happening to the order, and reading them as another balance
+        is how somebody pays a refund twice.
+      */}
+      {cancelled && (
+        <dl className="mt-3 flex flex-col gap-1.5 border-t border-line pt-3 text-xs">
+          <div className="flex items-baseline justify-between gap-3">
+            <dt className="text-muted">Cancelled value</dt>
+            <dd className="whitespace-nowrap font-mono text-critical tabular">
+              {formatCurrency(money.cancelledTotal, money.currency)}
+            </dd>
+          </div>
+          <div className="flex items-baseline justify-between gap-3">
+            <dt className="text-muted">Originally ordered</dt>
+            <dd className="whitespace-nowrap font-mono text-ink-2 tabular">
+              {formatCurrency(money.total, money.currency)}
+            </dd>
+          </div>
+        </dl>
+      )}
+
+      {/*
+        How the money is arriving, under the figures rather than beside them:
+        it qualifies all three and is not an amount itself, so it does not
+        belong in a row of amounts. Absent on an order that has taken no
+        payment, and on every order recorded before the field existed.
+      */}
+      {money.paymentMethod && (
+        <p className="mt-3 border-t border-line pt-3 text-xs text-muted">
+          Payment method:{' '}
+          <span className="font-medium text-ink-2">
+            {PAYMENT_METHOD_LABELS[money.paymentMethod]}
+          </span>
+        </p>
+      )}
     </div>
   );
 }

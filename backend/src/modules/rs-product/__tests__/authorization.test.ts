@@ -85,14 +85,24 @@ describe('permission resolution', () => {
    * admits that capability so the Sales order picker can search — so the
    * employee fixture reaches the list without any RS_PRODUCTS grant.
    *
-   * Denial is therefore asserted against somebody holding neither capability,
-   * which is what the rule actually says. The tests below pin both halves.
+   * Denial is therefore asserted against somebody holding none of the admitted
+   * capabilities, which is what the rule actually says. The tests below pin
+   * each half of it.
+   *
+   * The two Procurement pairs joined the list when it became clear that
+   * Procurement depends on this same search: a purchase line must name an
+   * RsProduct before its stock can be allocated, and the one shared picker is
+   * how it is named. It worked only because a USER holds SALES:CREATE by
+   * default, so revoking Sales from a warehouse-only employee silently took
+   * their mapping dialog with it.
    */
-  it('denies a caller holding neither RS_PRODUCTS:VIEW nor SALES:CREATE', async () => {
+  it('denies a caller holding none of the admitted capabilities', async () => {
     await prisma.userModulePermission.createMany({
       data: [
         { userId: employee.id, module: 'RS_PRODUCTS', action: 'VIEW', allowed: false },
         { userId: employee.id, module: 'SALES', action: 'CREATE', allowed: false },
+        { userId: employee.id, module: 'PROCUREMENT', action: 'CREATE', allowed: false },
+        { userId: employee.id, module: 'PROCUREMENT', action: 'EDIT', allowed: false },
       ],
     });
 
@@ -126,6 +136,77 @@ describe('permission resolution', () => {
 
     const res = await api<Listed>('GET', '/api/rs-products', { token: employeeToken });
     expect(res.status).toBe(200);
+
+    await prisma.userModulePermission.deleteMany({ where: { userId: employee.id } });
+  });
+
+  it('admits a USER on PROCUREMENT:EDIT alone, with RS Products and Sales revoked', async () => {
+    // The mapping dialog: a buyer naming the RS Product a bill line is for.
+    await prisma.userModulePermission.createMany({
+      data: [
+        { userId: employee.id, module: 'RS_PRODUCTS', action: 'VIEW', allowed: false },
+        { userId: employee.id, module: 'SALES', action: 'CREATE', allowed: false },
+        { userId: employee.id, module: 'PROCUREMENT', action: 'EDIT', allowed: true },
+      ],
+    });
+
+    const res = await api<Listed>('GET', '/api/rs-products', { token: employeeToken });
+    expect(res.status).toBe(200);
+
+    await prisma.userModulePermission.deleteMany({ where: { userId: employee.id } });
+  });
+
+  it('admits a USER on PROCUREMENT:CREATE alone, with RS Products and Sales revoked', async () => {
+    // Typing up a purchase bill, whose lines name products as they are entered
+    // — so CREATE is named as well as EDIT, or a recorder who may not edit
+    // would be left with an empty picker.
+    await prisma.userModulePermission.createMany({
+      data: [
+        { userId: employee.id, module: 'RS_PRODUCTS', action: 'VIEW', allowed: false },
+        { userId: employee.id, module: 'SALES', action: 'CREATE', allowed: false },
+        { userId: employee.id, module: 'PROCUREMENT', action: 'CREATE', allowed: true },
+      ],
+    });
+
+    const res = await api<Listed>('GET', '/api/rs-products', { token: employeeToken });
+    expect(res.status).toBe(200);
+
+    await prisma.userModulePermission.deleteMany({ where: { userId: employee.id } });
+  });
+
+  it('does not admit PROCUREMENT:VIEW on its own', async () => {
+    // Named capabilities, not "anyone who can see the module". Somebody who may
+    // only read Procurement gains no catalogue search from it.
+    await prisma.userModulePermission.createMany({
+      data: [
+        { userId: employee.id, module: 'RS_PRODUCTS', action: 'VIEW', allowed: false },
+        { userId: employee.id, module: 'SALES', action: 'CREATE', allowed: false },
+        { userId: employee.id, module: 'PROCUREMENT', action: 'VIEW', allowed: true },
+      ],
+    });
+
+    const res = await api('GET', '/api/rs-products', { token: employeeToken });
+    expect(res.status).toBe(403);
+
+    await prisma.userModulePermission.deleteMany({ where: { userId: employee.id } });
+  });
+
+  it('still refuses every write to somebody holding only PROCUREMENT', async () => {
+    // The widening is read-only on this side too: a buyer may find a product
+    // and still may not create, edit or archive one.
+    await prisma.userModulePermission.createMany({
+      data: [
+        { userId: employee.id, module: 'RS_PRODUCTS', action: 'VIEW', allowed: false },
+        { userId: employee.id, module: 'SALES', action: 'CREATE', allowed: false },
+        { userId: employee.id, module: 'PROCUREMENT', action: 'EDIT', allowed: true },
+      ],
+    });
+
+    const created = await api('POST', '/api/rs-products', {
+      token: employeeToken,
+      body: { title: 'zz-test-should-never-exist', price: '1.00' },
+    });
+    expect(created.status).toBe(403);
 
     await prisma.userModulePermission.deleteMany({ where: { userId: employee.id } });
   });

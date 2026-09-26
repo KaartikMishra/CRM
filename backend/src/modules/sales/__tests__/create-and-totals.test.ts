@@ -71,7 +71,7 @@ describe('create sales order', () => {
   });
 
   it('derives pending as total minus paid', async () => {
-    const res = await createOrder({ items: [salesItemPayload({ quantity: 12, price: '1250.50' })], paidAmount: '5000' });
+    const res = await createOrder({ items: [salesItemPayload({ quantity: 12, price: '1250.50' })], paidAmount: '5000', paymentMethod: 'PREPAID' });
 
     const { money } = res.body.data!.order;
     expect(money.total).toBe('15006.00');
@@ -81,7 +81,7 @@ describe('create sales order', () => {
   });
 
   it('marks an order paid in full when paid equals total', async () => {
-    const res = await createOrder({ items: [salesItemPayload({ quantity: 2, price: '10.00' })], paidAmount: '20.00' });
+    const res = await createOrder({ items: [salesItemPayload({ quantity: 2, price: '10.00' })], paidAmount: '20.00', paymentMethod: 'PREPAID' });
 
     const { money } = res.body.data!.order;
     expect(money.pending).toBe('0.00');
@@ -158,6 +158,7 @@ describe('multiple products', () => {
         salesItemPayload({ quantity: 3, price: '250.50' }),
       ],
       paidAmount: '451.50',
+      paymentMethod: 'PREPAID',
     });
 
     const { money } = res.body.data!.order;
@@ -186,6 +187,7 @@ describe('multiple products', () => {
         salesItemPayload({ quantity: 3, price: '250.50' }),
       ],
       paidAmount: '900.00',
+      paymentMethod: 'PREPAID',
     });
 
     expect(res.status).toBe(201);
@@ -238,7 +240,7 @@ describe('input validation', () => {
   });
 
   it('refuses a paid amount above the total', async () => {
-    await rejects('overpaid', { items: [salesItemPayload({ quantity: 1, price: '10.00' })], paidAmount: '11.00' });
+    await rejects('overpaid', { items: [salesItemPayload({ quantity: 1, price: '10.00' })], paidAmount: '11.00', paymentMethod: 'PREPAID' });
   });
 
   it('refuses a dispatch deadline before the order date', async () => {

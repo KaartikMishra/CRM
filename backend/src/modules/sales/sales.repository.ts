@@ -26,6 +26,11 @@ import {
   normaliseAmount,
   subtractAmount,
   taxSplitFor,
+  DISCOUNT_CHARGE_TYPE,
+  sumAmounts,
+  type CatalogueImageRef,
+  type PaymentMethod,
+  type SalesChargeChangeRequestView,
   type CustomerContactRef,
   type CustomerRef,
   type GstMode,
@@ -39,7 +44,11 @@ import {
   type SalesOrderItemView,
   type SalesOrderListQuery,
   type SalesChangeRequestView,
+  type SalesOrderStatus,
   type SalesOrderSummary,
+  type SalesPaymentView,
+  type SalesRefundStatus,
+  type SalesRefundView,
   type UserRef,
 } from '@rs/shared';
 import { prisma } from '../../config/database.js';
@@ -54,7 +63,12 @@ const userRef = { id: true, name: true, employeeId: true, role: true } as const;
 const customerRef = { id: true, name: true, type: true } as const;
 /** A list row shows no contact details, but its tax heads still depend on
     where the customer is, so the State travels with the summary too. */
-const customerSummaryRef = { ...customerRef, state: true } as const;
+/*
+  Country rides along with state because the tax split is decided from the pair,
+  never from the state alone — a customer outside India is outside Indian GST
+  whatever state-shaped value happens to sit beside them.
+*/
+const customerSummaryRef = { ...customerRef, state: true, country: true } as const;
 /** Detail only — a list row has no use for contact details. */
 const customerContactRef = {
   ...customerRef,
@@ -73,6 +87,8 @@ const itemSelect = {
   lineNo: true,
   productName: true,
   quantity: true,
+  /** What the customer called off. The ordered quantity above is untouched. */
+  cancelledQty: true,
   price: true,
   /**
    * Recorded per line, and read back as recorded. Null on every line written
@@ -86,6 +102,25 @@ const itemSelect = {
   approvedAt: true,
   createdAt: true,
   productImage: { select: mediaRef },
+  /*
+    The catalogue image, read through the RS Product rather than copied onto
+    the line.
+
+    RsProductImage and MediaAsset are two different stores by design: a
+    catalogue image belongs to the product and is overwritten by Shopify sync,
+    while an uploaded one belongs to this order and must never change under it.
+    Taking the first by position mirrors what the catalogue itself calls the
+    product's image.
+  */
+  rsProduct: {
+    select: {
+      images: {
+        select: { url: true, altText: true },
+        orderBy: { position: 'asc' },
+        take: 1,
+      },
+    },
+  },
   proposedBy: { select: userRef },
   approvedBy: { select: userRef },
 } satisfies Prisma.SalesOrderItemSelect;
@@ -98,12 +133,59 @@ const summaryItemSelect = {
   lineNo: true,
   productName: true,
   quantity: true,
+  /* The list's money is the same money; without this it would price the
+     cancelled units as though they were still coming. */
+  cancelledQty: true,
   price: true,
   gstRate: true,
   gstMode: true,
   status: true,
   productImage: { select: mediaRef },
+  /*
+    The catalogue image, read through the RS Product rather than copied onto
+    the line.
+
+    RsProductImage and MediaAsset are two different stores by design: a
+    catalogue image belongs to the product and is overwritten by Shopify sync,
+    while an uploaded one belongs to this order and must never change under it.
+    Taking the first by position mirrors what the catalogue itself calls the
+    product's image.
+  */
+  rsProduct: {
+    select: {
+      images: {
+        select: { url: true, altText: true },
+        orderBy: { position: 'asc' },
+        take: 1,
+      },
+    },
+  },
 } satisfies Prisma.SalesOrderItemSelect;
+
+/** One instalment taken. Their sum is the order's paidAmount. */
+const paymentSelect = {
+  id: true,
+  amount: true,
+  method: true,
+  reference: true,
+  note: true,
+  recordedAt: true,
+  recordedBy: { select: userRef },
+} satisfies Prisma.SalesPaymentSelect;
+
+/** Money owed back, and whether it has actually gone. */
+const refundSelect = {
+  id: true,
+  amount: true,
+  status: true,
+  reason: true,
+  reference: true,
+  note: true,
+  requestedAt: true,
+  requestedBy: { select: userRef },
+  settledAt: true,
+  settledBy: { select: userRef },
+} satisfies Prisma.SalesRefundSelect;
 
 /** Charges are order level, so both projections carry the same shape. */
 const chargeSelect = {
@@ -122,10 +204,17 @@ const summarySelect = {
   toBeDispatchedBy: true,
   dispatchedAt: true,
   paidAmount: true,
+  paymentMethod: true,
   updatedAt: true,
   customer: { select: customerSummaryRef },
   items: { select: summaryItemSelect, orderBy: { lineNo: 'asc' } },
   charges: { select: chargeSelect, orderBy: { createdAt: 'asc' } },
+  /*
+    Amounts only. The list shows what an order is worth and what is owed back,
+    and both are sums — carrying every refund row into every list row would be
+    a join per order for figures nothing on the list displays individually.
+  */
+  refunds: { select: { amount: true, status: true } },
 } satisfies Prisma.SalesOrderSelect;
 
 const changeRequestSelect = {
@@ -196,6 +285,17 @@ function toChangeRequest(row: ChangeRequestRow): SalesChangeRequestView {
   };
 }
 
+const chargeChangeRequestSelect = {
+  id: true,
+  status: true,
+  proposedCharges: true,
+  requestedAt: true,
+  reviewedAt: true,
+  reviewNote: true,
+  requestedBy: { select: userRef },
+  reviewedBy: { select: userRef },
+} satisfies Prisma.SalesChargeChangeRequestSelect;
+
 const detailSelect = {
   id: true,
   orderId: true,
@@ -205,17 +305,30 @@ const detailSelect = {
   toBeDispatchedBy: true,
   dispatchedAt: true,
   closedAt: true,
+  cancelledAt: true,
+  cancellationReason: true,
   paidAmount: true,
+  paymentMethod: true,
   createdAt: true,
   updatedAt: true,
   customer: { select: customerContactRef },
   charges: { select: chargeSelect, orderBy: { createdAt: 'asc' } },
   createdBy: { select: userRef },
   closedBy: { select: userRef },
+  cancelledBy: { select: userRef },
+  /** Oldest first: a payment history reads forwards. */
+  payments: { select: paymentSelect, orderBy: { recordedAt: 'asc' } },
+  /** Pending first, then settled history — the same ordering requests use. */
+  refunds: { select: refundSelect, orderBy: [{ status: 'asc' }, { requestedAt: 'desc' }] },
   items: { select: itemSelect, orderBy: { lineNo: 'asc' } },
   changeRequests: {
     // Pending first — those need a decision; the rest is history, newest first.
     select: changeRequestSelect,
+    orderBy: [{ status: 'asc' }, { requestedAt: 'desc' }],
+  },
+  chargeChangeRequests: {
+    // Same ordering, for the same reason.
+    select: chargeChangeRequestSelect,
     orderBy: [{ status: 'asc' }, { requestedAt: 'desc' }],
   },
 } satisfies Prisma.SalesOrderSelect;
@@ -250,9 +363,17 @@ const totalOfLine = (item: { quantity: number; price: Prisma.Decimal }): string 
  * one definition.
  */
 export function toMoney(
-  order: { paidAmount: Prisma.Decimal; customer: { state: string | null } },
+  order: {
+    paidAmount: Prisma.Decimal;
+    paymentMethod?: string | null;
+    status: SalesOrderStatus;
+    customer: { state: string | null; country: string | null };
+    /** Amounts and statuses only; the detail view carries the rows themselves. */
+    refunds?: { amount: Prisma.Decimal; status: SalesRefundStatus }[];
+  },
   items: {
     quantity: number;
+    cancelledQty?: number;
     price: Prisma.Decimal;
     gstRate: string | null;
     gstMode: string;
@@ -265,10 +386,17 @@ export function toMoney(
 
   // The split is order level — where goods are going does not change from one
   // line of a document to the next. The MODE does, and travels on each line.
-  const split = taxSplitFor(env.SELLER_STATE ?? null, order.customer.state);
+  const split = taxSplitFor(env.SELLER_STATE ?? null, order.customer);
 
-  const asLine = (item: (typeof items)[number]): TaxableLine => ({
-    quantity: item.quantity,
+  /*
+    NOTE the call sites: `items.map((item) => asLine(item))`, never
+    `items.map(asLine)`. Array.map passes the index as the second argument, and
+    the second argument here is the quantity — so the bare reference prices
+    every line at its position in the array. It computed a total of 0.00 for
+    every single-line order before the tests caught it.
+  */
+  const asLine = (item: (typeof items)[number], quantity = item.quantity): TaxableLine => ({
+    quantity,
     price: normaliseAmount(item.price.toString()),
     gstRate: (item.gstRate as GstRate | null) ?? null,
     // Narrowed from the column's plain String: the shared z.enum is what
@@ -278,7 +406,7 @@ export function toMoney(
 
   const totals = computeSalesTotals({
     split,
-    items: active.map(asLine),
+    items: active.map((item) => asLine(item)),
     charges: charges.map((c) => ({
       type: c.type as SalesChargeType,
       amount: normaliseAmount(c.amount.toString()),
@@ -292,10 +420,60 @@ export function toMoney(
   */
   const awaitingTotals = computeSalesTotals({
     split,
-    items: awaiting.map(asLine),
+    items: awaiting.map((item) => asLine(item)),
   });
 
   const paid = normaliseAmount(order.paidAmount.toString());
+
+  /*
+    What the order is worth after cancellations — the SAME arithmetic, run over
+    the remaining quantities.
+
+    `total` above deliberately keeps meaning the ORDERED value: it is the figure
+    sales_order_money_guard enforces in the database, and the record of what was
+    agreed. This is the figure the customer now actually owes.
+
+    A cancelled order is worth nothing, charges included: calling the order off
+    calls off its shipping with it, and leaving a charge standing would quietly
+    withhold that much from the refund. Partial cancellation is different — the
+    order is still going out, so its order-level charges still stand.
+  */
+  const remaining = active
+    .map((item) => ({ item, qty: item.quantity - (item.cancelledQty ?? 0) }))
+    .filter((row) => row.qty > 0);
+
+  const activeTotal =
+    order.status === 'CANCELLED'
+      ? '0.00'
+      : computeSalesTotals({
+          split,
+          items: remaining.map((row) => asLine(row.item, row.qty)),
+          charges: charges.map((c) => ({
+            type: c.type as SalesChargeType,
+            amount: normaliseAmount(c.amount.toString()),
+          })),
+        }).payable;
+
+  const sumRefunds = (status: SalesRefundStatus): string =>
+    (order.refunds ?? [])
+      .filter((refund) => refund.status === status)
+      .reduce((running, refund) => addAmount(running, normaliseAmount(refund.amount.toString())), '0.00');
+
+  const refunded = sumRefunds('COMPLETED');
+  const refundPending = sumRefunds('PENDING');
+
+  /*
+    Money the customer has paid that the remaining order no longer accounts for
+    and nobody has yet promised back. Cancelling produces this figure; it never
+    produces a refund — that is a decision somebody records.
+
+    Clamped at zero on both sides: an order with nothing cancelled owes nothing
+    back, and one whose refunds already cover the surplus owes nothing more.
+  */
+  const surplus = subtractAmount(paid, activeTotal);
+  const promised = addAmount(refunded, refundPending);
+  const refundable =
+    compareAmount(surplus, promised) > 0 ? subtractAmount(surplus, promised) : '0.00';
 
   return {
     total: totals.payable,
@@ -310,8 +488,22 @@ export function toMoney(
     chargesTotal: totals.chargesTotal,
     discountTotal: totals.discountTotal,
     paid,
-    pending: subtractAmount(totals.payable, paid),
-    fullyPaid: compareAmount(paid, totals.payable) >= 0,
+    // How it arrived, not how much. Nothing above is derived from it.
+    paymentMethod: (order.paymentMethod as PaymentMethod | null) ?? null,
+    /*
+      What is still owed on what the customer is actually getting. Identical to
+      total − paid on any order with nothing cancelled, and clamped at zero
+      because once units are called off the customer can be ahead rather than
+      behind — that surplus is `refundable` above, not a negative debt.
+    */
+    pending:
+      compareAmount(activeTotal, paid) > 0 ? subtractAmount(activeTotal, paid) : '0.00',
+    activeTotal,
+    cancelledTotal: subtractAmount(totals.payable, activeTotal),
+    refundable,
+    refunded,
+    refundPending,
+    fullyPaid: compareAmount(paid, activeTotal) >= 0,
     currency: 'INR',
     activeItemCount: active.length,
     pendingApprovalCount: awaiting.length,
@@ -347,13 +539,34 @@ const lineTax = (row: {
     gstMode: row.gstMode as GstMode,
   });
 
+/**
+ * The catalogue image for a line, where the RS Product has one.
+ *
+ * Deliberately NOT a MediaRef: a MediaAsset is an upload this order owns, with
+ * an id and a Cloudinary publicId behind it, and a catalogue image is neither.
+ * Presenting one as the other would invite code downstream to treat a Shopify
+ * URL as something this order can delete or replace. It travels as what it is —
+ * a reference — and the line's own upload always outranks it.
+ */
+const toCatalogueImage = (
+  rsProduct: { images: { url: string; altText: string | null }[] } | null | undefined,
+): CatalogueImageRef | null => {
+  const first = rsProduct?.images[0];
+  return first ? { url: first.url, altText: first.altText } : null;
+};
+
 function toItem(row: DetailRow['items'][number]): SalesOrderItemView {
   return {
     id: row.id,
     lineNo: row.lineNo,
     productName: row.productName,
     image: (row.productImage as MediaRef | null) ?? null,
+    /* A reference, not an upload. Null whenever the line owns one. */
+    catalogueImage: row.productImage ? null : toCatalogueImage(row.rsProduct),
+    /* What was ORDERED. A cancellation never reduces it — see cancelledQty. */
     quantity: row.quantity,
+    cancelledQty: row.cancelledQty,
+    remainingQty: row.quantity - row.cancelledQty,
     price: normaliseAmount(row.price.toString()),
     // quantity × price. GST is deliberately not a term in it.
     lineTotal: totalOfLine(row),
@@ -389,6 +602,13 @@ function toSummary(row: SummaryRow, now: Date): SalesOrderSummary {
     customer: row.customer as CustomerRef,
     leadProductName: lead ? `${lead.productName}${extra}` : '—',
     thumbnail: (active.find((i) => i.productImage)?.productImage as MediaRef | null) ?? null,
+    /*
+      Only consulted when no line on the order carries an upload of its own, so
+      a manually uploaded image is never displaced by a catalogue one.
+    */
+    catalogueThumbnail: active.some((i) => i.productImage)
+      ? null
+      : toCatalogueImage(active.find((i) => i.rsProduct?.images.length)?.rsProduct),
     money: toMoney(row, row.items, row.charges),
     status: row.status,
     efficiency: row.efficiency,
@@ -400,6 +620,77 @@ function toSummary(row: SummaryRow, now: Date): SalesOrderSummary {
   };
 }
 
+/**
+ * A proposed charge set, shown beside what it would replace.
+ *
+ * `proposedCharges` is Json, so it is cast rather than trusted: the service
+ * re-validates it against the shared schema before it is ever applied, and this
+ * only has to render it. A malformed row would show as an empty proposal rather
+ * than take the page down.
+ */
+function toChargeChangeRequest(
+  row: DetailRow['chargeChangeRequests'][number],
+  current: SalesChargeView[],
+): SalesChargeChangeRequestView {
+  const proposed = Array.isArray(row.proposedCharges)
+    ? (row.proposedCharges as unknown as {
+        type: SalesChargeType;
+        label?: string | null;
+        amount: string;
+      }[])
+    : [];
+
+  const signed = (type: SalesChargeType, amount: string): string =>
+    type === DISCOUNT_CHARGE_TYPE ? `-${normaliseAmount(amount)}` : normaliseAmount(amount);
+
+  return {
+    id: row.id,
+    status: row.status,
+    current,
+    currentTotal: sumAmounts(current.map((c) => signed(c.type, c.amount))),
+    proposed: proposed.map((c) => ({
+      type: c.type,
+      label: c.label ?? null,
+      amount: normaliseAmount(c.amount),
+    })),
+    proposedTotal: sumAmounts(proposed.map((c) => signed(c.type, c.amount))),
+    requestedBy: row.requestedBy as UserRef,
+    requestedAt: iso(row.requestedAt),
+    reviewedBy: (row.reviewedBy as UserRef | null) ?? null,
+    reviewedAt: row.reviewedAt ? iso(row.reviewedAt) : null,
+    reviewNote: row.reviewNote,
+  };
+}
+
+/** One instalment, as the API reports it. */
+function toPayment(row: DetailRow['payments'][number]): SalesPaymentView {
+  return {
+    id: row.id,
+    amount: normaliseAmount(row.amount.toString()),
+    method: (row.method as PaymentMethod | null) ?? null,
+    reference: row.reference,
+    note: row.note,
+    recordedBy: row.recordedBy as UserRef,
+    recordedAt: iso(row.recordedAt),
+  };
+}
+
+/** One refund, and how far it has got. */
+function toRefund(row: DetailRow['refunds'][number]): SalesRefundView {
+  return {
+    id: row.id,
+    amount: normaliseAmount(row.amount.toString()),
+    status: row.status,
+    reason: row.reason,
+    reference: row.reference,
+    note: row.note,
+    requestedBy: row.requestedBy as UserRef,
+    requestedAt: iso(row.requestedAt),
+    settledBy: (row.settledBy as UserRef | null) ?? null,
+    settledAt: row.settledAt ? iso(row.settledAt) : null,
+  };
+}
+
 function toDetail(row: DetailRow, now: Date): SalesOrderDetail {
   return {
     id: row.id,
@@ -408,7 +699,12 @@ function toDetail(row: DetailRow, now: Date): SalesOrderDetail {
     items: row.items.map(toItem),
     charges: row.charges.map(toCharge),
     changeRequests: row.changeRequests.map(toChangeRequest),
+    chargeChangeRequests: row.chargeChangeRequests.map((r) =>
+      toChargeChangeRequest(r, row.charges.map(toCharge)),
+    ),
     money: toMoney(row, row.items, row.charges),
+    payments: row.payments.map(toPayment),
+    refunds: row.refunds.map(toRefund),
     status: row.status,
     efficiency: row.efficiency,
     orderDate: iso(row.orderDate),
@@ -416,6 +712,9 @@ function toDetail(row: DetailRow, now: Date): SalesOrderDetail {
     dispatchedAt: row.dispatchedAt ? iso(row.dispatchedAt) : null,
     closedAt: row.closedAt ? iso(row.closedAt) : null,
     closedBy: (row.closedBy as UserRef | null) ?? null,
+    cancelledAt: row.cancelledAt ? iso(row.cancelledAt) : null,
+    cancelledBy: (row.cancelledBy as UserRef | null) ?? null,
+    cancellationReason: row.cancellationReason,
     overdue: isOverdue(now, row.toBeDispatchedBy, row.dispatchedAt),
     createdBy: row.createdBy as UserRef,
     createdAt: iso(row.createdAt),
@@ -473,13 +772,45 @@ export function findForPolicy(
  * Reads through the transaction client so it sees this transaction's own
  * uncommitted writes — a charge added moments earlier counts immediately.
  */
+/**
+ * The order's whole money view, recomputed inside a caller's transaction.
+ *
+ * The refund ceiling needs `refundable`, which is derived from the remaining
+ * quantities, the charges and the refunds already recorded — every term of it
+ * already defined once in `toMoney`. Reading it back through the same function
+ * is what stops a second, drifting definition of "how much can still be
+ * returned" appearing in the refund service.
+ */
+export async function moneyForOrder(
+  tx: Prisma.TransactionClient,
+  orderId: string,
+): Promise<SalesMoneyView> {
+  const order = await tx.salesOrder.findUnique({
+    where: { id: orderId },
+    select: {
+      paidAmount: true,
+      paymentMethod: true,
+      status: true,
+      customer: { select: { state: true, country: true } },
+      refunds: { select: { amount: true, status: true } },
+      items: {
+        select: { quantity: true, cancelledQty: true, price: true, gstRate: true, gstMode: true, status: true },
+      },
+      charges: { select: { type: true, amount: true } },
+    },
+  });
+  if (!order) throw new Error(`Sales order ${orderId} vanished inside its own transaction`);
+
+  return toMoney(order, order.items, order.charges);
+}
+
 export async function activeTotal(
   tx: Prisma.TransactionClient,
   orderId: string,
 ): Promise<string> {
   const order = await tx.salesOrder.findUnique({
     where: { id: orderId },
-    select: { customer: { select: { state: true } } },
+    select: { customer: { select: { state: true, country: true } } },
   });
   if (!order) return '0.00';
 
@@ -495,7 +826,7 @@ export async function activeTotal(
   ]);
 
   const { payable } = computeSalesTotals({
-    split: taxSplitFor(env.SELLER_STATE ?? null, order.customer.state),
+    split: taxSplitFor(env.SELLER_STATE ?? null, order.customer),
     items: items.map((item) => ({
       quantity: item.quantity,
       price: normaliseAmount(item.price.toString()),
@@ -562,6 +893,12 @@ export function findItemInOrder(
       id: true,
       lineNo: true,
       productName: true,
+      /*
+        The line's current RS Product, so a change request can tell a genuine
+        move from an edit that merely restates the mapping it already has.
+        Allocation is keyed on this value, so moving it is not a free edit.
+      */
+      rsProductId: true,
       quantity: true,
       price: true,
       status: true,

@@ -37,13 +37,13 @@ export function MobileNav({ items }: { items: NavItem[] }) {
       <SheetContent side="left">
         <SheetTitle>Navigation</SheetTitle>
 
-        <div className="flex h-16 items-center border-b border-line px-5">
+        <div className="flex h-16 shrink-0 items-center border-b border-line px-5">
           <Link href="/dashboard" aria-label="RoyalStuffs CRM home">
             <Logo size={30} />
           </Link>
         </div>
 
-        <nav className="flex-1 overflow-y-auto p-3" aria-label="Main">
+        <nav className="min-h-0 flex-1 overflow-y-auto p-3" aria-label="Main">
           <ul className="flex flex-col gap-0.5">
             {items.map((item) => {
               const active = pathname === item.href || pathname.startsWith(`${item.href}/`);

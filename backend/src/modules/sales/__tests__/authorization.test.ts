@@ -80,7 +80,22 @@ describe('authentication', () => {
   });
 });
 
-describe('ownership', () => {
+/*
+  Operational work on an order is the SALES EDIT capability and nothing
+  narrower.
+
+  These three cases used to assert the opposite — that a colleague who did not
+  create the order was refused an edit, a payment and a dispatch. That rule was
+  the reported defect rather than a protection: an order belongs to the
+  business, the person collecting a payment or sending the goods is routinely
+  not the person who typed the order in, and requiring the creator made the work
+  look Admin-only because in practice it was. The premise changed because the
+  rule did; nothing here was relaxed to make a failing test pass.
+
+  What still holds, and is asserted below rather than assumed: VIEW-only access
+  performs none of it, and a closed order refuses all of it.
+*/
+describe('who may work on an order', () => {
   it('lets any signed-in employee read any order', async () => {
     const order = await orderOwnedByOwner();
 
@@ -88,30 +103,75 @@ describe('ownership', () => {
     expect(res.status).toBe(200);
   });
 
-  it('refuses an edit by someone who did not create the order', async () => {
+  it('lets a colleague holding SALES EDIT move the dispatch date', async () => {
     const order = await orderOwnedByOwner();
+    const moved = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
 
-    const res = await api('PATCH', `/api/sales/${order.id}`, {
+    const res = await api<Wrapped>('PATCH', `/api/sales/${order.id}`, {
       token: strangerToken,
-      body: { productName: 'not yours' },
+      body: { toBeDispatchedBy: moved.toISOString() },
     });
-    expect(res.status).toBe(403);
-    expect(res.body.code).toBe('FORBIDDEN_SALES_ACCESS');
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.data!.order.toBeDispatchedBy.slice(0, 10)).toBe(
+      moved.toISOString().slice(0, 10),
+    );
   });
 
-  it('refuses a payment and a dispatch by a non-owner', async () => {
+  it('lets a colleague record a payment, and keeps the arithmetic right', async () => {
     const order = await orderOwnedByOwner();
 
-    expect(
-      (await api('POST', `/api/sales/${order.id}/payments`, {
-        token: strangerToken,
-        body: { amount: '10.00' },
-      })).status,
-    ).toBe(403);
+    const res = await api<Wrapped>('POST', `/api/sales/${order.id}/payments`, {
+      token: strangerToken,
+      body: { amount: '10.00', method: 'PREPAID' },
+    });
 
-    expect(
-      (await api('POST', `/api/sales/${order.id}/dispatch`, { token: strangerToken })).status,
-    ).toBe(403);
+    // 201: recording a payment creates something, as the route has always said.
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.body.data!.order.money.paid).toBe('10.00');
+  });
+
+  it('lets a colleague mark an order dispatched', async () => {
+    const order = await orderOwnedByOwner();
+
+    const res = await api<Wrapped>('POST', `/api/sales/${order.id}/dispatch`, {
+      token: strangerToken,
+    });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.data!.order.status).toBe('DISPATCHED');
+  });
+
+  it('refuses all three to somebody holding only SALES VIEW', async () => {
+    // The capability is what authorises the work, so revoking it has to stop
+    // every one of these — the route guard, not the ownership rule, is what
+    // keeps a read-only employee read-only.
+    const order = await orderOwnedByOwner();
+    await prisma.userModulePermission.create({
+      data: { userId: stranger.id, module: 'SALES', action: 'EDIT', allowed: false },
+    });
+
+    const edited = await api('PATCH', `/api/sales/${order.id}`, {
+      token: strangerToken,
+      body: { productName: 'not allowed' },
+    });
+    expect(edited.status).toBe(403);
+
+    const paid = await api('POST', `/api/sales/${order.id}/payments`, {
+      token: strangerToken,
+      body: { amount: '10.00' },
+    });
+    expect(paid.status).toBe(403);
+
+    const dispatched = await api('POST', `/api/sales/${order.id}/dispatch`, {
+      token: strangerToken,
+    });
+    expect(dispatched.status).toBe(403);
+
+    // And reading is untouched by the revocation.
+    expect((await api('GET', `/api/sales/${order.id}`, { token: strangerToken })).status).toBe(200);
+
+    await prisma.userModulePermission.deleteMany({ where: { userId: stranger.id } });
   });
 
   it('lets an admin act on an order they did not create', async () => {

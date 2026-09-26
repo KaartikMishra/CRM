@@ -4,6 +4,13 @@ import { Boxes, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { PageHeader } from '@/components/common/page-header';
+import {
+  ContentPage,
+  ContentPageHeader,
+  ContentRegion,
+  ContentScrollArea,
+  contentCard,
+} from '@/components/common/content-page';
 import { EmptyState } from '@/components/common/empty-state';
 import { ErrorMessage } from '@/components/common/error-message';
 import { ProductChangeQueue } from '@/components/procurement/product-change-queue';
@@ -51,22 +58,24 @@ export default async function ProcurementPage({ searchParams }: { searchParams: 
   ]);
 
   return (
-    <div className="flex flex-col gap-6">
-      <PageHeader
-        eyebrow="Operations"
-        title="Purchase & Procurement"
-        description="What still has to be bought, the bills that cover it, and where the stock is going."
-        actions={
-          canCreate && (
-            <Button asChild>
-              <Link href="/procurement/new">
-                <Plus className="size-4" />
-                Add Purchase Bill
-              </Link>
-            </Button>
-          )
-        }
-      />
+    <ContentPage>
+      <ContentPageHeader>
+        <PageHeader
+          eyebrow="Operations"
+          title="Purchase & Procurement"
+          description="What still has to be bought, the bills that cover it, and where the stock is going."
+          actions={
+            canCreate && (
+              <Button asChild>
+                <Link href="/procurement/new">
+                  <Plus className="size-4" />
+                  Add Purchase Bill
+                </Link>
+              </Button>
+            )
+          }
+        />
+      </ContentPageHeader>
 
       {/*
         The Sales section is gone from this page.
@@ -81,12 +90,22 @@ export default async function ProcurementPage({ searchParams }: { searchParams: 
         sidebar entry and API are exactly as they were. Only this page's copy of
         that information was removed.
       */}
+
+      {/*
+        Each section below is its own scroll region, deliberately.
+
+        Requirement vs stock and the purchase bills are read against each other —
+        what still has to be bought, and what has been bought to cover it. One
+        shared scrollbar would carry the second off the screen while somebody
+        reads to the end of the first, which is the one thing this page must not
+        do. They share the height instead, and each scrolls on its own.
+      */}
       {canReview && <ProductChangeQueue changes={productChanges} />}
 
       <ShortageBoard rows={shortages} />
 
-      <section className="flex flex-col gap-3">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-muted">
+      <ContentRegion fill={result.success && result.data.bills.length > 0}>
+        <h2 className="shrink-0 text-sm font-semibold uppercase tracking-wider text-muted">
           Purchase bills
         </h2>
 
@@ -111,11 +130,13 @@ export default async function ProcurementPage({ searchParams }: { searchParams: 
             />
           </Card>
         ) : (
-          <Card className="overflow-hidden">
-            <PurchaseBillTable bills={result.data.bills} />
+          <Card className={contentCard}>
+            <ContentScrollArea>
+              <PurchaseBillTable bills={result.data.bills} />
+            </ContentScrollArea>
           </Card>
         )}
-      </section>
-    </div>
+      </ContentRegion>
+    </ContentPage>
   );
 }

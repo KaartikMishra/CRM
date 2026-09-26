@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  PAYMENT_METHODS,
   GST_MODES,
   GST_RATES,
   HSN_CODE_MAX_LENGTH,
@@ -7,8 +8,10 @@ import {
   SALES_CHARGE_LABEL_MAX_LENGTH,
   SALES_CHARGE_MAX,
   SALES_CHARGE_TYPES,
+  SALES_CANCELLATION_REASON_MAX_LENGTH,
   SALES_ORDER_ID_MAX_LENGTH,
   SALES_ORDER_ID_PATTERN,
+  SALES_PAYMENT_REFERENCE_MAX_LENGTH,
 } from '../constants/index.js';
 import { SALES_EFFICIENCIES, SALES_ORDER_STATUSES } from '../enums.js';
 import { addAmount, compareAmount, isValidAmount, lineTotal } from '../utils/money.js';
@@ -184,10 +187,38 @@ export const createSalesOrderSchema = z
     /** Partial payments are allowed, including none at all. */
     charges: salesChargesSchema,
     paidAmount: amountSchema.default('0.00'),
+    /**
+     * Optional on the wire, and required below exactly when money is recorded.
+     *
+     * Optional rather than defaulted, because COD with nothing paid yet and "no
+     * payment arrangement recorded" are different statements and an order may
+     * legitimately be either.
+     */
+    paymentMethod: z.enum(PAYMENT_METHODS).optional(),
     orderDate: z.coerce.date({ invalid_type_error: 'Enter a valid order date' }),
     toBeDispatchedBy: z.coerce.date({ invalid_type_error: 'Enter a valid dispatch deadline' }),
   })
   .superRefine((value, ctx) => {
+    /*
+      A payment taken at creation has to say how it arrived.
+
+      Only when money actually changes hands: an order created with nothing paid
+      needs no method, which is what keeps this from becoming a field everybody
+      has to answer for no reason. The service enforces the same rule, because a
+      request need not come from the form.
+    */
+    if (
+      isValidAmount(value.paidAmount) &&
+      compareAmount(value.paidAmount, '0.00') > 0 &&
+      !value.paymentMethod
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['paymentMethod'],
+        message: 'Choose how this payment was made',
+      });
+    }
+
     // Same-day dispatch is legitimate, so this is >= rather than >.
     if (value.toBeDispatchedBy < value.orderDate) {
       ctx.addIssue({
@@ -294,6 +325,142 @@ export const recordPaymentSchema = z.object({
     (value) => compareAmount(value, '0.00') > 0,
     'Enter a payment greater than zero',
   ),
+  /**
+   * Optional, and that is deliberate.
+   *
+   * The form always sends one — the control is required as soon as an amount is
+   * entered — but making it required *on the wire* would change more than it
+   * fixes. Validation runs before authorization, so a caller with no right to
+   * the order would start getting 422 where they used to get 403, which leaks
+   * that the order exists. Every payment recorded before this field existed
+   * would also have been refused on replay.
+   *
+   * Omitted means "the arrangement is unchanged": the order keeps the method it
+   * already had, which is the truthful reading for a second instalment on an
+   * order already marked COD. Given, it is checked against the list like
+   * anything else.
+   */
+  method: z.enum(PAYMENT_METHODS).optional(),
+
+  /**
+   * What names this payment in somebody else's system — a UTR for UPI or a
+   * bank transfer, a cheque number, a cash receipt.
+   *
+   * Free text and deliberately unpatterned: the shape differs per method and
+   * per bank, and a regex that rejected a valid reference would stop a real
+   * payment being recorded, which is worse than storing an odd-looking one.
+   * Trimmed, bounded, and optional because cash often has none.
+   */
+  reference: z.string().trim().min(1).max(SALES_PAYMENT_REFERENCE_MAX_LENGTH).optional(),
+
+  /** Anything else worth saying about this instalment. */
+  note: z.string().trim().max(500).optional(),
+});
+
+// ---------------------------------------------------------------------------
+//  Cancellation
+// ---------------------------------------------------------------------------
+
+/**
+ * Calling off a whole order.
+ *
+ * The reason is required, not optional. A cancellation is a financial event —
+ * it can make money refundable — and one with no stated reason is unauditable
+ * six months later when somebody asks why the customer was owed.
+ */
+export const cancelSalesOrderSchema = z.object({
+  reason: z
+    .string()
+    .trim()
+    .min(1, 'Say why this order is being cancelled')
+    .max(SALES_CANCELLATION_REASON_MAX_LENGTH),
+});
+
+/**
+ * Calling off part of an order: some units of some lines.
+ *
+ * Quantities rather than line ids alone, because a customer cancels one of
+ * three rather than the row. Each entry names a line and how many more of it
+ * to cancel; the service adds that to what is already cancelled and refuses
+ * anything that would take the total past what was ordered.
+ */
+export const cancelSalesItemsSchema = z.object({
+  reason: z
+    .string()
+    .trim()
+    .min(1, 'Say why these units are being cancelled')
+    .max(SALES_CANCELLATION_REASON_MAX_LENGTH),
+  lines: z
+    .array(
+      z.object({
+        itemId: cuidSchema,
+        /** How many MORE units to cancel, never the new cancelled total. */
+        quantity: z.coerce.number().int().min(1, 'Cancel at least one unit'),
+      }),
+    )
+    .min(1, 'Choose at least one product to cancel')
+    .max(MAX_ITEMS_PER_SALES_ORDER)
+    .superRefine((lines, ctx) => {
+      // Two entries for one line would have to be added together to be
+      // checked, and the caller almost certainly means one of them.
+      const seen = new Set<string>();
+      for (const line of lines) {
+        if (seen.has(line.itemId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'Each product may appear only once',
+          });
+          return;
+        }
+        seen.add(line.itemId);
+      }
+    }),
+});
+
+// ---------------------------------------------------------------------------
+//  Refunds
+// ---------------------------------------------------------------------------
+
+/**
+ * Recording that money is owed back. It does not move any.
+ *
+ * The amount is stated rather than derived from the cancellation: a business
+ * may refund less than the cancelled value (a restocking fee) or settle in
+ * instalments. What it may never do is exceed what is actually refundable,
+ * which the service computes and enforces.
+ */
+export const createSalesRefundSchema = z.object({
+  amount: amountSchema.refine(
+    (value) => compareAmount(value, '0.00') > 0,
+    'Enter a refund greater than zero',
+  ),
+  reason: z
+    .string()
+    .trim()
+    .min(1, 'Say why this money is being returned')
+    .max(SALES_CANCELLATION_REASON_MAX_LENGTH),
+  note: z.string().trim().max(500).optional(),
+});
+
+/**
+ * Marking a refund as actually sent.
+ *
+ * The reference is required here and nowhere else. Saying the money has gone
+ * without saying how it went is the one claim this system cannot check, so it
+ * is the one the database refuses — see sales_refund_completed_has_reference.
+ */
+export const settleSalesRefundSchema = z.object({
+  reference: z
+    .string()
+    .trim()
+    .min(1, 'Enter the reference the money went out with')
+    .max(SALES_PAYMENT_REFERENCE_MAX_LENGTH),
+  note: z.string().trim().max(500).optional(),
+});
+
+/** Refusing a refund. The note is the only record of why. */
+export const rejectSalesRefundSchema = z.object({
+  note: z.string().trim().max(500).optional(),
 });
 
 /**
@@ -331,4 +498,9 @@ export type SetSalesChargesInput = z.infer<typeof setSalesChargesSchema>;
 export type CreateChangeRequestInput = z.infer<typeof createChangeRequestSchema>;
 export type ReviewChangeRequestInput = z.infer<typeof reviewChangeRequestSchema>;
 export type RecordPaymentInput = z.infer<typeof recordPaymentSchema>;
+export type CancelSalesOrderInput = z.infer<typeof cancelSalesOrderSchema>;
+export type CancelSalesItemsInput = z.infer<typeof cancelSalesItemsSchema>;
+export type CreateSalesRefundInput = z.infer<typeof createSalesRefundSchema>;
+export type SettleSalesRefundInput = z.infer<typeof settleSalesRefundSchema>;
+export type RejectSalesRefundInput = z.infer<typeof rejectSalesRefundSchema>;
 export type SalesOrderListQuery = z.infer<typeof salesOrderListQuerySchema>;

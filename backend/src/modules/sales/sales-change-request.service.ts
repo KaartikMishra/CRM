@@ -47,6 +47,47 @@ const itemNotFound = (): AppError =>
   AppError.notFound('SALES_ITEM_NOT_FOUND', 'That product line could not be found.');
 
 /**
+ * Refuses a change to a line that already holds purchased stock.
+ *
+ * A PurchaseAllocation joins a purchase bill line to an order line and takes
+ * those goods out of free CRM stock in the same transaction, under the same
+ * lock. Two things therefore cannot happen through this workflow:
+ *
+ *   - moving the line to a different RS Product would leave the allocations
+ *     standing against goods the order no longer asks for. Procurement refuses
+ *     the mirror-image move on its own side for exactly this reason, twice,
+ *     with PURCHASE_LINE_HAS_ALLOCATIONS;
+ *
+ *   - deleting the line would cascade its PurchaseAllocation rows away — the
+ *     relation is onDelete: Cascade — without Procurement's reconcile ever
+ *     running, leaving PurchaseBillItem.stockedQty claiming stock that is no
+ *     longer committed to anybody and CRM stock under-reporting the goods that
+ *     were just released.
+ *
+ * It refuses rather than reconciling, deliberately. Releasing an allocation is
+ * Procurement's own operation and already restores the stock exactly once, so
+ * doing the arithmetic here would put a second writer on a figure whose whole
+ * design rests on having one. Procurement stays the only writer of CRM stock.
+ */
+async function assertNoAllocations(
+  tx: Prisma.TransactionClient,
+  itemId: string,
+  action: 'remapped' | 'removed',
+): Promise<void> {
+  const allocated = await tx.purchaseAllocation.count({
+    where: { salesOrderItemId: itemId },
+  });
+  if (allocated === 0) return;
+
+  throw AppError.conflict(
+    'ORDER_LINE_HAS_ALLOCATIONS',
+    action === 'removed'
+      ? 'Purchased stock is allocated to this product line. Release those allocations in Procurement before removing it.'
+      : 'Purchased stock is allocated to this product line. Release those allocations in Procurement before moving it to a different RS Product.',
+  );
+}
+
+/**
  * Refuses a decision that would leave the order worth less than has been paid.
  *
  * Checked here as well as by the deferred money-guard trigger, so the reviewer
@@ -109,6 +150,21 @@ export async function createChangeRequest(
       // alone would let a caller attach a request to someone else's product.
       const item = await repo.findItemInOrder(tx, orderId, input.itemId);
       if (!item) throw itemNotFound();
+
+      /*
+        Said now rather than only at approval, the way Procurement says it when
+        a product change is filed against an allocated purchase line. A
+        proposal that could never be granted is not worth recording, and the
+        person asking finds out while they still have the dialog open.
+
+        An edit that names the product the line already has is not a move, and
+        an edit that names none keeps the mapping it has — neither is refused.
+      */
+      if (input.type === 'REMOVE') {
+        await assertNoAllocations(tx, item.id, 'removed');
+      } else if (input.rsProductId && input.rsProductId !== item.rsProductId) {
+        await assertNoAllocations(tx, item.id, 'remapped');
+      }
 
       const open = await tx.salesItemChangeRequest.findFirst({
         where: { itemId: input.itemId, status: 'PENDING' },
@@ -253,6 +309,20 @@ async function review(
       // Re-read under the lock: the line could have gone since the request.
       const item = await repo.findItemInOrder(tx, orderId, request.itemId!);
       if (!item) throw itemNotFound();
+
+      /*
+        THE AUTHORITATIVE CHECK. Re-read under the lock rather than trusted
+        from the filing, because stock can be allocated through this line while
+        the request waits — which is precisely why Procurement re-checks its
+        own mirror of this at the moment of the write as well.
+      */
+      if (request.type === 'EDIT') {
+        if (request.rsProductId && request.rsProductId !== item.rsProductId) {
+          await assertNoAllocations(tx, item.id, 'remapped');
+        }
+      } else {
+        await assertNoAllocations(tx, item.id, 'removed');
+      }
 
       if (request.type === 'EDIT') {
         await tx.salesOrderItem.update({

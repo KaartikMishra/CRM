@@ -85,8 +85,19 @@ export type ProductMatchType = (typeof PRODUCT_MATCH_TYPES)[number];
  * An order is dispatched before it is closed, so every closed order carries a
  * frozen efficiency verdict. There is no reopen.
  */
-export const SALES_ORDER_STATUSES = ['OPEN', 'DISPATCHED', 'CLOSED'] as const;
+export const SALES_ORDER_STATUSES = ['OPEN', 'DISPATCHED', 'CLOSED', 'CANCELLED'] as const;
 export type SalesOrderStatus = (typeof SALES_ORDER_STATUSES)[number];
+
+/**
+ * Where a refund has got to.
+ *
+ * PENDING is a decision recorded, not money moved: there is no payment gateway
+ * behind this CRM, so COMPLETED means somebody sent the money and named the
+ * reference it went out with. Keeping the two apart is the point — an order can
+ * be cancelled, its refund agreed, and the customer still be owed.
+ */
+export const SALES_REFUND_STATUSES = ['PENDING', 'COMPLETED', 'REJECTED'] as const;
+export type SalesRefundStatus = (typeof SALES_REFUND_STATUSES)[number];
 
 /**
  * The dispatch verdict, frozen when the order is dispatched.

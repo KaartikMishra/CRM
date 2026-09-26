@@ -21,6 +21,13 @@ export type PickerOption = {
   /** Contact details, when the searched master carries them. Customers do. */
   phone?: string | null;
   email?: string | null;
+  /**
+   * Where the customer is. Carried so the order form can work out which GST
+   * heads apply before the order exists — the search already returns both, and
+   * dropping them here was what forced the form to assume an intra-state sale.
+   */
+  state?: string | null;
+  country?: string | null;
 };
 
 /**
@@ -80,6 +87,8 @@ export function EntityPicker({
                 city?: string;
                 phone?: string | null;
                 email?: string | null;
+                state?: string | null;
+                country?: string | null;
               }) => ({
                 id: row.id,
                 label: row.name,
@@ -88,6 +97,8 @@ export function EntityPicker({
                 // Product Enquiry ignores these; the customer search returns them.
                 phone: row.phone ?? null,
                 email: row.email ?? null,
+                state: row.state ?? null,
+                country: row.country ?? null,
               }),
             ),
           );

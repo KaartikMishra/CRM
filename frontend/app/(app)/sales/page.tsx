@@ -4,6 +4,13 @@ import { Plus, ShoppingCart } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { PageHeader } from '@/components/common/page-header';
+import {
+  ContentPage,
+  ContentPageHeader,
+  ContentRegion,
+  ContentScrollArea,
+  contentCard,
+} from '@/components/common/content-page';
 import { EmptyState } from '@/components/common/empty-state';
 import { ErrorMessage } from '@/components/common/error-message';
 import { SalesFilters } from '@/components/sales/sales-filters';
@@ -48,24 +55,26 @@ export default async function SalesListPage({ searchParams }: { searchParams: Se
   );
 
   return (
-    <div className="flex flex-col gap-6">
-      <PageHeader
-        eyebrow="Operations"
-        title="Sales"
-        description="Customer orders, their payments and their dispatch commitments."
-        actions={
-          canCreate && (
-            <Button asChild>
-              <Link href="/sales/new">
-                <Plus className="size-4" />
-                New Order
-              </Link>
-            </Button>
-          )
-        }
-      />
+    <ContentPage>
+      <ContentPageHeader>
+        <PageHeader
+          eyebrow="Operations"
+          title="Sales"
+          description="Customer orders, their payments and their dispatch commitments."
+          actions={
+            canCreate && (
+              <Button asChild>
+                <Link href="/sales/new">
+                  <Plus className="size-4" />
+                  New Order
+                </Link>
+              </Button>
+            )
+          }
+        />
 
-      <SalesFilters customers={customers} />
+        <SalesFilters customers={customers} />
+      </ContentPageHeader>
 
       {!result.success ? (
         <ErrorMessage message={result.message} code={result.code} />
@@ -93,23 +102,27 @@ export default async function SalesListPage({ searchParams }: { searchParams: Se
           />
         </Card>
       ) : (
-        <Card className="overflow-hidden">
-          <SalesOrderTable orders={result.data.orders} />
+        <ContentRegion>
+          <Card className={contentCard}>
+            <ContentScrollArea>
+              <SalesOrderTable orders={result.data.orders} />
+            </ContentScrollArea>
 
-          {meta.nextCursor && (
-            <div className="flex items-center justify-between border-t border-line px-4 py-3">
-              <span className="text-xs text-muted">
-                Showing {result.data.orders.length} orders
-              </span>
-              <Button variant="outline" size="sm" asChild>
-                <Link href={{ pathname: '/sales', query: { ...params, cursor: meta.nextCursor } }}>
-                  Next page
-                </Link>
-              </Button>
-            </div>
-          )}
-        </Card>
+            {meta.nextCursor && (
+              <div className="flex shrink-0 items-center justify-between border-t border-line px-4 py-3">
+                <span className="text-xs text-muted">
+                  Showing {result.data.orders.length} orders
+                </span>
+                <Button variant="outline" size="sm" asChild>
+                  <Link href={{ pathname: '/sales', query: { ...params, cursor: meta.nextCursor } }}>
+                    Next page
+                  </Link>
+                </Button>
+              </div>
+            )}
+          </Card>
+        </ContentRegion>
       )}
-    </div>
+    </ContentPage>
   );
 }

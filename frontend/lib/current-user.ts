@@ -27,6 +27,14 @@ export type CurrentUser = {
   employeeId: string;
   role: Role;
   permissions: Permission[];
+  /**
+   * The seller's registered State, from server configuration.
+   *
+   * Here rather than in a form's own env because the browser has no other
+   * way to know it, and without it the new-order preview cannot tell an
+   * intra-state sale from an inter-state one. Null when unconfigured.
+   */
+  sellerState: string | null;
 };
 
 export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {

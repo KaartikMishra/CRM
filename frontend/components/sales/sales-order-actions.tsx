@@ -4,9 +4,12 @@ import { useState, useTransition } from 'react';
 import { CheckCircle2, Loader2, Pencil, Truck, Wallet } from 'lucide-react';
 import { toast } from 'sonner';
 import {
+  PAYMENT_METHODS,
+  PAYMENT_METHOD_LABELS,
   compareAmount,
   isValidAmount,
   normaliseAmount,
+  type PaymentMethod,
   type SalesOrderDetail,
 } from '@rs/shared';
 import {
@@ -30,6 +33,14 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Textarea } from '@/components/ui/textarea';
 import { formatCurrency, formatDate } from '@/lib/format';
 import {
   closeOrderAction,
@@ -38,6 +49,8 @@ import {
   updateSalesOrderAction,
 } from '@/app/(app)/sales/actions';
 import { MoneySummary } from './money-summary';
+import { CancelItemsDialog } from './cancel-items-dialog';
+import { CancelOrderDialog } from './cancel-order-dialog';
 
 type Props = {
   order: SalesOrderDetail;
@@ -45,6 +58,8 @@ type Props = {
   canEdit: boolean;
   canDispatch: boolean;
   canClose: boolean;
+  /** Mirrors canCancelOrder: SALES EDIT on an order that is not settled. */
+  canCancel: boolean;
 };
 
 /** The date inputs want yyyy-mm-dd, not an ISO instant. */
@@ -57,10 +72,24 @@ const asDateInput = (iso: string): string => iso.slice(0, 10);
  * or balance is changed locally. Buttons are disabled where the backend would
  * refuse anyway, which is a courtesy; the API enforces all of it again.
  */
-export function SalesOrderActions({ order, canEdit, canDispatch, canClose }: Props) {
+export function SalesOrderActions({
+  order,
+  canEdit,
+  canDispatch,
+  canClose,
+  canCancel,
+}: Props) {
   const [pending, startTransition] = useTransition();
   const [payOpen, setPayOpen] = useState(false);
   const [amount, setAmount] = useState('');
+  /*
+    What arrived, and what names it elsewhere. Both travel with the instalment
+    rather than with the order — an order collected in three payments has three
+    references, which is exactly why SalesPayment is a table.
+  */
+  const [method, setMethod] = useState<PaymentMethod | ''>('');
+  const [reference, setReference] = useState('');
+  const [paymentNote, setPaymentNote] = useState('');
   const [confirm, setConfirm] = useState<'dispatch' | 'close' | null>(null);
   const [editOpen, setEditOpen] = useState(false);
 
@@ -90,10 +119,21 @@ export function SalesOrderActions({ order, canEdit, canDispatch, canClose }: Pro
   function submitPayment() {
     if (!amountUsable || overpaying) return;
     startTransition(async () => {
-      const result = await recordPaymentAction(order.id, normaliseAmount(amount.trim()));
+      const result = await recordPaymentAction(order.id, {
+        amount: normaliseAmount(amount.trim()),
+        // Omitted rather than sent empty: the API reads an absent method as
+        // "the arrangement is unchanged", which is right for a second
+        // instalment on an order already marked COD.
+        ...(method ? { method } : {}),
+        ...(reference.trim() ? { reference: reference.trim() } : {}),
+        ...(paymentNote.trim() ? { note: paymentNote.trim() } : {}),
+      });
       if (relay(result, 'Payment recorded')) {
         setPayOpen(false);
         setAmount('');
+        setMethod('');
+        setReference('');
+        setPaymentNote('');
       }
     });
   }
@@ -169,6 +209,24 @@ export function SalesOrderActions({ order, canEdit, canDispatch, canClose }: Pro
             balance is settled.
           </span>
         )}
+
+        {/*
+          Calling the order off, in part or in whole. Pushed to the right so the
+          two destructive actions sit apart from the ones that move an order
+          forward, rather than beside Dispatch where a slip is expensive.
+
+          "Cancel items" is offered only while something is left to cancel —
+          on an order with every unit already called off it would open a dialog
+          with nothing in it.
+        */}
+        {canCancel && (
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            {order.items.some((item) => item.remainingQty > 0) && (
+              <CancelItemsDialog order={order} />
+            )}
+            <CancelOrderDialog order={order} />
+          </div>
+        )}
       </div>
 
       {/* ---------------- Record payment ---------------- */}
@@ -205,6 +263,47 @@ export function SalesOrderActions({ order, canEdit, canDispatch, canClose }: Pro
                 {formatCurrency(order.money.pending, order.money.currency)} outstanding.
               </p>
             )}
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="paymentMethod">How it arrived</Label>
+              <Select value={method} onValueChange={(next) => setMethod(next as PaymentMethod)}>
+                <SelectTrigger id="paymentMethod">
+                  <SelectValue placeholder="Unchanged" />
+                </SelectTrigger>
+                <SelectContent>
+                  {PAYMENT_METHODS.map((option) => (
+                    <SelectItem key={option} value={option}>
+                      {PAYMENT_METHOD_LABELS[option]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="paymentReference">Reference</Label>
+              <Input
+                id="paymentReference"
+                value={reference}
+                onChange={(e) => setReference(e.target.value)}
+                placeholder="UTR, cheque no."
+                maxLength={120}
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="paymentNote">Note</Label>
+            <Textarea
+              id="paymentNote"
+              value={paymentNote}
+              onChange={(e) => setPaymentNote(e.target.value)}
+              placeholder="Optional — anything worth recording about this instalment."
+              rows={2}
+              maxLength={500}
+            />
           </div>
 
           <DialogFooter>

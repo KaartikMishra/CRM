@@ -148,17 +148,22 @@ export function MoneyBreakdown({
             The heads, once, at the end. Intra-state splits in two; inter-state
             is a single head at the whole rate. Naming them wrongly on a
             document somebody files is the thing to avoid.
+
+            NONE is reachable on historical orders only — a customer abroad who
+            was given a slab before the rule existed. Those figures are shown
+            unchanged, because an issued document is not rewritten here, but
+            they are not labelled CGST or IGST: the supply carries no Indian
+            head, and naming one would be the error this block exists to avoid.
           */}
           <div className="flex flex-col gap-1 border-t border-line pt-3">
             <Row label="Total GST" value={taxTotal} strong />
-            {taxSplit === 'CGST_SGST' ? (
+            {taxSplit === 'CGST_SGST' && (
               <>
                 <Row label="CGST" value={cgstTotal} indent />
                 <Row label="SGST" value={sgstTotal} indent />
               </>
-            ) : (
-              <Row label="IGST" value={igstTotal} indent />
             )}
+            {taxSplit === 'IGST' && <Row label="IGST" value={igstTotal} indent />}
           </div>
         </div>
       )}

@@ -7,6 +7,8 @@ import { toast } from 'sonner';
 import {
   CUSTOMER_TYPES,
   GST_RATES,
+  PAYMENT_METHODS,
+  PAYMENT_METHOD_LABELS,
   GST_RATE_LABELS,
   HSN_CODE_MAX_LENGTH,
   COUNTRIES,
@@ -24,12 +26,15 @@ import {
   lineTotal,
   subtractAmount,
   computeSalesTotals,
+  compareAmount,
+  taxSplitFor,
   sumItemTotals,
   GST_MODES,
   GST_MODE_LABELS,
   type CreateSalesOrderInput,
   type GstMode,
   type GstRate,
+  type PaymentMethod,
 } from '@rs/shared';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -43,6 +48,11 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  CountryStateFields,
+  customerStateError,
+  customerStateOk,
+} from '@/components/customers/country-state-fields';
 import {
   Select,
   SelectContent,
@@ -130,7 +140,16 @@ const emptyItem = (key: string): ItemDraft => ({
  * of their own; showing them live is a preview computed with the same exact
  * decimal helpers the server uses, never a value that gets submitted.
  */
-export function CreateSalesOrderForm() {
+export function CreateSalesOrderForm({
+  sellerState,
+}: {
+  /**
+   * The seller's registered State, from server configuration by way of the
+   * session. Null when SELLER_STATE is unset, which taxSplitFor reads as
+   * "nothing to compare" and answers with the intra-state heads.
+   */
+  sellerState: string | null;
+}) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const formId = useId();
@@ -142,6 +161,8 @@ export function CreateSalesOrderForm() {
 
   const [charges, setCharges] = useState<ChargeDraft[]>([]);
   const [paidAmount, setPaidAmount] = useState('');
+  /** Blank until a payment is entered: an unpaid order states no method. */
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | ''>('');
   const [orderDate, setOrderDate] = useState(today);
   const [dispatchBy, setDispatchBy] = useState(today);
 
@@ -180,7 +201,14 @@ export function CreateSalesOrderForm() {
   // The dropdown can only offer names the schema accepts, so this holds
   // by construction; it is checked anyway so the rule lives in one place and a
   // future change to the options cannot quietly diverge from the server.
-  const stateOk = newCustomerState === '' || customerStateSchema.safeParse(newCustomerState).success;
+  /*
+    State belongs to India and only to India, so it follows the country rather
+    than standing beside it. Within India it is required; outside it must be
+    blank, which is why changing the country away from India clears it rather
+    than merely disabling the control — a disabled field still holds its value,
+    and that value would be submitted.
+  */
+  const stateOk = customerStateOk(newCustomerCountry, newCustomerState);
   const companyOk =
     newCustomerCompany.trim() === '' ||
     customerCompanySchema.safeParse(newCustomerCompany).success;
@@ -188,6 +216,41 @@ export function CreateSalesOrderForm() {
     newCustomerGst.trim() === '' || customerGstSchema.safeParse(newCustomerGst).success;
   const customerReady =
     nameOk && companyOk && phoneOk && emailOk && addressOk && stateOk && gstOk;
+
+  /*
+    Which GST heads apply to this order.
+
+    `taxSplitFor` is the shared rule the API uses, called with the same two
+    facts the API calls it with: the seller's registered State, which now
+    travels with the session, and the customer being billed.
+
+    It used to be called with `null` for the seller, which made every Indian
+    customer read as intra-state — a Gujarat customer was shown CGST + SGST
+    however the seller was configured. The API is still what decides: it
+    recomputes the split from the same configuration and reports it on the
+    created order. This only stops the preview stating heads the invoice will
+    not carry.
+  */
+  const taxSplit = taxSplitFor(sellerState, {
+    state: customer?.state ?? null,
+    country: customer?.country ?? null,
+  });
+
+  /** No Indian GST for a customer abroad — the same rule the API enforces. */
+  const gstApplies = taxSplit !== 'NONE';
+
+  /*
+    Whether any money is being recorded at all.
+
+    Read from the amount rather than tracked separately, so the control cannot
+    disagree with the field it qualifies. Clearing the amount clears the method
+    with it: a disabled Select keeps its value, and submitting a method for an
+    order with nothing paid would say something untrue about it.
+  */
+  const paymentEntered =
+    paidAmount.trim() !== '' &&
+    isValidAmount(paidAmount.trim()) &&
+    compareAmount(paidAmount.trim(), '0.00') > 0;
 
   const atCap = items.length >= MAX_ITEMS_PER_SALES_ORDER;
 
@@ -226,14 +289,16 @@ export function CreateSalesOrderForm() {
     5% exclusive line and an 18% inclusive line on the same order each come
     out right.
 
-    The split is assumed intra-state here. The browser does not know the
-    seller's registered State, and CGST+SGST versus IGST changes only which
-    heads the tax is posted to, never the payable. The API reports the real
-    split back on the created order.
+    The split comes from the customer being billed, through the same shared
+    function the API uses — not from a constant. It changes only which heads the
+    tax is posted to, never the payable, but a preview that names the wrong
+    heads is a preview somebody will act on. The seller's own State is server
+    configuration, so the API still has the last word and reports the split back
+    on the created order.
   */
   const totals = allPriceable
     ? computeSalesTotals({
-        split: 'CGST_SGST',
+        split: taxSplit,
         items: items.map((i) => ({
           quantity: Number(i.quantity),
           price: i.price.trim(),
@@ -283,6 +348,9 @@ export function CreateSalesOrderForm() {
       // Order level, and only these: GST now travels on each line.
       charges: usableCharges(charges),
       paidAmount: paidAmount.trim() === '' ? '0' : paidAmount.trim(),
+      // Omitted when blank; the shared schema requires one only where
+      // money was actually taken, and an empty string is not a method.
+      ...(paymentMethod ? { paymentMethod } : {}),
       orderDate,
       toBeDispatchedBy: dispatchBy,
     };
@@ -337,7 +405,7 @@ export function CreateSalesOrderForm() {
     }
     if (!emailOk) errors.email = 'Enter a valid email address';
     if (!addressOk) errors.address = 'Keep the address under 500 characters';
-    if (!stateOk) errors.state = 'Choose a state';
+    if (!stateOk) errors.state = customerStateError(newCustomerCountry);
     if (!gstOk) {
       errors.gstNumber =
         customerGstSchema.safeParse(newCustomerGst).error?.issues[0]?.message ??
@@ -422,7 +490,27 @@ export function CreateSalesOrderForm() {
             <Label htmlFor="customer">Customer</Label>
             <EntityPicker
               value={customer}
-              onChange={setCustomer}
+              onChange={(next) => {
+                setCustomer(next);
+                /*
+                  Indian GST cannot be charged to a customer abroad, and the API
+                  refuses an order that tries. Lines already carrying a slab are
+                  reset here rather than left to fail at submission — picking the
+                  customer is the moment the rule becomes knowable.
+                */
+                if (
+                  taxSplitFor(sellerState, {
+                    state: next?.state ?? null,
+                    country: next?.country ?? null,
+                  }) === 'NONE'
+                ) {
+                  setItems((list) =>
+                    list.map((i) =>
+                      i.gstRate === 'NONE' ? i : { ...i, gstRate: 'NONE' as GstRate },
+                    ),
+                  );
+                }
+              }}
               endpoint="customers"
               placeholder="Search customers"
               emptyLabel="No customer found"
@@ -622,6 +710,7 @@ export function CreateSalesOrderForm() {
                         onValueChange={(value) =>
                           updateItem(item.key, { gstRate: value as GstRate })
                         }
+                        disabled={!gstApplies}
                       >
                         <SelectTrigger
                           id={`${formId}-gst-${item.key}`}
@@ -645,7 +734,11 @@ export function CreateSalesOrderForm() {
                       {err(`items.${index}.gstRate`) ? (
                         <p className="text-xs text-critical">{err(`items.${index}.gstRate`)}</p>
                       ) : (
-                        <p className="text-xs text-muted">The slab for this product.</p>
+                        <p className="text-xs text-muted">
+                          {gstApplies
+                            ? 'The slab for this product.'
+                            : `Indian GST does not apply to a customer in ${customer?.country}.`}
+                        </p>
                       )}
                     </div>
 
@@ -805,7 +898,11 @@ export function CreateSalesOrderForm() {
               id="paidAmount"
               inputMode="decimal"
               value={paidAmount}
-              onChange={(e) => setPaidAmount(e.target.value)}
+              onChange={(e) => {
+                setPaidAmount(e.target.value);
+                // Emptying the amount empties the method it described.
+                if (e.target.value.trim() === '') setPaymentMethod('');
+              }}
               placeholder="0.00"
               className="tabular"
             />
@@ -813,6 +910,39 @@ export function CreateSalesOrderForm() {
               <p className="text-xs text-critical">{err('paidAmount')}</p>
             ) : (
               <p className="text-xs text-muted">Partial payments are allowed</p>
+            )}
+          </div>
+
+          {/*
+            Asked for only once money is actually being recorded. An order with
+            nothing paid states no method, because there is nothing yet to state
+            one about — the API applies the same rule, and refuses a payment
+            that arrives without one.
+          */}
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="paymentMethod">Payment method</Label>
+            <Select
+              value={paymentMethod}
+              onValueChange={(next) => setPaymentMethod(next as PaymentMethod)}
+              disabled={!paymentEntered}
+            >
+              <SelectTrigger id="paymentMethod">
+                <SelectValue placeholder={paymentEntered ? 'Select method' : 'No payment entered'} />
+              </SelectTrigger>
+              <SelectContent>
+                {PAYMENT_METHODS.map((method) => (
+                  <SelectItem key={method} value={method}>
+                    {PAYMENT_METHOD_LABELS[method]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {err('paymentMethod') ? (
+              <p className="text-xs text-critical">{err('paymentMethod')}</p>
+            ) : (
+              <p className="text-xs text-muted">
+                {paymentEntered ? 'How this payment was made' : 'Needed once an amount is paid'}
+              </p>
             )}
           </div>
 
@@ -951,46 +1081,18 @@ export function CreateSalesOrderForm() {
               </div>
             </div>
 
-            {/* All three optional. The State decides whether a sale is taxed
-                CGST + SGST or IGST, and a retail customer has no GSTIN. */}
+            {/* The State decides whether a sale is taxed CGST + SGST or IGST,
+                and applies only within India — outside it, Indian GST does not
+                apply at all. A retail customer has no GSTIN. */}
             <div className="grid gap-4 sm:grid-cols-3">
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="newCustomerState">State</Label>
-                <Select value={newCustomerState} onValueChange={setNewCustomerState}>
-                  <SelectTrigger id="newCustomerState">
-                    <SelectValue placeholder="Select state" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {INDIA_STATES.map((s) => (
-                      <SelectItem key={s} value={s}>
-                        {s}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {customerErrors.state && (
-                  <p className="text-xs text-critical">{customerErrors.state}</p>
-                )}
-              </div>
-
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="newCustomerCountry">Country</Label>
-                <Select value={newCustomerCountry} onValueChange={setNewCustomerCountry}>
-                  <SelectTrigger id="newCustomerCountry">
-                    <SelectValue placeholder="Select country" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {COUNTRIES.map((c) => (
-                      <SelectItem key={c} value={c}>
-                        {c}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {customerErrors.country && (
-                  <p className="text-xs text-critical">{customerErrors.country}</p>
-                )}
-              </div>
+              <CountryStateFields
+                country={newCustomerCountry}
+                state={newCustomerState}
+                onCountryChange={setNewCustomerCountry}
+                onStateChange={setNewCustomerState}
+                stateError={customerErrors.state}
+                countryError={customerErrors.country}
+              />
 
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="newCustomerGst">GST Number (optional)</Label>

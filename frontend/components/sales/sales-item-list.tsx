@@ -118,6 +118,11 @@ export function SalesItemList({
               <TableRow className="hover:bg-transparent">
                 <TableHead className="w-14">Item</TableHead>
                 <TableHead>Product</TableHead>
+                {/*
+                  Ordered, never "current". A cancellation is shown beside it
+                  rather than by shrinking this number — the order has to keep
+                  saying what was agreed.
+                */}
                 <TableHead className="text-right">Qty</TableHead>
                 <TableHead className="text-right">Unit Price</TableHead>
                 <TableHead className="text-right">Line Total</TableHead>
@@ -131,11 +136,25 @@ export function SalesItemList({
                 return (
                   <TableRow key={item.id}>
                     <TableCell>
+                      {/*
+                        The line's own upload first, the RS Product's catalogue
+                        image only when there is none. `catalogueImage` is
+                        already null whenever an upload exists, so this order is
+                        belt and braces — a manual image is authoritative and
+                        must never be displaced by the catalogue.
+                      */}
                       {item.image ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img
                           src={item.image.secureUrl}
                           alt=""
+                          className="size-9 rounded-sm border border-line object-cover"
+                        />
+                      ) : item.catalogueImage ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={item.catalogueImage.url}
+                          alt={item.catalogueImage.altText ?? ''}
                           className="size-9 rounded-sm border border-line object-cover"
                         />
                       ) : (
@@ -177,7 +196,19 @@ export function SalesItemList({
                       )}
                     </TableCell>
 
-                    <TableCell className="text-right tabular">{item.quantity}</TableCell>
+                    <TableCell className="text-right tabular">
+                      {item.cancelledQty > 0 ? (
+                        <div className="flex flex-col items-end leading-tight">
+                          <span className="text-ink">{item.remainingQty}</span>
+                          <span className="text-[11px] text-muted">
+                            of {item.quantity} ·{' '}
+                            <span className="text-critical">{item.cancelledQty} cancelled</span>
+                          </span>
+                        </div>
+                      ) : (
+                        item.quantity
+                      )}
+                    </TableCell>
                     <TableCell className="text-right font-mono text-sm tabular">
                       {formatCurrency(item.price, currency)}
                     </TableCell>

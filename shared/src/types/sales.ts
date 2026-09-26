@@ -10,6 +10,7 @@
 import type {
   GstMode,
   GstRate,
+  PaymentMethod,
   SalesChargeType,
   TaxSplit,
 } from '../constants/index.js';
@@ -19,6 +20,7 @@ import type {
   SalesEfficiency,
   SalesItemStatus,
   SalesOrderStatus,
+  SalesRefundStatus,
 } from '../enums.js';
 import type {
   CustomerContactRef,
@@ -29,13 +31,44 @@ import type {
   UserRef,
 } from './enquiry.js';
 
+/**
+ * A catalogue image, borrowed from the RS Product a line points at.
+ *
+ * Distinct from MediaRef on purpose. A MediaRef is an upload the order owns —
+ * it has an id and a Cloudinary publicId, and the order may replace or delete
+ * it. This is a URL belonging to the product, which Shopify sync may overwrite
+ * at any time and which no order may alter. Keeping the two apart is what stops
+ * a catalogue picture being mistaken for the order's own record of what was
+ * sold.
+ */
+export type CatalogueImageRef = {
+  url: string;
+  altText: string | null;
+};
+
 /** One product line on an order. */
 export type SalesOrderItemView = {
   id: string;
   lineNo: number;
   productName: string;
   image: MediaRef | null;
+  /**
+   * The RS Product's own image, shown only when the line carries no upload.
+   * Always null when `image` is set: a manual upload is authoritative.
+   */
+  catalogueImage: CatalogueImageRef | null;
+  /** What was ORDERED. Never reduced by a cancellation — see cancelledQty. */
   quantity: number;
+  /**
+   * How many of those units the customer has called off.
+   *
+   * Zero on every line nobody has cancelled, which is almost all of them. The
+   * ordered quantity is left intact beside it so the order keeps saying what
+   * was agreed; `remainingQty` below is the subtraction.
+   */
+  cancelledQty: number;
+  /** quantity − cancelledQty: what the customer is still to receive. */
+  remainingQty: number;
   price: DecimalString;
   /** quantity × price, derived by the API. GST is not part of it. */
   lineTotal: DecimalString;
@@ -101,6 +134,47 @@ export type TaxRateBreakupView = {
   igst: DecimalString;
 };
 
+/**
+ * One instalment actually taken against an order.
+ *
+ * The order's `money.paid` is the sum of these. It is kept as its own column
+ * because the database's money guard enforces against it, but nothing here is
+ * a second copy of it: these rows are what that figure is made of.
+ */
+export type SalesPaymentView = {
+  id: string;
+  amount: DecimalString;
+  /** How this instalment arrived, or null where nobody said. */
+  method: PaymentMethod | null;
+  /** UTR, cheque number, receipt — whatever names it elsewhere. */
+  reference: string | null;
+  note: string | null;
+  recordedBy: UserRef;
+  recordedAt: IsoDateTime;
+};
+
+/**
+ * Money owed back to the customer, and whether it has actually gone.
+ *
+ * PENDING means agreed and not sent. COMPLETED means somebody sent it and
+ * named the reference. Nothing here is implied by a cancellation: cancelling
+ * says the goods are not coming, and a refund is a separate decision somebody
+ * has to take and record.
+ */
+export type SalesRefundView = {
+  id: string;
+  amount: DecimalString;
+  status: SalesRefundStatus;
+  reason: string;
+  /** How the money went back. Always present once COMPLETED. */
+  reference: string | null;
+  note: string | null;
+  requestedBy: UserRef;
+  requestedAt: IsoDateTime;
+  settledBy: UserRef | null;
+  settledAt: IsoDateTime | null;
+};
+
 export type SalesMoneyView = {
   /**
    * What the customer owes: taxable goods + GST + charges - discount.
@@ -129,8 +203,50 @@ export type SalesMoneyView = {
   /** What was taken off. Positive. */
   discountTotal: DecimalString;
   paid: DecimalString;
-  /** total − paid */
+  /**
+   * How the money is being collected, or null where nothing says.
+   *
+   * Not a term in any total — it states how the paid amount arrived,
+   * never how much. Null on every order recorded before it existed.
+   */
+  paymentMethod: PaymentMethod | null;
+  /**
+   * What is still owed on what the customer is actually getting:
+   * max(0, activeTotal − paid).
+   *
+   * Identical to total − paid on any order with nothing cancelled, which is
+   * almost all of them. Clamped at zero because once units are cancelled the
+   * customer can be *ahead* rather than behind, and that surplus is a refund
+   * owed rather than a negative debt — see refundable below.
+   */
   pending: DecimalString;
+
+  /**
+   * What the order is worth after cancellations: the same arithmetic as
+   * `total`, run over the REMAINING quantities.
+   *
+   * Equal to `total` until something is cancelled. `total` deliberately keeps
+   * meaning the ORDERED value, because that is the figure the money guard
+   * enforces in the database and the record of what was agreed.
+   */
+  activeTotal: DecimalString;
+  /** total − activeTotal. What the cancelled units were worth. */
+  cancelledTotal: DecimalString;
+
+  /**
+   * Money the customer has paid that the remaining order no longer accounts
+   * for, and that nobody has yet promised back:
+   *
+   *     refundable = max(0, paid − activeTotal − refunded − refundPending)
+   *
+   * Cancelling does NOT refund. This figure is what a cancellation produces;
+   * a SalesRefund record is what answers it.
+   */
+  refundable: DecimalString;
+  /** Sum of refunds actually settled, with a reference against each. */
+  refunded: DecimalString;
+  /** Sum of refunds agreed and not yet sent. The customer is still owed this. */
+  refundPending: DecimalString;
   /** True once the order is settled in full. Saves the UI a string comparison. */
   fullyPaid: boolean;
   currency: string;
@@ -151,6 +267,8 @@ export type SalesOrderSummary = {
   /** The first active line's product, for the table's description column. */
   leadProductName: string;
   thumbnail: MediaRef | null;
+  /** Only set when no line on the order carries an upload of its own. */
+  catalogueThumbnail: CatalogueImageRef | null;
   money: SalesMoneyView;
   status: SalesOrderStatus;
   /** Null until the order is dispatched, then frozen. */
@@ -161,6 +279,30 @@ export type SalesOrderSummary = {
   /** Derived, not stored: still open and past its dispatch deadline. */
   overdue: boolean;
   updatedAt: IsoDateTime;
+};
+
+/**
+ * A proposed replacement for an order's charges, awaiting a decision.
+ *
+ * Carries both sides deliberately. An approver deciding whether a charge change
+ * is right needs to see what the order charges now as well as what is being
+ * asked for — a proposed set on its own says nothing about what it would
+ * replace.
+ */
+export type SalesChargeChangeRequestView = {
+  id: string;
+  status: SalesChangeStatus;
+  /** What the order charges today, and will keep charging unless approved. */
+  current: SalesChargeView[];
+  currentTotal: DecimalString;
+  /** What was asked for. */
+  proposed: { type: SalesChargeType; label: string | null; amount: DecimalString }[];
+  proposedTotal: DecimalString;
+  requestedBy: UserRef;
+  requestedAt: IsoDateTime;
+  reviewedBy: UserRef | null;
+  reviewedAt: IsoDateTime | null;
+  reviewNote: string | null;
 };
 
 /**
@@ -212,6 +354,8 @@ export type SalesOrderDetail = {
   items: SalesOrderItemView[];
   /** Proposals against those products: pending first, then decided history. */
   changeRequests: SalesChangeRequestView[];
+  /** Proposed changes to the order's charges. Empty for most orders. */
+  chargeChangeRequests: SalesChargeChangeRequestView[];
   money: SalesMoneyView;
   status: SalesOrderStatus;
   efficiency: SalesEfficiency | null;
@@ -220,6 +364,13 @@ export type SalesOrderDetail = {
   dispatchedAt: IsoDateTime | null;
   closedAt: IsoDateTime | null;
   closedBy: UserRef | null;
+  cancelledAt: IsoDateTime | null;
+  cancelledBy: UserRef | null;
+  cancellationReason: string | null;
+  /** Every instalment taken, oldest first. Their sum is money.paid. */
+  payments: SalesPaymentView[];
+  /** Money owed back, and whether it has gone. Empty for most orders. */
+  refunds: SalesRefundView[];
   overdue: boolean;
   createdBy: UserRef;
   createdAt: IsoDateTime;

@@ -71,6 +71,7 @@ export async function makeCustomer(
     email?: string;
     address?: string;
     state?: string;
+    country?: string;
     gstNumber?: string;
   } = {},
 ): Promise<{
@@ -81,6 +82,7 @@ export async function makeCustomer(
   email: string | null;
   address: string | null;
   state: string | null;
+  country: string | null;
   gstNumber: string | null;
 }> {
   const customer = await prisma.customer.create({
@@ -92,6 +94,7 @@ export async function makeCustomer(
       email: contact.email ?? null,
       address: contact.address ?? null,
       state: contact.state ?? null,
+      country: contact.country ?? null,
       gstNumber: contact.gstNumber ?? null,
     },
     select: {
@@ -102,6 +105,7 @@ export async function makeCustomer(
       email: true,
       address: true,
       state: true,
+      country: true,
       gstNumber: true,
     },
   });
@@ -208,6 +212,8 @@ export async function makeRsProduct(
     inventoryQty?: number;
     sku?: string | null;
     title?: string;
+    /** A catalogue image, so image precedence can be proved end to end. */
+    imageUrl?: string;
   } = {},
 ): Promise<{ id: string; title: string; sku: string | null; variantId: string }> {
   const title = options.title ?? `${TEST_PREFIX}-rs-${short()}`;
@@ -216,6 +222,9 @@ export async function makeRsProduct(
       source: 'MANUAL',
       title,
       status: 'ACTIVE',
+      ...(options.imageUrl
+        ? { images: { create: { url: options.imageUrl, altText: 'catalogue', position: 1 } } }
+        : {}),
       variants: {
         create: {
           sku: options.sku ?? null,

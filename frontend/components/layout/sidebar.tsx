@@ -25,17 +25,17 @@ export function Sidebar({ items }: { items: NavItem[] }) {
   return (
     <aside
       className={cn(
-        'hidden shrink-0 flex-col border-r border-line bg-surface transition-[width] duration-200 lg:flex',
+        'hidden h-full min-h-0 shrink-0 flex-col border-r border-line bg-surface transition-[width] duration-200 lg:flex',
         collapsed ? 'w-[68px]' : 'w-64',
       )}
     >
-      <div className={cn('flex h-16 items-center border-b border-line', collapsed ? 'justify-center px-3' : 'px-5')}>
+      <div className={cn('flex h-16 shrink-0 items-center border-b border-line', collapsed ? 'justify-center px-3' : 'px-5')}>
         <Link href="/dashboard" aria-label="RoyalStuffs CRM home">
           <Logo collapsed={collapsed} />
         </Link>
       </div>
 
-      <nav className="flex-1 overflow-y-auto p-3" aria-label="Main">
+      <nav className="min-h-0 flex-1 overflow-y-auto p-3" aria-label="Main">
         <ul className="flex flex-col gap-0.5">
           {items.map((item) => {
             const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
@@ -86,7 +86,7 @@ export function Sidebar({ items }: { items: NavItem[] }) {
         </ul>
       </nav>
 
-      <div className="border-t border-line p-3">
+      <div className="shrink-0 border-t border-line p-3">
         <button
           type="button"
           onClick={() => setCollapsed((v) => !v)}

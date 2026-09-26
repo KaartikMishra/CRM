@@ -10,9 +10,14 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import {
+  cancelSalesItemsSchema,
+  cancelSalesOrderSchema,
   createChangeRequestSchema,
   createSalesOrderSchema,
+  createSalesRefundSchema,
   recordPaymentSchema,
+  rejectSalesRefundSchema,
+  settleSalesRefundSchema,
   reviewChangeRequestSchema,
   salesOrderListQuerySchema,
   setSalesChargesSchema,
@@ -27,6 +32,7 @@ import * as controller from './sales.controller.js';
 // rather than a database round trip.
 const idParam = z.object({ id: z.string().cuid() });
 const requestParams = z.object({ id: z.string().cuid(), requestId: z.string().cuid() });
+const refundParams = z.object({ id: z.string().cuid(), refundId: z.string().cuid() });
 
 export const salesRoutes = Router();
 
@@ -97,6 +103,61 @@ salesRoutes.post(
 );
 
 // ---------------------------------------------------------------------------
+//  Cancellation
+// ---------------------------------------------------------------------------
+//
+// SALES EDIT, like every other operational action. Cancelling is ordinary sales
+// work rather than an administrative override, and the status guard — not the
+// capability — is what stops a settled order being called off.
+
+/** Calls off the whole order. Deletes nothing; the reason is required. */
+salesRoutes.post(
+  '/:id/cancel',
+  requirePermission('SALES', 'EDIT'),
+  validate({ params: idParam, body: cancelSalesOrderSchema }),
+  controller.cancel,
+);
+
+/** Calls off some units of some lines, leaving the rest of the order live. */
+salesRoutes.post(
+  '/:id/cancel-items',
+  requirePermission('SALES', 'EDIT'),
+  validate({ params: idParam, body: cancelSalesItemsSchema }),
+  controller.cancelItems,
+);
+
+// ---------------------------------------------------------------------------
+//  Refunds
+// ---------------------------------------------------------------------------
+//
+// Recording that money is owed back is SALES EDIT — the same capability that
+// records money coming in. Settling one is deliberately the same rather than
+// SALES ASSIGN: there is no gateway behind this, so settling is the act of
+// writing down what was actually sent, and the reference is what makes it
+// checkable. The refundable ceiling, not a second approver, is what bounds it.
+
+salesRoutes.post(
+  '/:id/refunds',
+  requirePermission('SALES', 'EDIT'),
+  validate({ params: idParam, body: createSalesRefundSchema }),
+  controller.createRefund,
+);
+
+salesRoutes.post(
+  '/:id/refunds/:refundId/settle',
+  requirePermission('SALES', 'EDIT'),
+  validate({ params: refundParams, body: settleSalesRefundSchema }),
+  controller.settleRefund,
+);
+
+salesRoutes.post(
+  '/:id/refunds/:refundId/reject',
+  requirePermission('SALES', 'EDIT'),
+  validate({ params: refundParams, body: rejectSalesRefundSchema }),
+  controller.rejectRefund,
+);
+
+// ---------------------------------------------------------------------------
 //  Product change requests
 // ---------------------------------------------------------------------------
 //
@@ -133,4 +194,25 @@ salesRoutes.post(
   requirePermission('SALES', 'ASSIGN'),
   validate({ params: requestParams, body: reviewChangeRequestSchema }),
   controller.rejectChangeRequest,
+);
+
+/**
+ * Deciding a proposed charge change — the same SALES ASSIGN capability the item
+ * change requests use, checked here and again in the service so neither the
+ * route nor a direct call is a way around it. The service additionally refuses
+ * self-review, so filing a change and waving it through is not one action by
+ * one person.
+ */
+salesRoutes.post(
+  '/:id/charge-requests/:requestId/approve',
+  requirePermission('SALES', 'ASSIGN'),
+  validate({ params: requestParams, body: reviewChangeRequestSchema }),
+  controller.approveChargeChange,
+);
+
+salesRoutes.post(
+  '/:id/charge-requests/:requestId/reject',
+  requirePermission('SALES', 'ASSIGN'),
+  validate({ params: requestParams, body: reviewChangeRequestSchema }),
+  controller.rejectChargeChange,
 );

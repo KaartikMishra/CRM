@@ -36,6 +36,11 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
+  CountryStateFields,
+  customerStateError,
+  customerStateOk,
+} from '@/components/customers/country-state-fields';
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -164,7 +169,9 @@ export function CreateEnquiryForm({
   // The dropdown can only offer names the schema accepts, so this holds
   // by construction; it is checked anyway so the rule lives in one place and a
   // future change to the options cannot quietly diverge from the server.
-  const stateOk = newCustomerState === '' || customerStateSchema.safeParse(newCustomerState).success;
+  /* The one rule, read from the one place, so this dialog cannot drift
+     from the Sales one again. */
+  const stateOk = customerStateOk(newCustomerCountry, newCustomerState);
   const companyOk =
     newCustomerCompany.trim() === '' ||
     customerCompanySchema.safeParse(newCustomerCompany).success;
@@ -264,7 +271,7 @@ export function CreateEnquiryForm({
     }
     if (!emailOk) errors.email = 'Enter a valid email address';
     if (!addressOk) errors.address = 'Keep the address under 500 characters';
-    if (!stateOk) errors.state = 'Choose a state';
+    if (!stateOk) errors.state = customerStateError(newCustomerCountry);
     if (!gstOk) {
       errors.gstNumber =
         customerGstSchema.safeParse(newCustomerGst).error?.issues[0]?.message ??
@@ -671,43 +678,14 @@ export function CreateEnquiryForm({
             {/* All three optional. The State decides whether a sale is taxed
                 CGST + SGST or IGST, and a retail customer has no GSTIN. */}
             <div className="grid gap-4 sm:grid-cols-3">
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="newCustomerState">State</Label>
-                <Select value={newCustomerState} onValueChange={setNewCustomerState}>
-                  <SelectTrigger id="newCustomerState">
-                    <SelectValue placeholder="Select state" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {INDIA_STATES.map((s) => (
-                      <SelectItem key={s} value={s}>
-                        {s}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {customerErrors.state && (
-                  <p className="text-xs text-critical">{customerErrors.state}</p>
-                )}
-              </div>
-
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="newCustomerCountry">Country</Label>
-                <Select value={newCustomerCountry} onValueChange={setNewCustomerCountry}>
-                  <SelectTrigger id="newCustomerCountry">
-                    <SelectValue placeholder="Select country" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {COUNTRIES.map((c) => (
-                      <SelectItem key={c} value={c}>
-                        {c}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {customerErrors.country && (
-                  <p className="text-xs text-critical">{customerErrors.country}</p>
-                )}
-              </div>
+              <CountryStateFields
+                country={newCustomerCountry}
+                state={newCustomerState}
+                onCountryChange={setNewCustomerCountry}
+                onStateChange={setNewCustomerState}
+                stateError={customerErrors.state}
+                countryError={customerErrors.country}
+              />
 
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="newCustomerGst">GST Number (optional)</Label>

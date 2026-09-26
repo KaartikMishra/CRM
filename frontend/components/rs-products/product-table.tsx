@@ -49,114 +49,116 @@ export function RsProductTable({
   const showActions = canEdit || canArchive;
 
   return (
-    // The only horizontal scroll on the page is this container's — the body
-    // itself must never scroll sideways.
-    <div className="overflow-x-auto">
-      <Table>
-        <TableHeader>
-          <TableRow className="hover:bg-transparent">
-            <TableHead className="w-14">Image</TableHead>
-            <TableHead className="min-w-[220px]">Product</TableHead>
-            <TableHead className="hidden sm:table-cell">SKU</TableHead>
-            <TableHead className="text-right">Price</TableHead>
-            {/* Two stock figures, deliberately distinct: the CRM's own count
-                and Shopify's. Merging them would hide which is which. */}
-            <TableHead className="text-right">CRM stock</TableHead>
-            <TableHead className="text-right">Shopify</TableHead>
-            <TableHead className="hidden md:table-cell text-right">Weight</TableHead>
-            <TableHead className="hidden lg:table-cell">Dimensions</TableHead>
-            <TableHead className="hidden lg:table-cell text-right">Volume</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead>Source</TableHead>
-            {showActions && <TableHead className="w-12 text-right">Actions</TableHead>}
-          </TableRow>
-        </TableHeader>
+    // Table brings its own `.scroll-x` container, and that is the one
+    // horizontal scroll here; the body itself must never scroll sideways.
+    // This used to sit inside a second `overflow-x-auto` div that could never
+    // scroll — the inner container is `w-full`, so it never overflowed the
+    // outer one — and only added a redundant scroll container inside the
+    // page's vertical one.
+    <Table>
+      <TableHeader>
+        <TableRow className="hover:bg-transparent">
+          <TableHead className="w-14">Image</TableHead>
+          <TableHead className="min-w-[220px]">Product</TableHead>
+          <TableHead className="hidden sm:table-cell">SKU</TableHead>
+          <TableHead className="text-right">Price</TableHead>
+          {/* Two stock figures, deliberately distinct: the CRM's own count
+              and Shopify's. Merging them would hide which is which. */}
+          <TableHead className="text-right">CRM stock</TableHead>
+          <TableHead className="text-right">Shopify</TableHead>
+          <TableHead className="hidden md:table-cell text-right">Weight</TableHead>
+          <TableHead className="hidden lg:table-cell">Dimensions</TableHead>
+          <TableHead className="hidden lg:table-cell text-right">Volume</TableHead>
+          <TableHead>Status</TableHead>
+          <TableHead>Source</TableHead>
+          {showActions && <TableHead className="w-12 text-right">Actions</TableHead>}
+        </TableRow>
+      </TableHeader>
 
-        <TableBody>
-          {products.map((product) => {
-            const variants = variantSummary(product);
+      <TableBody>
+        {products.map((product) => {
+          const variants = variantSummary(product);
 
-            return (
-              <TableRow key={product.id}>
-                <TableCell>
-                  <ProductThumbnail url={product.imageUrl} alt={product.imageAlt ?? product.title} />
-                </TableCell>
+          return (
+            <TableRow key={product.id}>
+              <TableCell>
+                <ProductThumbnail url={product.imageUrl} alt={product.imageAlt ?? product.title} />
+              </TableCell>
 
-                <TableCell>
-                  {/* The full title stays reachable on hover: the longest in the
-                      catalogue runs to 222 characters and cannot be shown. */}
-                  <span className="text-sm font-medium text-ink" title={product.title}>
-                    {truncateTitle(product.title)}
+              <TableCell>
+                {/* The full title stays reachable on hover: the longest in the
+                    catalogue runs to 222 characters and cannot be shown. */}
+                <span className="text-sm font-medium text-ink" title={product.title}>
+                  {truncateTitle(product.title)}
+                </span>
+                {(variants ?? product.productType) && (
+                  <span className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-muted">
+                    {variants && <span>{variants}</span>}
+                    {product.productType && <span>{product.productType}</span>}
                   </span>
-                  {(variants ?? product.productType) && (
-                    <span className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-muted">
-                      {variants && <span>{variants}</span>}
-                      {product.productType && <span>{product.productType}</span>}
-                    </span>
-                  )}
-                </TableCell>
-
-                <TableCell className="hidden sm:table-cell font-mono text-xs text-ink-2">
-                  {formatSku(product)}
-                </TableCell>
-
-                <TableCell className="whitespace-nowrap text-right text-sm text-ink">
-                  {formatPriceRange(product)}
-                </TableCell>
-
-                {/* CRM stock: hand-maintained, never written by Shopify. */}
-                <TableCell className="text-right text-sm tabular-nums text-ink">
-                  {product.crmStockQty.toLocaleString('en-IN')}
-                </TableCell>
-
-                <TableCell
-                  className={cn(
-                    'text-right text-sm tabular-nums',
-                    // A negative quantity is a real oversell, not a rendering
-                    // error — shown, and marked.
-                    isNegativeStock(product) ? 'font-medium text-critical' : 'text-muted',
-                  )}
-                >
-                  {formatInventory(product)}
-                </TableCell>
-
-                <TableCell className="hidden md:table-cell whitespace-nowrap text-right text-sm text-ink-2">
-                  {formatWeight(product)}
-                </TableCell>
-
-                {/* Dimensions and volume read as a dash until the store's
-                    dimension unit is confirmed. The formatters already handle
-                    real values, so the columns start working without a change
-                    here. */}
-                <TableCell className="hidden lg:table-cell whitespace-nowrap text-sm text-muted">
-                  {formatDimensions(product)}
-                </TableCell>
-                <TableCell className="hidden lg:table-cell whitespace-nowrap text-right text-sm text-muted">
-                  {formatVolume(product)}
-                </TableCell>
-
-                <TableCell>
-                  <ProductStatusBadge status={product.status} />
-                </TableCell>
-                <TableCell>
-                  <ProductSourceBadge source={product.source} />
-                </TableCell>
-
-                {showActions && (
-                  <TableCell className="text-right">
-                    <ProductActions
-                      product={product}
-                      canEdit={canEdit}
-                      canArchive={canArchive}
-                    />
-                  </TableCell>
                 )}
-              </TableRow>
-            );
-          })}
-        </TableBody>
-      </Table>
-    </div>
+              </TableCell>
+
+              <TableCell className="hidden sm:table-cell font-mono text-xs text-ink-2">
+                {formatSku(product)}
+              </TableCell>
+
+              <TableCell className="whitespace-nowrap text-right text-sm text-ink">
+                {formatPriceRange(product)}
+              </TableCell>
+
+              {/* CRM stock: hand-maintained, never written by Shopify. */}
+              <TableCell className="text-right text-sm tabular-nums text-ink">
+                {product.crmStockQty.toLocaleString('en-IN')}
+              </TableCell>
+
+              <TableCell
+                className={cn(
+                  'text-right text-sm tabular-nums',
+                  // A negative quantity is a real oversell, not a rendering
+                  // error — shown, and marked.
+                  isNegativeStock(product) ? 'font-medium text-critical' : 'text-muted',
+                )}
+              >
+                {formatInventory(product)}
+              </TableCell>
+
+              <TableCell className="hidden md:table-cell whitespace-nowrap text-right text-sm text-ink-2">
+                {formatWeight(product)}
+              </TableCell>
+
+              {/* Dimensions and volume read as a dash until the store's
+                  dimension unit is confirmed. The formatters already handle
+                  real values, so the columns start working without a change
+                  here. */}
+              <TableCell className="hidden lg:table-cell whitespace-nowrap text-sm text-muted">
+                {formatDimensions(product)}
+              </TableCell>
+              <TableCell className="hidden lg:table-cell whitespace-nowrap text-right text-sm text-muted">
+                {formatVolume(product)}
+              </TableCell>
+
+              <TableCell>
+                <ProductStatusBadge status={product.status} />
+              </TableCell>
+              <TableCell>
+                <ProductSourceBadge source={product.source} />
+              </TableCell>
+
+              {showActions && (
+                <TableCell className="text-right">
+                  <ProductActions
+                    product={product}
+                    canEdit={canEdit}
+                    canArchive={canArchive}
+                  />
+                </TableCell>
+              )}
+            </TableRow>
+          );
+        })}
+      </TableBody>
+    </Table>
   );
 }
 

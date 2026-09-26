@@ -33,24 +33,43 @@ rsProductRoutes.use(requireAuth);
 /**
  * The catalogue list, and the search behind every product picker.
  *
- * Reachable with RS_PRODUCTS:VIEW *or* SALES:CREATE. Sales is a USER-default
- * module and RS Products is not, so a salesperson writing an order could
- * otherwise search nothing at all — the picker would return 403 and read as an
- * empty catalogue. Widening this one read is narrower than granting every
- * employee the RS Products module, which would also hand them the module page
- * and its filters.
+ * Reachable with RS_PRODUCTS:VIEW, or with the capability of a module whose
+ * work is naming an RS Product:
+ *
+ *   SALES:CREATE          writing an order line
+ *   PROCUREMENT:CREATE    typing up a purchase bill
+ *   PROCUREMENT:EDIT      mapping a bill line, or requesting it be re-mapped
+ *
+ * Neither of those modules is granted RS Products by role default, so without
+ * this the picker would return 403 and read as an empty catalogue. Widening
+ * this one read is narrower than granting every employee the RS Products
+ * module, which would also hand them the module page and its filters.
+ *
+ * Procurement is here because its identity architecture requires it: a
+ * purchase line must name an RsProduct before its stock can be allocated to a
+ * customer, and this route is the only search behind the one shared picker
+ * that does the naming. It worked until now only because a USER holds
+ * SALES:CREATE by default — so revoking Sales from a warehouse-only employee
+ * silently took their mapping dialog with it. Both Procurement capabilities
+ * are named rather than PROCUREMENT:VIEW, so somebody who may only read the
+ * module gains nothing, and neither of the two who actually map is left out.
  *
  * Read-only, and deliberately only this route: create, edit and archive below
- * still require RS_PRODUCTS on its own, so a salesperson can find a product and
- * still cannot change the catalogue. The same widening already serves image
- * upload — see upload.routes.ts.
+ * still require RS_PRODUCTS on its own, so a salesperson or a buyer can find a
+ * product and still cannot change the catalogue. The same widening already
+ * serves image upload — see upload.routes.ts.
  *
  * Each pair resolves through the usual per-user override mechanism, so a
- * UserModulePermission row revoking either one still applies.
+ * UserModulePermission row revoking any one of them still applies.
  */
 rsProductRoutes.get(
   '/',
-  requireAnyPermission(['RS_PRODUCTS', 'VIEW'], ['SALES', 'CREATE']),
+  requireAnyPermission(
+    ['RS_PRODUCTS', 'VIEW'],
+    ['SALES', 'CREATE'],
+    ['PROCUREMENT', 'CREATE'],
+    ['PROCUREMENT', 'EDIT'],
+  ),
   validate({ query: rsProductListQuerySchema }),
   controller.list,
 );

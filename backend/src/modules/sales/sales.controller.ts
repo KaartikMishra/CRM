@@ -6,9 +6,14 @@
 
 import type { Request, Response } from 'express';
 import type {
+  CancelSalesItemsInput,
+  CancelSalesOrderInput,
   CreateChangeRequestInput,
   CreateSalesOrderInput,
+  CreateSalesRefundInput,
   RecordPaymentInput,
+  RejectSalesRefundInput,
+  SettleSalesRefundInput,
   ReviewChangeRequestInput,
   SalesOrderListQuery,
   SetSalesChargesInput,
@@ -19,9 +24,12 @@ import { validatedBody, validatedParams, validatedQuery } from '../../utils/requ
 import { currentUser } from '../../middleware/requireAuth.js';
 import * as sales from './sales.service.js';
 import * as changes from './sales-change-request.service.js';
+import * as chargeChanges from './sales-charge-change.service.js';
+import * as refunds from './sales-refund.service.js';
 
 type IdParam = { id: string };
 type RequestParams = { id: string; requestId: string };
+type RefundParams = { id: string; refundId: string };
 
 export async function create(req: Request, res: Response): Promise<void> {
   const order = await sales.createSalesOrder(
@@ -120,6 +128,86 @@ export async function rejectChangeRequest(req: Request, res: Response): Promise<
     id,
     requestId,
     validatedBody<ReviewChangeRequestInput>(req),
+  );
+  sendSuccess(res, { order });
+}
+
+export async function approveChargeChange(req: Request, res: Response): Promise<void> {
+  const { id, requestId } = validatedParams<RequestParams>(req);
+  const order = await chargeChanges.approveChargeChange(
+    currentUser(req),
+    id,
+    requestId,
+    validatedBody<ReviewChangeRequestInput>(req),
+  );
+  sendSuccess(res, { order });
+}
+
+export async function rejectChargeChange(req: Request, res: Response): Promise<void> {
+  const { id, requestId } = validatedParams<RequestParams>(req);
+  const order = await chargeChanges.rejectChargeChange(
+    currentUser(req),
+    id,
+    requestId,
+    validatedBody<ReviewChangeRequestInput>(req),
+  );
+  sendSuccess(res, { order });
+}
+
+
+// ---------------------------------------------------------------------------
+//  Cancellation and refunds
+// ---------------------------------------------------------------------------
+
+export async function cancel(req: Request, res: Response): Promise<void> {
+  const { id } = validatedParams<IdParam>(req);
+  const order = await sales.cancelSalesOrder(
+    currentUser(req),
+    id,
+    validatedBody<CancelSalesOrderInput>(req),
+  );
+  sendSuccess(res, { order });
+}
+
+export async function cancelItems(req: Request, res: Response): Promise<void> {
+  const { id } = validatedParams<IdParam>(req);
+  const order = await sales.cancelSalesItems(
+    currentUser(req),
+    id,
+    validatedBody<CancelSalesItemsInput>(req),
+  );
+  sendSuccess(res, { order });
+}
+
+export async function createRefund(req: Request, res: Response): Promise<void> {
+  const { id } = validatedParams<IdParam>(req);
+  const order = await refunds.createRefund(
+    currentUser(req),
+    id,
+    validatedBody<CreateSalesRefundInput>(req),
+  );
+  // 201: a refund record is created, even though no money has moved yet.
+  sendCreated(res, { order });
+}
+
+export async function settleRefund(req: Request, res: Response): Promise<void> {
+  const { id, refundId } = validatedParams<RefundParams>(req);
+  const order = await refunds.settleRefund(
+    currentUser(req),
+    id,
+    refundId,
+    validatedBody<SettleSalesRefundInput>(req),
+  );
+  sendSuccess(res, { order });
+}
+
+export async function rejectRefund(req: Request, res: Response): Promise<void> {
+  const { id, refundId } = validatedParams<RefundParams>(req);
+  const order = await refunds.rejectRefund(
+    currentUser(req),
+    id,
+    refundId,
+    validatedBody<RejectSalesRefundInput>(req),
   );
   sendSuccess(res, { order });
 }

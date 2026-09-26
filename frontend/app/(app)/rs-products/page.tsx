@@ -2,8 +2,15 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Plus, Search, Tags } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
+import { Card } from '@/components/ui/card';
 import { PageHeader } from '@/components/common/page-header';
+import {
+  ContentPage,
+  ContentPageHeader,
+  ContentRegion,
+  ContentScrollArea,
+  contentCard,
+} from '@/components/common/content-page';
 import { EmptyState } from '@/components/common/empty-state';
 import { ErrorMessage } from '@/components/common/error-message';
 import { RsProductTable } from '@/components/rs-products/product-table';
@@ -57,41 +64,43 @@ export default async function RsProductsPage({ searchParams }: { searchParams: S
   const { result, meta } = await fetchRsProducts({ ...filters, cursor: first(params.cursor) });
 
   return (
-    <div className="flex flex-col gap-6">
-      <PageHeader
-        eyebrow="Catalogue"
-        title="RS Products"
-        description="The central product catalogue. Shopify is its primary source, with CRM-only products alongside."
-        actions={
-          canCreate && (
-            <Button asChild>
-              <Link href="/rs-products/new">
-                <Plus className="size-4" />
-                Add Product
-              </Link>
-            </Button>
-          )
-        }
-      />
+    <ContentPage>
+      <ContentPageHeader>
+        <PageHeader
+          eyebrow="Catalogue"
+          title="RS Products"
+          description="The central product catalogue. Shopify is its primary source, with CRM-only products alongside."
+          actions={
+            canCreate && (
+              <Button asChild>
+                <Link href="/rs-products/new">
+                  <Plus className="size-4" />
+                  Add Product
+                </Link>
+              </Button>
+            )
+          }
+        />
 
-      {/* A GET form submits only its own named inputs, so `cursor` and `pages`
-          are dropped on every search — which is exactly right: a cursor from
-          one result set is meaningless in another, so searching returns to
-          page 1 by construction rather than by a reset written somewhere. */}
-      <form className="flex flex-wrap items-center gap-2" action="/rs-products">
-        <label className="relative flex-1 min-w-[220px]">
-          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted" />
-          <input
-            name="q"
-            defaultValue={query ?? ''}
-            placeholder="Search by product name or SKU"
-            className="h-9 w-full rounded-md border border-line bg-surface pl-9 pr-3 text-sm text-ink placeholder:text-muted focus:border-accent focus:outline-none"
-          />
-        </label>
-        <Button type="submit" variant="outline">
-          Search
-        </Button>
-      </form>
+        {/* A GET form submits only its own named inputs, so `cursor` and `pages`
+            are dropped on every search — which is exactly right: a cursor from
+            one result set is meaningless in another, so searching returns to
+            page 1 by construction rather than by a reset written somewhere. */}
+        <form className="flex flex-wrap items-center gap-2" action="/rs-products">
+          <label className="relative flex-1 min-w-[220px]">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted" />
+            <input
+              name="q"
+              defaultValue={query ?? ''}
+              placeholder="Search by product name or SKU"
+              className="h-9 w-full rounded-md border border-line bg-surface pl-9 pr-3 text-sm text-ink placeholder:text-muted focus:border-accent focus:outline-none"
+            />
+          </label>
+          <Button type="submit" variant="outline">
+            Search
+          </Button>
+        </form>
+      </ContentPageHeader>
 
       {!result.success ? (
         <ErrorMessage message={result.message} />
@@ -108,21 +117,28 @@ export default async function RsProductsPage({ searchParams }: { searchParams: S
           />
         </Card>
       ) : (
-        <Card>
-          <CardContent className="p-0">
-            <RsProductTable
-              products={result.data.products}
-              canEdit={canEdit}
-              canArchive={canArchive}
-            />
-            <PaginationControls
-              stack={stack}
-              nextCursor={meta.nextCursor ?? null}
-              filters={filters}
-            />
-          </CardContent>
-        </Card>
+        <ContentRegion>
+          <Card className={contentCard}>
+            <ContentScrollArea>
+              <RsProductTable
+                products={result.data.products}
+                canEdit={canEdit}
+                canArchive={canArchive}
+              />
+            </ContentScrollArea>
+
+            {/* Stays at the foot of the card: the page controls belong with the
+                list, not at the end of a scroll somebody has to reach first. */}
+            <div className="shrink-0">
+              <PaginationControls
+                stack={stack}
+                nextCursor={meta.nextCursor ?? null}
+                filters={filters}
+              />
+            </div>
+          </Card>
+        </ContentRegion>
       )}
-    </div>
+    </ContentPage>
   );
 }

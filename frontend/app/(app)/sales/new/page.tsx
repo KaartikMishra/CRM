@@ -34,7 +34,7 @@ export default async function NewSalesOrderPage() {
         title="New order"
         description="Record an order and its payment position. Totals are calculated for you and cannot be typed over."
       />
-      <CreateSalesOrderForm />
+      <CreateSalesOrderForm sellerState={user.sellerState} />
     </div>
   );
 }

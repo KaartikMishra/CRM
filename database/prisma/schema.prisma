@@ -85,6 +85,12 @@ model User {
   approvedSalesItems SalesOrderItem[]      @relation("SalesItemApprovedBy")
   requestedSalesChanges SalesItemChangeRequest[] @relation("SalesChangeRequestedBy")
   reviewedSalesChanges  SalesItemChangeRequest[] @relation("SalesChangeReviewedBy")
+  requestedChargeChanges SalesChargeChangeRequest[] @relation("ChargeChangeRequestedBy")
+  reviewedChargeChanges  SalesChargeChangeRequest[] @relation("ChargeChangeReviewedBy")
+  cancelledSalesOrders   SalesOrder[]               @relation("SalesOrderCancelledBy")
+  recordedSalesPayments  SalesPayment[]             @relation("SalesPaymentRecordedBy")
+  requestedSalesRefunds  SalesRefund[]              @relation("SalesRefundRequestedBy")
+  settledSalesRefunds    SalesRefund[]              @relation("SalesRefundSettledBy")
   requestedProductChanges PurchaseItemProductChange[] @relation("ProductChangeRequestedBy")
   reviewedProductChanges  PurchaseItemProductChange[] @relation("ProductChangeReviewedBy")
   reviewedPurchaseBills   PurchaseBill[]              @relation("PurchaseBillReviewedBy")
@@ -560,6 +566,27 @@ enum SalesOrderStatus {
   OPEN
   DISPATCHED
   CLOSED
+  /// Called off. A terminal state reached from OPEN or DISPATCHED, and never
+  /// from CLOSED — a settled order is history. Deliberately NOT a deletion:
+  /// the order, its lines, its payments and its customer all stay exactly as
+  /// they were, and the status is what distinguishes it from a live one.
+  ///
+  /// It moves no money by itself. The payable the money guard computes is
+  /// unchanged by cancelling, so what was paid stays paid and becomes
+  /// refundable through SalesRefund rather than silently disappearing.
+  CANCELLED
+}
+
+/// Where a refund has got to.
+///
+/// PENDING is a decision recorded, not money moved — there is no payment
+/// gateway behind this, so COMPLETED means somebody says they have sent the
+/// money and names how. The distinction is the point: an order can be
+/// cancelled, its refund agreed, and the customer still be owed.
+enum SalesRefundStatus {
+  PENDING
+  COMPLETED
+  REJECTED
 }
 
 /// The dispatch verdict. Mirrors EnquiryEfficiency in shape but is its own type,
@@ -672,6 +699,26 @@ model SalesOrder {
   /// ACTIVE lines, enforced by trigger rather than written down a second time.
   paidAmount Decimal @db.Decimal(14, 2) @default(0)
 
+  /**
+   * How the order's money is being collected: one of PAYMENT_METHODS in
+   * @rs/shared — 'PREPAID' | 'COD' | 'PARTIAL_COD'.
+   *
+   * A plain nullable String rather than a Prisma enum, following gstMode,
+   * gstRate and Customer.state: these are business lists that get revised, and
+   * a Postgres enum charges an ALTER TYPE for every revision while never
+   * letting a value be dropped. The shared z.enum restricts it on both tiers.
+   *
+   * Nullable, and that is a real third answer rather than a gap: every order
+   * recorded before this column existed has none, and an order on which no
+   * payment has been taken has nothing to say either. The service requires one
+   * exactly when money is recorded — never merely because an order exists.
+   *
+   * Deliberately NOT a term in any total. It says how the paidAmount arrived,
+   * not how much; sales_order_money_guard does not read it and no arithmetic
+   * depends on it.
+   */
+  paymentMethod String?
+
   orderDate        DateTime
   /// The dispatch deadline. A date, so the verdict below compares against the
   /// end of this day rather than its midnight.
@@ -688,6 +735,17 @@ model SalesOrder {
   closedAt   DateTime?
   closedById String?
 
+  /// Who called the order off, when, and why. Columns rather than a separate
+  /// record, exactly as closedAt/closedById already are: the three facts
+  /// belong to the order, are read every time it is, and a reader should not
+  /// have to join to learn that an order is cancelled.
+  ///
+  /// The reason is required whenever the order is cancelled, enforced by
+  /// sales_cancelled_recorded_together.
+  cancelledAt        DateTime?
+  cancelledById      String?
+  cancellationReason String?
+
   createdById String
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -695,9 +753,13 @@ model SalesOrder {
   customer  Customer         @relation(fields: [customerId], references: [id])
   createdBy User             @relation("SalesOrderCreatedBy", fields: [createdById], references: [id])
   closedBy  User?            @relation("SalesOrderClosedBy", fields: [closedById], references: [id])
+  cancelledBy User?          @relation("SalesOrderCancelledBy", fields: [cancelledById], references: [id])
   items          SalesOrderItem[]
   charges        SalesOrderCharge[]
   changeRequests SalesItemChangeRequest[]
+  chargeChangeRequests SalesChargeChangeRequest[]
+  payments       SalesPayment[]
+  refunds        SalesRefund[]
 
   @@index([status, toBeDispatchedBy])
   @@index([customerId])
@@ -755,6 +817,31 @@ model SalesOrderItem {
    *     unfulfilled    = max(0, quantity - totalFulfilled)
    */
   alreadyFulfilled Int @default(0)
+
+  /**
+   * How many of this line's units the customer has called off.
+   *
+   * `quantity` is left alone deliberately and always means what was ORDERED —
+   * overwriting it would destroy the only record of what was agreed, and the
+   * remaining quantity is a subtraction anyone can do:
+   *
+   *     ordered   = quantity
+   *     cancelled = cancelledQty
+   *     remaining = quantity - cancelledQty
+   *
+   * It is also why nothing here reaches sales_order_money_guard. That trigger
+   * computes the payable from `quantity * price`, so leaving `quantity` intact
+   * means cancelling never drops the payable below what has already been paid
+   * — which it would refuse. The order's ACTIVE value is derived in the
+   * application from the remaining quantities, through the same
+   * computeSalesTotals every other figure goes through, so there is no second
+   * arithmetic anywhere.
+   *
+   * Bounded by sales_item_cancelled_within_quantity: several partial
+   * cancellations can never sum past what was ordered.
+   */
+  cancelledQty Int @default(0)
+
   price          Decimal @db.Decimal(12, 2)
 
   /**
@@ -847,6 +934,145 @@ model SalesOrderItem {
 /// `type` alone: DISCOUNT subtracts and every other kind adds. Storing a
 /// negative amount for a discount was the alternative, and it makes every
 /// report that sums this table depend on remembering the convention.
+/// A proposed replacement for an order's charges, held apart from the charges
+/// themselves until an approver acts.
+///
+/// Deliberately the same shape as SalesItemChangeRequest — same status enum,
+/// same requestedBy/reviewedBy/reviewedAt/reviewNote pairing, same SALES ASSIGN
+/// review capability — so the CRM has one approval idea rather than two. It is
+/// a separate table only because what is proposed is a different thing: a line
+/// request names one line, while charges are replaced as a whole set.
+///
+/// Nothing here is part of any total. A PENDING request moves no money, which is
+/// the entire point: the order keeps charging what it already charged until
+/// somebody with the authority to say otherwise says so.
+model SalesChargeChangeRequest {
+  id      String @id @default(cuid())
+  orderId String
+
+  status SalesChangeStatus @default(PENDING)
+
+  /**
+   * The complete proposed set, exactly as PUT /api/sales/:id/charges takes it:
+   * an array of { type, label?, amount }.
+   *
+   * Json rather than child rows because it is a proposal, not a record — never
+   * joined, never aggregated, never summed by the money guard. Child rows would
+   * put rows that look exactly like real charges one foreign key away from the
+   * real ones, which is the mistake this table exists to prevent. It is
+   * re-validated against the shared schema before it is applied, so a
+   * hand-edited row cannot become an approved charge.
+   */
+  proposedCharges Json
+
+  requestedById String
+  requestedAt   DateTime @default(now())
+
+  /// Written together with reviewedAt when the request is decided, the same
+  /// pairing SalesItemChangeRequest and PurchaseItemProductChange both use.
+  reviewedById String?
+  reviewedAt   DateTime?
+  reviewNote   String?
+
+  order       SalesOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  requestedBy User       @relation("ChargeChangeRequestedBy", fields: [requestedById], references: [id])
+  reviewedBy  User?      @relation("ChargeChangeReviewedBy", fields: [reviewedById], references: [id])
+
+  @@index([orderId, status])
+}
+
+/// One payment actually taken against an order.
+///
+/// A ledger beside `SalesOrder.paidAmount` rather than a replacement for it.
+/// That column is what sales_order_money_guard reads, so it stays the figure
+/// the database enforces; these rows are what the figure is made of, and the
+/// service writes both in one transaction. Their sum equals it.
+///
+/// It exists because partial payments do: an order collected in three
+/// instalments has three references, three dates and possibly three methods,
+/// and a single column on the order can hold one of each at most. Rows that
+/// predate this table were backfilled as one payment carrying the order's own
+/// total, so the sum holds for history too — the amount is real, only the
+/// instalment breakdown was never recorded.
+model SalesPayment {
+  id      String @id @default(cuid())
+  orderId String
+
+  /// Positive, always. A refund is a SalesRefund, never a negative payment —
+  /// money going out is a different event with a different approver and its own
+  /// state, and folding it in here would make `sum(amount)` stop meaning
+  /// "what the customer has paid".
+  amount Decimal @db.Decimal(14, 2)
+
+  /// How this instalment arrived: one of PAYMENT_METHODS in @rs/shared. A
+  /// plain String for the same reason SalesOrder.paymentMethod is one.
+  /// Nullable: a payment recorded without stating a method is still a payment.
+  method String?
+
+  /**
+   * The transaction reference — a UTR for UPI or a bank transfer, a cheque
+   * number, whatever names this payment in somebody else's system.
+   *
+   * Free text, deliberately: the format differs per method and per bank, and a
+   * pattern that rejected a valid reference would stop a real payment being
+   * recorded. Nullable because cash has none.
+   */
+  reference String?
+
+  /// Anything else worth saying about this instalment.
+  note String?
+
+  recordedById String
+  recordedAt   DateTime @default(now())
+
+  order      SalesOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  recordedBy User       @relation("SalesPaymentRecordedBy", fields: [recordedById], references: [id])
+
+  @@index([orderId, recordedAt])
+}
+
+/// Money owed back to the customer, and whether it has actually gone.
+///
+/// Recording one does not move money and does not pretend to: there is no
+/// payment gateway behind this CRM, so a refund is an internal record of a
+/// decision and then of a settlement. PENDING says the customer is owed;
+/// COMPLETED says somebody sent it and named the reference.
+///
+/// Deliberately NOT derived from cancellation. Cancelling an order says the
+/// goods are not coming; whether money goes back, how much and when are
+/// separate facts that somebody has to state — which is why a cancelled order
+/// shows an amount refundable rather than an amount refunded.
+model SalesRefund {
+  id      String @id @default(cuid())
+  orderId String
+
+  amount Decimal @db.Decimal(14, 2)
+  status SalesRefundStatus @default(PENDING)
+
+  /// Why the money is owed back. Required, because a refund with no stated
+  /// reason is unauditable.
+  reason String
+
+  /// How the money went back — a UTR, a cheque number, a cash receipt. Written
+  /// with the settlement, and required by sales_refund_settled_recorded_together.
+  reference String?
+  note      String?
+
+  requestedById String
+  requestedAt   DateTime @default(now())
+
+  /// Written together when the refund is settled or refused, the same pairing
+  /// every other decision in this schema uses.
+  settledById String?
+  settledAt   DateTime?
+
+  order       SalesOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  requestedBy User       @relation("SalesRefundRequestedBy", fields: [requestedById], references: [id])
+  settledBy   User?      @relation("SalesRefundSettledBy", fields: [settledById], references: [id])
+
+  @@index([orderId, status])
+}
+
 model SalesOrderCharge {
   id      String @id @default(cuid())
   orderId String

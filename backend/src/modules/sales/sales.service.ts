@@ -12,10 +12,13 @@
 
 import { Prisma } from '@rs/database';
 import {
+  DEFAULT_COUNTRY,
   compareAmount,
   addAmount,
   subtractAmount,
   type CreateSalesOrderInput,
+  type CancelSalesItemsInput,
+  type CancelSalesOrderInput,
   type RecordPaymentInput,
   type SalesOrderDetail,
   type SalesOrderListQuery,
@@ -26,12 +29,14 @@ import {
 import { databaseNow, prisma } from '../../config/database.js';
 import { AppError } from '../../utils/AppError.js';
 import * as notification from '../notification/notification.service.js';
+import * as chargeChanges from './sales-charge-change.service.js';
 import type { AuthenticatedUser } from '../../middleware/requireAuth.js';
 import {
   canCloseOrder,
   canDispatchOrder,
   canEditOrder,
   canRecordPayment,
+  canCancelOrder,
 } from '../../policies/sales-access.js';
 import { dispatchVerdict } from './sales-efficiency.js';
 import { assertNotClosed, assertTransition } from './sales-status.js';
@@ -74,13 +79,60 @@ async function assertCustomerExists(
   tx: Prisma.TransactionClient,
   customerId: string,
 ): Promise<void> {
+  await loadCustomerForTax(tx, customerId);
+}
+
+/**
+ * The customer, read for the one thing the order's tax depends on.
+ *
+ * Doubles as the existence check, so a create never reads the same row twice
+ * and the two can never disagree about whether it is there.
+ */
+async function loadCustomerForTax(
+  tx: Prisma.TransactionClient,
+  customerId: string,
+): Promise<{ state: string | null; country: string | null }> {
   const customer = await tx.customer.findUnique({
     where: { id: customerId },
-    select: { id: true },
+    select: { id: true, state: true, country: true },
   });
 
   if (!customer) {
     throw AppError.badRequest('CUSTOMER_NOT_FOUND', 'That customer could not be found.');
+  }
+
+  return { state: customer.state, country: customer.country };
+}
+
+/**
+ * Indian GST belongs to an Indian supply, and the server is what decides that.
+ *
+ * The form disables the slabs for a customer abroad, but a request is not
+ * obliged to come from the form. Without this, an order for a customer in
+ * Lesotho could be posted with 18% on every line, and the money guard would
+ * happily enforce a payable carrying tax that is not owed to anybody.
+ *
+ * A customer with no country recorded is left alone: every row predating the
+ * field has none, and reading those as exports would strip the tax off orders
+ * that have always carried it. 'NONE' and '0' are both accepted, because
+ * neither charges anything.
+ */
+function assertGstMatchesCustomer(
+  customer: { country: string | null },
+  items: readonly { gstRate?: string | null }[],
+): void {
+  if (!customer.country) return;
+  if (customer.country.trim().toLowerCase() === DEFAULT_COUNTRY.toLowerCase()) return;
+
+  const taxed = items.some(
+    (item) => item.gstRate && item.gstRate !== 'NONE' && item.gstRate !== '0',
+  );
+
+  if (taxed) {
+    throw AppError.badRequest(
+      'GST_NOT_APPLICABLE',
+      `Indian GST does not apply to a customer in ${customer.country}. Set those lines to No GST.`,
+    );
   }
 }
 
@@ -158,7 +210,8 @@ export async function createSalesOrder(
     const at = await databaseNow(tx);
 
     await assertOrderIdAvailable(tx, input.orderId);
-    await assertCustomerExists(tx, input.customerId);
+    const customer = await loadCustomerForTax(tx, input.customerId);
+    assertGstMatchesCustomer(customer, input.items);
 
     const order = await tx.salesOrder.create({
       data: {
@@ -166,6 +219,9 @@ export async function createSalesOrder(
         customerId: input.customerId,
 
         paidAmount: new Prisma.Decimal(input.paidAmount),
+        // Stated only where money was actually taken. The shared schema
+        // requires one in exactly that case, and this records what it got.
+        paymentMethod: input.paymentMethod ?? null,
         ...(input.charges.length > 0
           ? {
               charges: {
@@ -323,6 +379,27 @@ export async function setSalesCharges(
     assertNotClosed(order.status);
     if (!canEditOrder({ id: actor.id, role: actor.role }, order)) throw forbidden();
 
+    /*
+      Creating a financial record is ordinary work. Editing one is not.
+
+      An order with no charges yet is having its first set entered, which is an
+      initial entry and applies straight away — the same as entering charges
+      with the order itself. An order that already has charges is having money
+      somebody has already been told about changed, so the new set is proposed
+      rather than applied and somebody holding SALES ASSIGN decides it.
+
+      Counted inside the lock, so two people cannot both read "no charges" and
+      both apply directly.
+    */
+    const existing = await tx.salesOrderCharge.count({ where: { orderId: id } });
+
+    if (existing > 0) {
+      await chargeChanges.requestChargeChange(tx, actor, id, input, at);
+      // Returns with the charges untouched: a proposal moves no money, so the
+      // payable and the payment ceiling built on it are exactly as they were.
+      return at;
+    }
+
     await repo.replaceCharges(tx, id, input.charges);
 
     // Recomputed after the write, so it reflects the set just stored.
@@ -393,10 +470,249 @@ export async function recordPayment(
       );
     }
 
+    /*
+      The instalment itself, beside the running total.
+
+      Both are written here, in one transaction, and they are not two versions
+      of the same fact: `paidAmount` is what sales_order_money_guard enforces
+      against, and these rows are what that figure is made of. Their sum equals
+      it — for history too, which the migration backfilled.
+
+      This is also the only place a payment reference can live. An order paid in
+      three instalments has three of them, so a column on the order could hold
+      at most one and would overwrite the other two.
+    */
+    await tx.salesPayment.create({
+      data: {
+        orderId: id,
+        amount: new Prisma.Decimal(input.amount),
+        method: input.method ?? null,
+        reference: input.reference ?? null,
+        note: input.note ?? null,
+        recordedById: actor.id,
+        recordedAt: at,
+      },
+    });
+
     await tx.salesOrder.update({
       where: { id },
-      data: { paidAmount: new Prisma.Decimal(nextPaid) },
+      data: {
+        paidAmount: new Prisma.Decimal(nextPaid),
+        /*
+          The latest stated method becomes the order's, and silence changes
+          nothing.
+
+          An order collected partly now and partly on delivery is PARTIAL_COD,
+          and that is what the person recording the second payment says it is,
+          so overwriting is right where a method is given: this field describes
+          the arrangement rather than any one instalment. Where none is given
+          the arrangement is simply unchanged — which is what keeps every
+          existing caller working exactly as it did.
+        */
+        ...(input.method ? { paymentMethod: input.method } : {}),
+      },
     });
+
+    return at;
+  }, TX_OPTIONS);
+
+  return detailAfterCommit(id, now);
+}
+
+// ---------------------------------------------------------------------------
+//  Cancellation
+// ---------------------------------------------------------------------------
+
+/**
+ * Refuses to cancel units that purchased stock has already been committed to.
+ *
+ * An order line with PurchaseAllocation rows has goods standing against it:
+ * Procurement took them out of free CRM stock when it allocated them, and
+ * `PurchaseBillItem.stockedQty` records exactly how much this line consumed.
+ * Cancelling the units here would leave that commitment pointing at a
+ * requirement that no longer exists, and nothing in Sales may put it right —
+ * releasing an allocation is Procurement's own operation, and its reconcile is
+ * the single writer of crmStockQty.
+ *
+ * So Sales refuses and names the step. This is the same guard, with the same
+ * error code, that already protects a line from being re-mapped or removed
+ * through a change request; cancellation is a third way to reach the same
+ * unsafe state, and it gets the same answer rather than a second mechanism.
+ */
+async function assertNoAllocations(
+  tx: Prisma.TransactionClient,
+  itemIds: string[],
+): Promise<void> {
+  if (itemIds.length === 0) return;
+
+  const allocated = await tx.purchaseAllocation.findFirst({
+    where: { salesOrderItemId: { in: itemIds } },
+    select: { salesOrderItem: { select: { productName: true } } },
+  });
+  if (!allocated) return;
+
+  throw AppError.conflict(
+    'ORDER_LINE_HAS_ALLOCATIONS',
+    `Purchased stock is allocated to ${allocated.salesOrderItem.productName}. Release those allocations in Procurement before cancelling it.`,
+  );
+}
+
+/**
+ * Calls off a whole order.
+ *
+ * Nothing is deleted. The order, its lines, its payments, its charges and its
+ * customer all stay exactly as they were, and the status is what distinguishes
+ * a cancelled order from a live one. Every remaining unit is marked cancelled
+ * through the SAME `cancelledQty` partial cancellation uses, so there is one
+ * representation of "called off" rather than two that could disagree.
+ *
+ * It moves no money and refunds nothing. What was paid stays paid; the order
+ * reports it as refundable, and a SalesRefund is what answers that — see
+ * sales-refund.service.ts. Pretending a cancellation refunded the customer is
+ * the one thing this must not do.
+ *
+ * The payable the money guard computes does not move either: `quantity` is left
+ * alone, so `paid > payable` cannot become true and no part-paid order can be
+ * refused at COMMIT for being cancelled.
+ */
+export async function cancelSalesOrder(
+  actor: AuthenticatedUser,
+  id: string,
+  input: CancelSalesOrderInput,
+): Promise<SalesOrderDetail> {
+  const now = await prisma.$transaction(async (tx) => {
+    const at = await databaseNow(tx);
+
+    await repo.lockOrder(tx, id);
+
+    const order = await repo.findForPolicy(id, tx);
+    if (!order) throw notFound();
+    // Status first, so "already cancelled" beats a bare 403.
+    assertTransition(order.status, 'CANCELLED');
+    if (!canCancelOrder({ id: actor.id, role: actor.role }, order)) throw forbidden();
+
+    const items = await tx.salesOrderItem.findMany({
+      where: { orderId: id, status: 'ACTIVE' },
+      select: { id: true, quantity: true, cancelledQty: true },
+    });
+
+    const standing = items.filter((item) => item.cancelledQty < item.quantity);
+    await assertNoAllocations(tx, standing.map((item) => item.id));
+
+    for (const item of standing) {
+      await tx.salesOrderItem.update({
+        where: { id: item.id },
+        data: { cancelledQty: item.quantity },
+      });
+    }
+
+    await tx.salesOrder.update({
+      where: { id },
+      data: {
+        status: 'CANCELLED',
+        cancelledAt: at,
+        cancelledById: actor.id,
+        // Required by sales_cancellation_recorded_together: a cancellation
+        // with no stated reason is unauditable.
+        cancellationReason: input.reason,
+      },
+    });
+
+    return at;
+  }, TX_OPTIONS);
+
+  return detailAfterCommit(id, now);
+}
+
+/**
+ * Calls off some units of some lines, leaving the rest of the order live.
+ *
+ * `quantity` is never touched — it keeps meaning what was ORDERED, which is the
+ * only record of what was agreed and the figure the money guard prices. The
+ * cancellation accumulates into `cancelledQty` beside it, so the line reads:
+ *
+ *     ordered 3, cancelled 1, remaining 2
+ *
+ * Several cancellations add up and can never pass the ordered quantity, checked
+ * here for a readable message and guaranteed by
+ * sales_item_cancelled_within_quantity.
+ */
+export async function cancelSalesItems(
+  actor: AuthenticatedUser,
+  id: string,
+  input: CancelSalesItemsInput,
+): Promise<SalesOrderDetail> {
+  const now = await prisma.$transaction(async (tx) => {
+    const at = await databaseNow(tx);
+
+    await repo.lockOrder(tx, id);
+
+    const order = await repo.findForPolicy(id, tx);
+    if (!order) throw notFound();
+    assertNotClosed(order.status);
+    if (!canCancelOrder({ id: actor.id, role: actor.role }, order)) throw forbidden();
+
+    const items = await tx.salesOrderItem.findMany({
+      where: { orderId: id, id: { in: input.lines.map((line) => line.itemId) } },
+      select: { id: true, productName: true, quantity: true, cancelledQty: true, status: true },
+    });
+    const byId = new Map(items.map((item) => [item.id, item]));
+
+    // Every named line must belong to THIS order. Looking them up by id alone
+    // would let a caller cancel units of somebody else's order.
+    for (const line of input.lines) {
+      if (!byId.has(line.itemId)) {
+        throw AppError.notFound('SALES_ITEM_NOT_FOUND', 'That product line could not be found.');
+      }
+    }
+
+    await assertNoAllocations(tx, input.lines.map((line) => line.itemId));
+
+    for (const line of input.lines) {
+      const item = byId.get(line.itemId)!;
+
+      if (item.status !== 'ACTIVE') {
+        throw AppError.conflict(
+          'SALES_ITEM_NOT_ACTIVE',
+          `${item.productName} is still awaiting approval, so its units cannot be cancelled.`,
+        );
+      }
+
+      const nextCancelled = item.cancelledQty + line.quantity;
+      if (nextCancelled > item.quantity) {
+        const remaining = item.quantity - item.cancelledQty;
+        throw AppError.conflict(
+          'CANCEL_EXCEEDS_REMAINING',
+          `${item.productName} has only ${remaining} unit(s) left to cancel.`,
+        );
+      }
+
+      await tx.salesOrderItem.update({
+        where: { id: item.id },
+        data: { cancelledQty: nextCancelled },
+      });
+    }
+
+    /*
+      Cancelling every remaining unit of every line IS cancelling the order, and
+      leaving it OPEN afterwards would let it sit on the dispatch board with
+      nothing to send. The reason travels with it, so the order records why.
+    */
+    const remainingAfter = await tx.salesOrderItem.count({
+      where: { orderId: id, status: 'ACTIVE', cancelledQty: { lt: prisma.salesOrderItem.fields.quantity } },
+    });
+
+    if (remainingAfter === 0) {
+      await tx.salesOrder.update({
+        where: { id },
+        data: {
+          status: 'CANCELLED',
+          cancelledAt: at,
+          cancelledById: actor.id,
+          cancellationReason: input.reason,
+        },
+      });
+    }
 
     return at;
   }, TX_OPTIONS);

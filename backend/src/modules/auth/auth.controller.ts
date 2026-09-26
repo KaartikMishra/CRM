@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express';
+import { env } from '../../config/env.js';
 import type { LoginInput } from '@rs/shared';
 import { sendSuccess } from '../../utils/apiResponse.js';
 import { validatedBody } from '../../utils/requestContext.js';
@@ -25,7 +26,22 @@ export async function login(req: Request, res: Response): Promise<void> {
 export async function me(req: Request, res: Response): Promise<void> {
   const user = currentUser(req);
   const permissions = await effectivePermissions(user.id, user.role);
-  sendSuccess(res, { ...user, permissions });
+
+  /*
+    The seller's own registered State travels with the session.
+
+    It is server configuration, so the browser has no other way to know it — and
+    without it the new-order form cannot tell an intra-state sale from an
+    inter-state one, and showed CGST + SGST for every Indian customer including
+    the ones that owe IGST. This is the app-bootstrap payload and already
+    carries the permission matrix, so one app-level field belongs here rather
+    than behind a second round trip.
+
+    Still only a preview: every figure that matters is computed server-side from
+    this same value, and the created order reports the split the API decided.
+    Null when unconfigured, which is exactly what taxSplitFor already handles.
+  */
+  sendSuccess(res, { ...user, permissions, sellerState: env.SELLER_STATE ?? null });
 }
 
 /**

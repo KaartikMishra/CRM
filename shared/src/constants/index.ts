@@ -294,6 +294,31 @@ export const GST_MODE_LABELS = {
 } as const satisfies Record<GstMode, string>;
 
 /**
+ * How an order's money is being collected.
+ *
+ * Three answers, and they differ in *when* the money arrives rather than in how
+ * much of it does:
+ *
+ *   PREPAID      the whole payable is collected before dispatch
+ *   COD          the whole payable is collected on delivery
+ *   PARTIAL_COD  some is collected now, the rest on delivery
+ *
+ * Deliberately not a term in any total. This says how a payment arrived, never
+ * how much — the payable is the sum of the lines and charges, and the money
+ * guard does not read this. Recording COD does not make an order paid, and
+ * recording PREPAID does not make it paid either; only a payment does.
+ */
+export const PAYMENT_METHODS = ['PREPAID', 'COD', 'PARTIAL_COD'] as const;
+
+export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
+
+export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
+  PREPAID: 'Prepaid',
+  COD: 'Cash on delivery',
+  PARTIAL_COD: 'Partial COD',
+};
+
+/**
  * What a rate is called once it has been split for an intra-state sale.
  *
  * Under Indian GST a sale within the seller's own state carries CGST and SGST
@@ -301,7 +326,14 @@ export const GST_MODE_LABELS = {
  * rate. The total tax is identical either way — only the heads differ, and an
  * invoice has to name them correctly.
  */
-export const TAX_SPLITS = ['CGST_SGST', 'IGST'] as const;
+/*
+  NONE is the third answer, and it is not "no tax decided" — it is "Indian GST
+  does not name heads for this supply at all", which is what a customer outside
+  India is. A line on such an order carries no GST rate (the service refuses
+  one), so NONE always coincides with a tax total of zero; it exists so nothing
+  labels a foreign sale CGST or IGST on the way past.
+*/
+export const TAX_SPLITS = ['CGST_SGST', 'IGST', 'NONE'] as const;
 
 export type TaxSplit = (typeof TAX_SPLITS)[number];
 
@@ -341,3 +373,16 @@ export const SALES_CHARGE_MAX = 20;
 
 /** Free-text note beside a charge, e.g. "Air freight, Mumbai–Dubai". */
 export const SALES_CHARGE_LABEL_MAX_LENGTH = 120;
+
+/**
+ * How long a payment reference may be.
+ *
+ * Generous on purpose. A UPI UTR is 12 digits and a NEFT one 16, but bank
+ * portals hand out longer strings and people paste what they were given —
+ * truncating a reference makes it useless for the one job it has, which is
+ * matching this payment to a line on a statement.
+ */
+export const SALES_PAYMENT_REFERENCE_MAX_LENGTH = 120;
+
+/** Room for a sentence explaining a cancellation or a refund, not an essay. */
+export const SALES_CANCELLATION_REASON_MAX_LENGTH = 500;

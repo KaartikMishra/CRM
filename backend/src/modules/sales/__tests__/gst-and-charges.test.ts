@@ -24,6 +24,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { SalesOrderDetail } from '@rs/shared';
+import { env } from '../../../config/env.js';
 import {
   api,
   mintToken,
@@ -44,13 +45,35 @@ type OrderBody = { order: SalesOrderDetail };
 
 let admin: TestUser;
 let token: string;
+let reviewerToken: string;
 let customerId: string;
 
 beforeAll(async () => {
   await startTestServer();
   admin = await makeUser('ADMIN');
   token = await mintToken(admin.id, { role: 'ADMIN' });
-  customerId = (await makeCustomer('BULK', { state: 'Karnataka' })).id;
+  // Charge edits now go through approval, and nobody decides their own.
+  const reviewer = await makeUser('ADMIN');
+  reviewerToken = await mintToken(reviewer.id, { role: 'ADMIN' });
+  /*
+    The customer sits in the seller's own State, read from the same
+    configuration the API reads.
+
+    These cases are about the intra-state split — that a rate halves into CGST
+    and SGST and the halves add back to the whole — so the seller and the
+    customer have to be in one State for there to be an intra-state sale to
+    measure. Naming a State outright made that true only by accident: the suite
+    passed while SELLER_STATE was unset, because an unconfigured seller reads
+    every Indian customer as intra-state, and began failing the moment a real
+    seller State was configured somewhere else. The split was correct — the
+    fixture was describing a different sale than the assertions.
+
+    The fallback matters only when SELLER_STATE is unset, and in that case
+    taxSplitFor returns CGST_SGST for any Indian customer, so it just has to be
+    a real State. Inter-state and foreign splits are covered by
+    customer-region-and-images.test.ts, which builds its own customers.
+  */
+  customerId = (await makeCustomer('BULK', { state: env.SELLER_STATE ?? 'Karnataka' })).id;
 });
 
 afterAll(async () => {
@@ -305,10 +328,27 @@ describe('charges and adjustments', () => {
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(res.body.data!.order.money.total).toBe('134.11');
 
-    const cleared = await api<OrderBody>('PUT', `/api/sales/${order.id}/charges`, {
+    /*
+      Clearing them is now a change to an existing set, so it is proposed and
+      then decided rather than applied. The arithmetic being checked is the
+      same: an order with no charges is back to its goods and their GST.
+    */
+    const filed = await api<OrderBody>('PUT', `/api/sales/${order.id}/charges`, {
       token,
       body: { charges: [] },
     });
+    expect(filed.status, JSON.stringify(filed.body)).toBe(200);
+    // Nothing has moved yet.
+    expect(filed.body.data!.order.money.total).toBe('134.11');
+
+    const requestId = filed.body.data!.order.chargeChangeRequests[0]!.id;
+    const cleared = await api<OrderBody>(
+      'POST',
+      `/api/sales/${order.id}/charge-requests/${requestId}/approve`,
+      { token: reviewerToken, body: {} },
+    );
+
+    expect(cleared.status, JSON.stringify(cleared.body)).toBe(200);
     expect(cleared.body.data!.order.charges).toHaveLength(0);
     expect(cleared.body.data!.order.money.total).toBe('118.00');
   });
@@ -336,9 +376,22 @@ describe('charges and adjustments', () => {
     });
     expect(paid.status).toBe(201);
 
-    const res = await api('PUT', `/api/sales/${order.id}/charges`, {
+    /*
+      The guard has moved to where the change actually lands. Filing the
+      proposal is allowed — it moves no money — and it is the approval that is
+      refused, because that is the moment the charges would really change.
+    */
+    const filed = await api<OrderBody>('PUT', `/api/sales/${order.id}/charges`, {
       token,
       body: { charges: [] },
+    });
+    expect(filed.status, JSON.stringify(filed.body)).toBe(200);
+    expect(filed.body.data!.order.money.total).toBe('200.00');
+
+    const requestId = filed.body.data!.order.chargeChangeRequests[0]!.id;
+    const res = await api('POST', `/api/sales/${order.id}/charge-requests/${requestId}/approve`, {
+      token: reviewerToken,
+      body: {},
     });
 
     expect(res.status).toBe(409);

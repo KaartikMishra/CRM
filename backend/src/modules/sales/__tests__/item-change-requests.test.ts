@@ -328,9 +328,18 @@ describe('who may request', () => {
     expect(after.money.total).toBe('1500.00');
   });
 
-  it('still refuses a non-owner every order-level mutation', async () => {
-    // The widening is scoped to change requests. Dates, payment and dispatch
-    // keep their ownership rule untouched.
+  it('lets a non-owner do the order-level work too', async () => {
+    /*
+      This asserted the opposite until the ownership rule was removed: dates,
+      payment and dispatch were the creator's alone, and a colleague opening the
+      order was refused all three. That was the defect — an order belongs to the
+      business, and the person collecting a payment or sending the goods is
+      routinely not the person who typed it in.
+
+      The premise changed because the rule did. What still refuses these is the
+      capability, not the creator, and the very next case proves it by revoking
+      SALES EDIT.
+    */
     const order = await newOrder();
 
     expect(
@@ -339,7 +348,7 @@ describe('who may request', () => {
         body: { toBeDispatchedBy: new Date(Date.now() + 30 * 864e5).toISOString() },
       })).status,
       'dates',
-    ).toBe(403);
+    ).toBe(200);
 
     expect(
       (await api('POST', `/api/sales/${order.id}/payments`, {
@@ -347,12 +356,12 @@ describe('who may request', () => {
         body: { amount: '10.00' },
       })).status,
       'payment',
-    ).toBe(403);
+    ).toBe(201);
 
     expect(
       (await api('POST', `/api/sales/${order.id}/dispatch`, { token: strangerToken })).status,
       'dispatch',
-    ).toBe(403);
+    ).toBe(200);
   });
 
   it('refuses someone whose SALES EDIT has been revoked', async () => {

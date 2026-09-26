@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { ArrowLeft, Lock } from 'lucide-react';
+import { ArrowLeft, Ban, Lock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
@@ -16,7 +16,10 @@ import { can } from '@/lib/current-user';
 import { requireModule } from '@/lib/require-module';
 import { NoModuleAccess } from '@/components/common/no-module-access';
 import { EditChargesDialog } from '@/components/sales/edit-charges-dialog';
+import { ChargeChangeReview } from '@/components/sales/charge-change-review';
 import { MoneyBreakdown } from '@/components/sales/money-breakdown';
+import { PaymentHistory } from '@/components/sales/payment-history';
+import { RefundPanel } from '@/components/sales/refund-panel';
 import { formatCurrency, formatDate, formatDateTime, label } from '@/lib/format';
 
 type Params = Promise<{ id: string }>;
@@ -51,15 +54,42 @@ export default async function SalesOrderDetailPage({ params }: { params: Params 
 
   // Mirrors backend/src/policies/sales-access.ts. The API is authoritative;
   // this only decides what is worth rendering.
-  const isAdmin = user.role === 'ADMIN';
-  const isCreator = order.createdBy.id === user.id;
-  const owns = isAdmin || isCreator;
-  const closed = order.status === 'CLOSED';
+  /*
+    Both terminal states, and both refuse every mutation on the server — see
+    assertNotClosed. Offering an Edit or a Dispatch on a cancelled order would
+    be a button that always fails.
+  */
+  const closed = order.status === 'CLOSED' || order.status === 'CANCELLED';
+  /*
+    Operational work on an order is SALES EDIT and nothing narrower.
+
+    This used to also require `isAdmin || isCreator`, which meant a second
+    salesperson opening a colleague's order saw no Edit, no Record payment and
+    no Mark dispatched — the work looked Admin-only because in practice it was.
+    Who created the order is still shown in the facts below; it is no longer an
+    authorisation. Resolved from the permission matrix rather than the role, so
+    a per-user grant or revocation applies here as everywhere else.
+  */
   const mayEdit = can(user, 'SALES', 'EDIT');
 
-  const canEdit = mayEdit && owns && !closed;
-  const canDispatch = mayEdit && owns && order.status === 'OPEN';
-  const canClose = mayEdit && owns && order.status === 'DISPATCHED';
+  /* At most one is ever PENDING — the API refuses a second while one is open. */
+  const pendingChargeChange =
+    order.chargeChangeRequests.find((request) => request.status === 'PENDING') ?? null;
+
+  const canEdit = mayEdit && !closed;
+  const canDispatch = mayEdit && order.status === 'OPEN';
+  const canClose = mayEdit && order.status === 'DISPATCHED';
+  /*
+    Mirrors canCancelOrder / canRefundOrder in sales-access.ts.
+
+    Cancelling needs a live order, so it goes with `closed`. Refunding
+    deliberately survives cancellation and only stops at CLOSED — money owed
+    back is settled AFTER the goods are called off, and refusing it on a
+    cancelled order would make the workflow impossible to finish. The API
+    checks both again.
+  */
+  const canCancel = mayEdit && !closed;
+  const canRefund = mayEdit && order.status !== 'CLOSED';
   // Approving a proposed line is SALES ASSIGN — resolved from the permission
   // matrix, never from the role, so a per-user grant works here too.
   // Product change requests are deliberately NOT gated on ownership: filing one
@@ -196,7 +226,7 @@ export default async function SalesOrderDetailPage({ params }: { params: Params 
             ))}
           </dl>
 
-          {(canEdit || canDispatch || canClose) && (
+          {(canEdit || canDispatch || canClose || canCancel) && (
             <>
               <Separator className="my-5" />
               <SalesOrderActions
@@ -204,14 +234,37 @@ export default async function SalesOrderDetailPage({ params }: { params: Params 
                 canEdit={canEdit}
                 canDispatch={canDispatch}
                 canClose={canClose}
+                canCancel={canCancel}
               />
             </>
           )}
 
-          {closed && (
+          {order.status === 'CLOSED' && (
             <div className="mt-5 flex items-center gap-2 rounded-md border border-line bg-surface-2 px-3 py-2.5 text-sm text-muted">
               <Lock className="size-4 shrink-0" />
               This order is closed and read-only.
+            </div>
+          )}
+
+          {/*
+            A cancelled order says who called it off and why, because that is
+            the first question anybody opening it will have. Refunds stay
+            available below — cancelling does not send money back.
+          */}
+          {order.status === 'CANCELLED' && (
+            <div className="mt-5 rounded-md border border-critical/30 bg-critical-soft px-3 py-2.5 text-sm">
+              <div className="flex items-center gap-2 font-medium text-critical">
+                <Ban className="size-4 shrink-0" />
+                Cancelled
+                {order.cancelledBy && order.cancelledAt && (
+                  <span className="font-normal text-ink-2">
+                    by {order.cancelledBy.name} · {formatDateTime(order.cancelledAt)}
+                  </span>
+                )}
+              </div>
+              {order.cancellationReason && (
+                <p className="mt-1 text-ink-2">{order.cancellationReason}</p>
+              )}
             </div>
           )}
         </CardContent>
@@ -262,12 +315,33 @@ export default async function SalesOrderDetailPage({ params }: { params: Params 
                   may edit it — the same gate the header actions use. A closed
                   order is read-only, and the API refuses the write anyway.
                 */}
+                {/*
+                  Proposed charge changes, with the decision on them.
+
+                  This was a read-only banner: an approver opening the order saw
+                  the same notice the requester did and was offered nothing to
+                  do about it, so a pending change could only ever be decided by
+                  calling the API by hand. The component below is the same card
+                  the item change requests use, and it resolves who may decide
+                  from `canReview` — which the API checks again, along with
+                  refusing self-review.
+                */}
+                <ChargeChangeReview
+                  orderId={order.id}
+                  requests={order.chargeChangeRequests}
+                  currency={order.money.currency}
+                  canReview={canReview}
+                  currentUserId={user.id}
+                />
+
                 {canEdit && (
                   <div className="mt-4 border-t border-line pt-3">
                     <EditChargesDialog
                       orderId={order.id}
                       charges={order.charges}
                       money={order.money}
+                      needsApproval={order.charges.length > 0}
+                      pending={Boolean(pendingChargeChange)}
                     />
                   </div>
                 )}
@@ -284,10 +358,21 @@ export default async function SalesOrderDetailPage({ params }: { params: Params 
             <CardContent className="p-5">
               <MoneySummary money={order.money} />
               <p className="mt-3 text-xs text-muted">
-                {order.money.fullyPaid
-                  ? 'This order is paid in full.'
-                  : `${formatCurrency(order.money.pending, order.money.currency)} still to collect.`}
+                {order.status === 'CANCELLED'
+                  ? 'This order is cancelled. Anything already paid is shown as refundable below.'
+                  : order.money.fullyPaid
+                    ? 'This order is paid in full.'
+                    : `${formatCurrency(order.money.pending, order.money.currency)} still to collect.`}
               </p>
+
+              {/* What the paid figure is made of — one row per instalment. */}
+              <PaymentHistory payments={order.payments} currency={order.money.currency} />
+
+              {/*
+                Money owed back. Hides itself entirely on an order with nothing
+                refundable and no refund history, which is most of them.
+              */}
+              <RefundPanel order={order} canRefund={canRefund} />
             </CardContent>
           </Card>
           </div>

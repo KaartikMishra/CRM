@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { COUNTRIES, GSTIN_PATTERN, INDIA_STATES } from '../constants/index.js';
+import { COUNTRIES, DEFAULT_COUNTRY, GSTIN_PATTERN, INDIA_STATES } from '../constants/index.js';
 import { CUSTOMER_TYPES } from '../enums.js';
 import { cuidSchema } from './common.js';
 
@@ -81,7 +81,51 @@ export const customerGstSchema = z
   .toUpperCase()
   .regex(GSTIN_PATTERN, 'Enter a valid 15-character GSTIN');
 
-export const createCustomerSchema = z.object({
+/**
+ * State belongs to India, and only to India.
+ *
+ * `state` is closed to the States and Union Territories of India, so pairing it
+ * with any other country is not a preference but a contradiction — it would
+ * record a customer in Lesotho as being in Haryana. The rule is written once,
+ * here, and applied to every customer schema, because a form that disables the
+ * field is a courtesy and never the guarantee.
+ *
+ * A customer with no country at all is left alone deliberately: every row
+ * recorded before the field existed has none, and they must stay loadable and
+ * editable.
+ */
+const requireStateWithinIndia = (
+  value: { country?: string; state?: string },
+  ctx: z.RefinementCtx,
+): void => {
+  if (!value.country) return;
+
+  if (value.country === DEFAULT_COUNTRY) {
+    if (!value.state) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['state'],
+        message: 'Choose a state',
+      });
+    }
+    return;
+  }
+
+  if (value.state) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['state'],
+      message: `A state is only recorded for a customer in ${DEFAULT_COUNTRY}`,
+    });
+  }
+};
+
+/*
+  Kept as a plain object so it can still be extended — `salesNewCustomerSchema`
+  needs `.extend()`, and a schema carrying a refinement can no longer be
+  extended. The refinement is applied to each finished schema instead.
+*/
+const customerFields = z.object({
   name: z.string().trim().min(2, 'Customer name is required').max(160),
   type: z.enum(CUSTOMER_TYPES, {
     errorMap: () => ({ message: 'Choose a customer type' }),
@@ -103,6 +147,8 @@ export const createCustomerSchema = z.object({
   country: customerCountrySchema.optional(),
   gstNumber: customerGstSchema.optional(),
 });
+
+export const createCustomerSchema = customerFields.superRefine(requireStateWithinIndia);
 
 export const customerSearchSchema = z.object({
   q: z.string().trim().max(160).optional(),
@@ -137,9 +183,9 @@ export const customerSelectionSchema = z
  * Sales asks for one. Product Enquiry keeps phone optional — the base schema is
  * unchanged, and both reuse the same format rule.
  */
-export const salesNewCustomerSchema = createCustomerSchema.extend({
-  phone: customerPhoneSchema,
-});
+export const salesNewCustomerSchema = customerFields
+  .extend({ phone: customerPhoneSchema })
+  .superRefine(requireStateWithinIndia);
 
 export type CreateCustomerInput = z.infer<typeof createCustomerSchema>;
 export type SalesNewCustomerInput = z.infer<typeof salesNewCustomerSchema>;

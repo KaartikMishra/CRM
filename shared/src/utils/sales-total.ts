@@ -24,6 +24,7 @@
  * makes them impossible to disagree with the lines they came from.
  */
 
+import { DEFAULT_COUNTRY } from '../constants/index.js';
 import type { GstMode, GstRate, SalesChargeType, TaxSplit } from '../constants/index.js';
 import { DISCOUNT_CHARGE_TYPE } from '../constants/index.js';
 import {
@@ -128,6 +129,9 @@ function rateOf(gstRate: GstRate | null): number | null {
  * the end rather than being threaded through the arithmetic above.
  */
 function postToHeads(tax: string, split: TaxSplit): { cgst: string; sgst: string; igst: string } {
+  // Outside Indian GST there are no heads to post to. The service refuses a
+  // GST rate on such a line, so there is nothing here to lose.
+  if (split === 'NONE') return { cgst: '0.00', sgst: '0.00', igst: '0.00' };
   if (split === 'IGST') return { cgst: '0.00', sgst: '0.00', igst: normaliseAmount(tax) };
   const { cgst, sgst } = halveTax(tax);
   return { cgst, sgst, igst: '0.00' };
@@ -255,9 +259,26 @@ export function computeSalesTotals(input: {
  * Order level, not line level: where the goods are going does not change from
  * one line of a document to the next.
  */
-export function taxSplitFor(sellerState: string | null, customerState: string | null): TaxSplit {
-  if (!sellerState || !customerState) return 'CGST_SGST';
-  return sellerState.trim().toLowerCase() === customerState.trim().toLowerCase()
-    ? 'CGST_SGST'
-    : 'IGST';
+export function taxSplitFor(
+  sellerState: string | null,
+  customer: { state: string | null; country: string | null },
+): TaxSplit {
+  /*
+    A customer outside India is outside Indian GST, so no head applies. Read
+    from the country the customer actually carries: a blank country is NOT
+    treated as foreign, because every customer recorded before the field
+    existed has one, and reading those as exports would silently strip the tax
+    off historical orders.
+  */
+  if (customer.country && !sameText(customer.country, DEFAULT_COUNTRY)) return 'NONE';
+
+  // Within India but with no state on either side there is nothing to compare,
+  // so the intra-state heads stand as the long-standing default.
+  if (!sellerState || !customer.state) return 'CGST_SGST';
+
+  return sameText(sellerState, customer.state) ? 'CGST_SGST' : 'IGST';
 }
+
+/** The one comparison both halves above use, so they cannot drift apart. */
+const sameText = (a: string, b: string): boolean =>
+  a.trim().toLowerCase() === b.trim().toLowerCase();
