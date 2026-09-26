@@ -50,11 +50,30 @@ export function SalesOrderTable({ orders }: { orders: SalesOrderSummary[] }) {
             className="cursor-pointer"
           >
             <TableCell>
+              {/*
+                The same three-step the detail page's line list uses: an upload
+                on one of the order's lines first, the RS Product's catalogue
+                image only when there is none, the placeholder only when
+                neither exists. `catalogueThumbnail` is already null whenever
+                any line carries an upload, so this order is belt and braces —
+                a manual image is authoritative and must never be displaced by
+                the catalogue.
+
+                Both figures come from the API's own summary, so the list and
+                the detail page cannot disagree about which image a product has.
+              */}
               {order.thumbnail ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={order.thumbnail.secureUrl}
                   alt=""
+                  className="size-9 rounded-sm border border-line object-cover"
+                />
+              ) : order.catalogueThumbnail ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={order.catalogueThumbnail.url}
+                  alt={order.catalogueThumbnail.altText ?? ''}
                   className="size-9 rounded-sm border border-line object-cover"
                 />
               ) : (
