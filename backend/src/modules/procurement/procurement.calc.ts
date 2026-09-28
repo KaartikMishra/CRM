@@ -7,7 +7,11 @@
  * exactly one definition of each.
  */
 
-import type { FulfillmentStatus } from '@rs/shared';
+import type {
+  FulfillmentStatus,
+  ProcurementClockState,
+  ProcurementVerdict,
+} from '@rs/shared';
 
 /**
  * Received stock on a bill line that nobody has claimed yet.
@@ -107,4 +111,67 @@ export function istDay(instant: Date): string {
 export function istDayRange(day: string): { start: Date; end: Date } {
   const startMs = Date.parse(`${day}T00:00:00.000Z`) - IST_OFFSET_MS;
   return { start: new Date(startMs), end: new Date(startMs + MS_PER_DAY) };
+}
+
+/**
+ * The procurement deadline for an order: T+2, where T is its own `orderDate`.
+ *
+ * The last millisecond of the IST day two days after the order date, so an order
+ * dated the 10th is due by 23:59:59.999 IST on the 12th. A *date* rather than an
+ * instant is being extended, and comparing against that day's midnight would
+ * call an order covered at 2pm on its own deadline day late — which is not what
+ * anyone means by "within two days".
+ *
+ * The same end-of-IST-day rule `sales-efficiency.ts` applies to
+ * `toBeDispatchedBy`, written here against this module's own IST constant rather
+ * than imported across a module boundary — exactly as `istDay` above declares its
+ * own. The SQL in the procurement_clock migration computes the identical figure,
+ * so a backfilled deadline and a new one agree to the millisecond.
+ *
+ * Called once, when the clock row is created, and never again: the deadline is
+ * the one part of the clock that never moves.
+ */
+export function procurementDeadline(orderDate: Date): Date {
+  const istWallClock = orderDate.getTime() + 2 * MS_PER_DAY + IST_OFFSET_MS;
+  const istDayStart = Math.floor(istWallClock / MS_PER_DAY) * MS_PER_DAY;
+  return new Date(istDayStart + MS_PER_DAY - 1 - IST_OFFSET_MS);
+}
+
+/**
+ * The factual verdict on a completed order, against its immutable deadline.
+ *
+ * Deliberately not called "freezing" anything: `reconcileClock` writes this the
+ * moment coverage reaches zero and clears it again if coverage is later lost, so
+ * the result states what is true now rather than sealing a claim for ever. The
+ * deadline it is measured against is what never changes.
+ */
+export function procurementVerdict(completedAt: Date, deadline: Date): ProcurementVerdict {
+  return completedAt <= deadline ? 'ON_TIME' : 'DELAYED';
+}
+
+/**
+ * Where an order stands on the clock, for a reader.
+ *
+ * Derived on every read, which is why no column holds it: two of the four are a
+ * comparison against `now`, and a stored value would need a sweep to flip
+ * UNFULFILLED into UNFULFILLED_WITH_DELAY as a deadline passes. The same shape as
+ * `isOverdue()` in the Sales module, which derives "overdue" beside the stored
+ * verdict rather than storing a second one.
+ *
+ * Null for a cancelled order: its clock has stopped, so it is neither fulfilled
+ * nor accruing delay. Cancellation is the order's own status and is reported
+ * beside this, never folded into it as a fifth value.
+ */
+export function clockState(
+  now: Date,
+  deadline: Date,
+  completedAt: Date | null,
+  verdict: ProcurementVerdict | null,
+  orderCancelled: boolean,
+): ProcurementClockState | null {
+  if (orderCancelled) return null;
+  if (completedAt === null || verdict === null) {
+    return now > deadline ? 'UNFULFILLED_WITH_DELAY' : 'UNFULFILLED';
+  }
+  return verdict === 'ON_TIME' ? 'FULFILLED_ON_TIME' : 'FULFILLED_DELAYED';
 }

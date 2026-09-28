@@ -41,6 +41,13 @@ import {
 import { dispatchVerdict } from './sales-efficiency.js';
 import { assertNotClosed, assertTransition } from './sales-status.js';
 import * as repo from './sales.repository.js';
+/*
+  The one place Sales calls into Procurement, and it is deliberately narrow:
+  two pure functions that start and recompute an order's procurement clock.
+  Sales writes nothing procurement owns — no stock, no allocation, no
+  fulfilment — and Procurement remains the authority on all three.
+*/
+import * as clock from '../procurement/procurement-clock.service.js';
 
 // ---------------------------------------------------------------------------
 //  Shared helpers
@@ -269,6 +276,18 @@ export async function createSalesOrder(
       recipients,
       notification.salesOrderCreatedDraft(input.orderId, summary, order.id),
     );
+
+    /*
+      The procurement clock starts here, in this transaction, for the same reason
+      the notification is written here: an order that rolls back must not leave a
+      deadline behind. Its T+2 is computed from this order's own orderDate and is
+      never recomputed afterwards.
+
+      This creates a row that REFERENCES the order. It copies nothing from it —
+      no line, no quantity, no product — so there is no second answer to what the
+      customer bought.
+    */
+    await clock.createClock(tx, order.id, input.orderDate);
 
     return { id: order.id, now: at };
   }, TX_OPTIONS);
@@ -618,6 +637,14 @@ export async function cancelSalesOrder(
       },
     });
 
+    /*
+      A cancelled order's clock stops. Left alone it would be worse than wrong:
+      with every line called off the remaining requirement is zero, so the
+      coverage arithmetic would report the order as fully procured and the board
+      would announce a success where nothing was ever bought. Reconcile clears it.
+    */
+    await clock.reconcileClock(tx, id, at);
+
     return at;
   }, TX_OPTIONS);
 
@@ -713,6 +740,14 @@ export async function cancelSalesItems(
         },
       });
     }
+
+    /*
+      Cancelling units lowers what procurement is asked to cover, so it can be the
+      event that completes an order — or, when it cancels the order outright, the
+      one that stops its clock. Both are the same reconcile, called after the
+      status is settled so it reads the order as it now stands.
+    */
+    await clock.reconcileClock(tx, id, at);
 
     return at;
   }, TX_OPTIONS);

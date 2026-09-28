@@ -96,6 +96,10 @@ model User {
   reviewedPurchaseBills   PurchaseBill[]              @relation("PurchaseBillReviewedBy")
   createdPurchaseBills  PurchaseBill[]           @relation("PurchaseBillCreatedBy")
   purchaseAllocations   PurchaseAllocation[]     @relation("AllocationBy")
+  requestedPurchaseDelays    PurchaseDelayReason[]    @relation("PurchaseDelayRequestedBy")
+  reviewedPurchaseDelays     PurchaseDelayReason[]    @relation("PurchaseDelayReviewedBy")
+  requestedProcurementDelays ProcurementDelayReason[] @relation("ProcurementDelayRequestedBy")
+  reviewedProcurementDelays  ProcurementDelayReason[] @relation("ProcurementDelayReviewedBy")
   notifications         Notification[]
 
   @@index([role, isActive])
@@ -760,6 +764,9 @@ model SalesOrder {
   chargeChangeRequests SalesChargeChangeRequest[]
   payments       SalesPayment[]
   refunds        SalesRefund[]
+  /// The procurement clock for this order. Created with the order, and holding
+  /// only a deadline and a completion result — never a copy of anything here.
+  procurementClock ProcurementClock?
 
   @@index([status, toBeDispatchedBy])
   @@index([customerId])
@@ -916,6 +923,8 @@ model SalesOrderItem {
   approvedBy   User?       @relation("SalesItemApprovedBy", fields: [approvedById], references: [id])
   changeRequests SalesItemChangeRequest[]
   allocations    PurchaseAllocation[]
+  /// Explanations the purchase person submitted for not covering this line.
+  purchaseDelayReasons PurchaseDelayReason[]
 
   @@unique([orderId, lineNo])
   @@index([orderId, status])
@@ -1418,6 +1427,144 @@ model PurchaseAllocation {
   /// stock to the same line is an edit, not a new row.
   @@unique([purchaseBillItemId, salesOrderItemId])
   @@index([salesOrderItemId])
+}
+
+// ---------------------------------------------------------------------------
+//  Procurement Clock — a submodule of Purchase & Procurement
+// ---------------------------------------------------------------------------
+
+/// The factual result of procuring one order, measured against its deadline.
+///
+/// Its own type rather than SalesEfficiency: that one is decided by dispatch and
+/// this one by coverage, and SalesEfficiency's own comment says such verdicts
+/// "must stay free to diverge".
+///
+/// NOT immutable, and deliberately not called frozen. It states what happened
+/// while the order is covered; if coverage is later lost — an allocation
+/// released, an active line added — reconcileClock invalidates it rather than
+/// leaving a claim standing that is no longer true. Only `deadline` never moves.
+enum ProcurementVerdict {
+  ON_TIME
+  DELAYED
+}
+
+/// A delay reason somebody submitted and somebody else decided.
+///
+/// One vocabulary shared by both chains — the purchase person's item-level
+/// reason and procurement's order-level one — exactly as SalesChangeStatus is
+/// shared across two Sales tables. Three states and no way back: a decided
+/// reason is a historical fact, and a second attempt is a second reason.
+enum DelayReasonStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// The procurement clock for one sales order.
+///
+/// Holds a deadline and a completion result and NOTHING ELSE. Every quantity the
+/// board shows — what is required, what is covered, what is still outstanding —
+/// is computed at read time from the order's own lines, their `alreadyFulfilled`
+/// and their PurchaseAllocation rows. There is no copy of the order, its
+/// products, its quantities or its stock here, because a copy is how two screens
+/// start disagreeing about what a customer bought.
+///
+/// The four states a reader sees are derived, which is why none of them is a
+/// column: two of them are a comparison against the clock right now, and storing
+/// those would need a sweep to flip them — an automatic action nobody asked for,
+/// on a codebase with no scheduler.
+model ProcurementClock {
+  id      String @id @default(cuid())
+  /// One clock per order, created inside the same transaction as the order.
+  orderId String @unique
+
+  /// T+2: the last instant of the IST day two days after the order's own
+  /// orderDate. Written once at creation and never recomputed — a later edit to
+  /// the order must not move the bar procurement was measured against.
+  deadline DateTime
+
+  /// When every remaining unit became covered. Null while anything is
+  /// outstanding, and cleared again if coverage is lost.
+  completedAt DateTime?
+  verdict     ProcurementVerdict?
+
+  /// True only on a row the migration backfilled from an order whose real
+  /// completion instant was never recorded — one covered partly through
+  /// `alreadyFulfilled`, which carries no timestamp of its own. The API and the
+  /// UI label such a result as estimated, so a guess is never shown as a fact.
+  /// Set false the first time reconcileClock writes a real completion.
+  completionEstimated Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  order        SalesOrder               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  delayReasons ProcurementDelayReason[]
+
+  /// The board: outstanding orders by deadline, and completed ones by result.
+  @@index([completedAt, deadline])
+}
+
+/// The purchase person's explanation for one order line they could not cover.
+///
+/// Per LINE, not per order: the person is late on specific goods, and an
+/// order-level reason could not say which. Decided by PROCUREMENT ASSIGN and
+/// never routed to an administrator.
+model PurchaseDelayReason {
+  id               String @id @default(cuid())
+  salesOrderItemId String
+
+  /// Why. Mandatory — an approver is accepting an explanation, and "late" is not
+  /// one. Enforced by purchase_delay_reason_present as well as by Zod.
+  reason String
+  status DelayReasonStatus @default(PENDING)
+
+  requestedById String
+  requestedAt   DateTime @default(now())
+  reviewedById  String?
+  reviewedAt    DateTime?
+  reviewNote    String?
+
+  salesOrderItem SalesOrderItem @relation(fields: [salesOrderItemId], references: [id], onDelete: Cascade)
+  requestedBy    User           @relation("PurchaseDelayRequestedBy", fields: [requestedById], references: [id])
+  reviewedBy     User?          @relation("PurchaseDelayReviewedBy", fields: [reviewedById], references: [id])
+
+  /// The queue: undecided reasons, oldest first.
+  @@index([status, requestedAt])
+  @@index([salesOrderItemId, status])
+}
+
+/// Procurement's own explanation for an order that was covered late.
+///
+/// Per ORDER, because the thing being explained is the order's outcome:
+/// required only once the verdict is DELAYED. Decided by an administrator.
+///
+/// Held in its own table rather than beside the purchase reasons because the two
+/// attach to different things and are decided by different people; folding them
+/// together would make one row mean two workflows.
+///
+/// Nothing about deciding one writes `completedAt`, `verdict` or `deadline`. The
+/// reason is an audit record that sits beside the result, and an approval cannot
+/// turn DELAYED into ON_TIME.
+model ProcurementDelayReason {
+  id      String @id @default(cuid())
+  clockId String
+
+  reason String
+  status DelayReasonStatus @default(PENDING)
+
+  requestedById String
+  requestedAt   DateTime @default(now())
+  reviewedById  String?
+  reviewedAt    DateTime?
+  reviewNote    String?
+
+  clock       ProcurementClock @relation(fields: [clockId], references: [id], onDelete: Cascade)
+  requestedBy User             @relation("ProcurementDelayRequestedBy", fields: [requestedById], references: [id])
+  reviewedBy  User?            @relation("ProcurementDelayReviewedBy", fields: [reviewedById], references: [id])
+
+  @@index([status, requestedAt])
+  @@index([clockId, status])
 }
 
 // ---------------------------------------------------------------------------

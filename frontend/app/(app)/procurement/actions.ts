@@ -5,17 +5,20 @@ import type {
   CreateAllocationInput,
   CreatePurchaseBillInput,
   LinkOrderLineInput,
-  SalesFulfillmentDetail,
   MapPurchaseItemInput,
-  RecordFulfillmentInput,
-  RequestProductChangeInput,
-  ReviewProductChangeInput,
-  ReviewPurchaseBillInput,
-  SalesRequirementRow,
   OrderRequirementView,
+  ProcurementClockDetail,
   PurchaseBillDetail,
   PurchaseDelayInput,
   ReceiveItemInput,
+  RecordFulfillmentInput,
+  RequestProductChangeInput,
+  ReviewDelayReasonInput,
+  ReviewProductChangeInput,
+  ReviewPurchaseBillInput,
+  SalesFulfillmentDetail,
+  SalesRequirementRow,
+  SubmitDelayReasonInput,
   UpdateAllocationInput,
 } from '@rs/shared';
 import { apiFetch } from '@/lib/api-server';
@@ -247,5 +250,84 @@ export async function lookupOrderAction(
   return call(
     `/api/procurement/order-requirements?orderId=${encodeURIComponent(orderId)}`,
     { method: 'GET' },
+  );
+}
+
+// --- Procurement Clock ------------------------------------------------------
+//
+// Same contract as everything above: forward the call, relay the answer. The API
+// decides whether a line still owes anything, whether a verdict is DELAYED, and
+// who may approve what. Nothing here duplicates any of that.
+
+/**
+ * One order's clock, fetched on demand for the detail dialog.
+ *
+ * A read through an action rather than a page, mirroring `fulfillmentDetailAction`:
+ * the board already lists every order, and a whole route for the per-line
+ * breakdown would be a second place to keep the same figures right.
+ */
+export async function clockDetailAction(
+  orderId: string,
+): Promise<ActionResult<{ order: ProcurementClockDetail }>> {
+  return call(`/api/procurement/clock/${orderId}`, { method: 'GET' });
+}
+
+/** The purchase person explains one line. Needs PROCUREMENT EDIT. */
+export async function submitPurchaseDelayAction(
+  salesOrderItemId: string,
+  input: SubmitDelayReasonInput,
+): Promise<ActionResult<{ order: ProcurementClockDetail }>> {
+  return call(
+    `/api/procurement/clock/items/${salesOrderItemId}/delay-reason`,
+    { method: 'POST', body: JSON.stringify(input) },
+    '/procurement/clock',
+  );
+}
+
+/**
+ * Deciding one. Needs PROCUREMENT ASSIGN, which the API enforces twice — and
+ * never routes to an administrator.
+ */
+export async function reviewPurchaseDelayAction(
+  reasonId: string,
+  decision: 'approve' | 'reject',
+  input: ReviewDelayReasonInput,
+): Promise<ActionResult<{ order: ProcurementClockDetail }>> {
+  return call(
+    `/api/procurement/clock/purchase-delays/${reasonId}/${decision}`,
+    { method: 'POST', body: JSON.stringify(input) },
+    '/procurement/clock',
+  );
+}
+
+/**
+ * Procurement accounts for an order it covered late. Needs PROCUREMENT ASSIGN,
+ * and the API refuses it unless that order's verdict is actually DELAYED.
+ */
+export async function submitProcurementDelayAction(
+  orderId: string,
+  input: SubmitDelayReasonInput,
+): Promise<ActionResult<{ order: ProcurementClockDetail }>> {
+  return call(
+    `/api/procurement/clock/${orderId}/delay-reason`,
+    { method: 'POST', body: JSON.stringify(input) },
+    '/procurement/clock',
+  );
+}
+
+/**
+ * Deciding that one. ADMIN only, enforced by the API at the route and again in
+ * the service. Approving it does not make the order on time — the verdict is a
+ * separate fact and no field here could move it.
+ */
+export async function reviewProcurementDelayAction(
+  reasonId: string,
+  decision: 'approve' | 'reject',
+  input: ReviewDelayReasonInput,
+): Promise<ActionResult<{ order: ProcurementClockDetail }>> {
+  return call(
+    `/api/procurement/clock/procurement-delays/${reasonId}/${decision}`,
+    { method: 'POST', body: JSON.stringify(input) },
+    '/procurement/clock',
   );
 }

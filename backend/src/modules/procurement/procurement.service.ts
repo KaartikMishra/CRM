@@ -58,6 +58,7 @@ import {
   totalFulfilled,
 } from './procurement.calc.js';
 import * as repo from './procurement.repository.js';
+import * as clock from './procurement-clock.service.js';
 
 /** Neon is a network hop away; the same budget the enquiry module uses. */
 const TX_OPTIONS = { timeout: 15_000, maxWait: 10_000 } as const;
@@ -1276,6 +1277,13 @@ export async function createAllocation(
       the pool the goods actually come from.
     */
     await reconcileLineStock(tx, itemId);
+
+    /*
+      And the clock, for the same reason and in the same breath: committing goods
+      to a requirement can be the event that finally covers the order. Deciding
+      that anywhere but here would let the two answers drift.
+    */
+    await clock.reconcileClockForItem(tx, input.salesOrderItemId);
   }, TX_OPTIONS);
 
   await recordAudit(req, {
@@ -1348,6 +1356,12 @@ export async function updateAllocation(
       // because the restored amount is the difference between the recomputed
       // target and what the line currently stands for, not a remembered number.
       await reconcileLineStock(tx, itemId);
+      /*
+        Releasing can UNCOVER an order that was complete. The clock is recomputed
+        rather than left standing: an order that is no longer covered must not go
+        on claiming it was fulfilled.
+      */
+      await clock.reconcileClockForItem(tx, line.id);
       return;
     }
 
@@ -1383,6 +1397,13 @@ export async function updateAllocation(
     // Raising or lowering a commitment moves stock the other way by the same
     // amount. Both directions are the one subtraction, so neither can drift.
     await reconcileLineStock(tx, itemId);
+
+    /*
+      And the clock, for the same reason and in the same breath: committing goods
+      to a requirement can be the event that finally covers the order. Deciding
+      that anywhere but here would let the two answers drift.
+    */
+    await clock.reconcileClockForItem(tx, line.id);
   }, TX_OPTIONS);
 
   await recordAudit(req, {
@@ -1941,6 +1962,14 @@ export async function recordFulfillment(
       }
       throw error;
     }
+
+    /*
+      Supply recorded by hand covers a requirement exactly as an allocation does,
+      so it is the other event that can complete — or un-complete — an order's
+      clock. Both routes end at the same reconcile, which is why there is one
+      definition of "covered" rather than one per supply route.
+    */
+    await clock.reconcileClockForItem(tx, salesOrderItemId);
   }, TX_OPTIONS);
 
   await recordAudit(req, {

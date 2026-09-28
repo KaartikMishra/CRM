@@ -4,11 +4,14 @@ import type {
   CreatePurchaseBillInput,
   LinkOrderLineInput,
   MapPurchaseItemInput,
+  ProcurementClockQuery,
   ProductChangeListQuery,
   RecordFulfillmentInput,
   RequestProductChangeInput,
+  ReviewDelayReasonInput,
   ReviewProductChangeInput,
   ReviewPurchaseBillInput,
+  SubmitDelayReasonInput,
   SalesRequirementQuery,
   PurchaseBillListQuery,
   PurchaseDelayInput,
@@ -20,6 +23,7 @@ import { sendCreated, sendSuccess } from '../../utils/apiResponse.js';
 import { validatedBody, validatedParams, validatedQuery } from '../../utils/requestContext.js';
 import { currentUser } from '../../middleware/requireAuth.js';
 import * as service from './procurement.service.js';
+import * as clock from './procurement-clock.service.js';
 
 /*
  * There is no legacy-catalogue handler left.
@@ -239,4 +243,93 @@ export async function updateAllocation(req: Request, res: Response): Promise<voi
     validatedBody<UpdateAllocationInput>(req),
   );
   sendSuccess(res, { bill });
+}
+
+// --- Procurement Clock ------------------------------------------------------
+//
+// Thin, like every handler above: parse the validated input, call the clock
+// service, send its answer. No branching and no business rule lives here.
+
+export async function procurementClock(req: Request, res: Response): Promise<void> {
+  const query = validatedQuery<ProcurementClockQuery>(req);
+  sendSuccess(res, { orders: await clock.listClock(query) });
+}
+
+export async function procurementClockDetail(req: Request, res: Response): Promise<void> {
+  const { orderId } = validatedParams<{ orderId: string }>(req);
+  sendSuccess(res, { order: await clock.getClockDetail(orderId) });
+}
+
+export async function purchaseDelayQueue(_req: Request, res: Response): Promise<void> {
+  sendSuccess(res, { reasons: await clock.listPendingPurchaseDelays() });
+}
+
+export async function procurementDelayQueue(_req: Request, res: Response): Promise<void> {
+  sendSuccess(res, { reasons: await clock.listPendingProcurementDelays() });
+}
+
+export async function submitPurchaseDelay(req: Request, res: Response): Promise<void> {
+  const { itemId } = validatedParams<{ itemId: string }>(req);
+  const order = await clock.submitPurchaseDelay(
+    req,
+    currentUser(req),
+    itemId,
+    validatedBody<SubmitDelayReasonInput>(req),
+  );
+  sendCreated(res, { order });
+}
+
+export async function approvePurchaseDelay(req: Request, res: Response): Promise<void> {
+  const { id } = validatedParams<{ id: string }>(req);
+  const order = await clock.approvePurchaseDelay(
+    req,
+    currentUser(req),
+    id,
+    validatedBody<ReviewDelayReasonInput>(req),
+  );
+  sendSuccess(res, { order });
+}
+
+export async function rejectPurchaseDelay(req: Request, res: Response): Promise<void> {
+  const { id } = validatedParams<{ id: string }>(req);
+  const order = await clock.rejectPurchaseDelay(
+    req,
+    currentUser(req),
+    id,
+    validatedBody<ReviewDelayReasonInput>(req),
+  );
+  sendSuccess(res, { order });
+}
+
+export async function submitProcurementDelay(req: Request, res: Response): Promise<void> {
+  const { orderId } = validatedParams<{ orderId: string }>(req);
+  const order = await clock.submitProcurementDelay(
+    req,
+    currentUser(req),
+    orderId,
+    validatedBody<SubmitDelayReasonInput>(req),
+  );
+  sendCreated(res, { order });
+}
+
+export async function approveProcurementDelay(req: Request, res: Response): Promise<void> {
+  const { id } = validatedParams<{ id: string }>(req);
+  const order = await clock.approveProcurementDelay(
+    req,
+    currentUser(req),
+    id,
+    validatedBody<ReviewDelayReasonInput>(req),
+  );
+  sendSuccess(res, { order });
+}
+
+export async function rejectProcurementDelay(req: Request, res: Response): Promise<void> {
+  const { id } = validatedParams<{ id: string }>(req);
+  const order = await clock.rejectProcurementDelay(
+    req,
+    currentUser(req),
+    id,
+    validatedBody<ReviewDelayReasonInput>(req),
+  );
+  sendSuccess(res, { order });
 }

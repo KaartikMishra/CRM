@@ -15,11 +15,14 @@ import {
   linkOrderLineSchema,
   mapPurchaseItemSchema,
   orderRequirementQuerySchema,
+  procurementClockQuerySchema,
   productChangeListQuerySchema,
   requestProductChangeSchema,
+  reviewDelayReasonSchema,
   reviewProductChangeSchema,
   reviewPurchaseBillSchema,
   salesRequirementQuerySchema,
+  submitDelayReasonSchema,
   purchaseBillListQuerySchema,
   purchaseDelaySchema,
   recordFulfillmentSchema,
@@ -28,12 +31,15 @@ import {
   updatePurchaseBillSchema,
 } from '@rs/shared';
 import { requireAuth } from '../../middleware/requireAuth.js';
-import { requirePermission } from '../../middleware/requirePermission.js';
+import { requireAdmin, requirePermission } from '../../middleware/requirePermission.js';
 import { validate } from '../../middleware/validate.js';
 import * as controller from './procurement.controller.js';
 
 const idParam = z.object({ id: z.string().cuid() });
 const itemParams = z.object({ id: z.string().cuid(), itemId: z.string().cuid() });
+/* The clock is addressed by the sales order, and its lines by the line's own id. */
+const orderIdParam = z.object({ orderId: z.string().cuid() });
+const itemIdParam = z.object({ itemId: z.string().cuid() });
 const allocationParams = z.object({
   id: z.string().cuid(),
   itemId: z.string().cuid(),
@@ -265,4 +271,100 @@ procurementRoutes.patch(
   requirePermission('PROCUREMENT', 'EDIT'),
   validate({ params: allocationParams, body: updateAllocationSchema }),
   controller.updateAllocation,
+);
+
+// --- Procurement Clock ------------------------------------------------------
+//
+// A submodule of this module, so it lives on this router and gates on the same
+// PROCUREMENT permissions. No new AppModule and no new PermissionAction: a
+// submodule inherits its parent's access, and granting or revoking Purchase &
+// Procurement moves both together.
+//
+// `/clock/queues/...` is declared before `/clock/:orderId` so the literal paths
+// are not read as order ids — the same ordering reason `/order-requirements`
+// sits above `/bills/:id`.
+
+procurementRoutes.get(
+  '/clock',
+  requirePermission('PROCUREMENT', 'VIEW'),
+  validate({ query: procurementClockQuerySchema }),
+  controller.procurementClock,
+);
+
+procurementRoutes.get(
+  '/clock/queues/purchase-delays',
+  requirePermission('PROCUREMENT', 'VIEW'),
+  controller.purchaseDelayQueue,
+);
+
+procurementRoutes.get(
+  '/clock/queues/procurement-delays',
+  requirePermission('PROCUREMENT', 'VIEW'),
+  controller.procurementDelayQueue,
+);
+
+procurementRoutes.get(
+  '/clock/:orderId',
+  requirePermission('PROCUREMENT', 'VIEW'),
+  validate({ params: orderIdParam }),
+  controller.procurementClockDetail,
+);
+
+/*
+ * Chain 1 — the purchase person explains one line, procurement decides.
+ *
+ * Submitting is EDIT: the same capability that records a bill and receives goods
+ * is the one that reports being unable to. Deciding is ASSIGN, exactly as
+ * deciding a product change and approving a bill already are — and never routed
+ * to an administrator.
+ */
+procurementRoutes.post(
+  '/clock/items/:itemId/delay-reason',
+  requirePermission('PROCUREMENT', 'EDIT'),
+  validate({ params: itemIdParam, body: submitDelayReasonSchema }),
+  controller.submitPurchaseDelay,
+);
+
+procurementRoutes.post(
+  '/clock/purchase-delays/:id/approve',
+  requirePermission('PROCUREMENT', 'ASSIGN'),
+  validate({ params: idParam, body: reviewDelayReasonSchema }),
+  controller.approvePurchaseDelay,
+);
+
+procurementRoutes.post(
+  '/clock/purchase-delays/:id/reject',
+  requirePermission('PROCUREMENT', 'ASSIGN'),
+  validate({ params: idParam, body: reviewDelayReasonSchema }),
+  controller.rejectPurchaseDelay,
+);
+
+/*
+ * Chain 2 — procurement accounts for its own late result, an administrator
+ * decides.
+ *
+ * Submitting is ASSIGN because it is procurement answering for itself. Deciding
+ * is `requireAdmin` deliberately: the capability that caused the delay must not
+ * be the one that clears it, and ASSIGN is the highest capability inside this
+ * module. This is the one place the clock goes above procurement.
+ */
+procurementRoutes.post(
+  '/clock/:orderId/delay-reason',
+  requirePermission('PROCUREMENT', 'ASSIGN'),
+  validate({ params: orderIdParam, body: submitDelayReasonSchema }),
+  controller.submitProcurementDelay,
+);
+
+procurementRoutes.post(
+  '/clock/procurement-delays/:id/approve',
+  requireAdmin,
+  validate({ params: idParam, body: reviewDelayReasonSchema }),
+  controller.approveProcurementDelay,
+);
+
+procurementRoutes.post(
+  '/clock/procurement-delays/:id/reject',
+  requireAdmin,
+  validate({ params: idParam, body: reviewDelayReasonSchema }),
+  controller.rejectProcurementDelay,
 );

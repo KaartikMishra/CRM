@@ -1,6 +1,8 @@
 import type {
   BillApprovalStatus,
+  DelayReasonStatus,
   FulfillmentStatus,
+  ProcurementClockState,
   PurchaseBillStatus,
   PurchaseBillType,
 } from '@rs/shared';
@@ -85,4 +87,43 @@ export function PendingQty({ qty }: { qty: number }) {
       {qty}
     </span>
   );
+}
+
+/**
+ * Where an order stands on the procurement clock.
+ *
+ * Four labels, and the two delayed ones are deliberately worded apart because
+ * they mean different things to act on: "Late, still short" is an order that
+ * still owes goods and somebody has to buy them; "Covered late" is an order that
+ * got them, after the deadline, and now needs explaining. Collapsing them into
+ * one amber "Delayed" would hide which of the two a reader is looking at.
+ *
+ * Null on a cancelled order — its clock has stopped, so it is neither fulfilled
+ * nor accruing delay, and the order's own Cancelled badge says the rest.
+ */
+const CLOCK_STATE: Record<
+  ProcurementClockState,
+  { label: string; variant: 'neutral' | 'warning' | 'positive' | 'critical' }
+> = {
+  UNFULFILLED: { label: 'Unfulfilled', variant: 'warning' },
+  UNFULFILLED_WITH_DELAY: { label: 'Late, still short', variant: 'critical' },
+  FULFILLED_ON_TIME: { label: 'Covered on time', variant: 'positive' },
+  FULFILLED_DELAYED: { label: 'Covered late', variant: 'warning' },
+};
+
+export function ClockStateBadge({ state }: { state: ProcurementClockState | null }) {
+  if (!state) return null;
+  const { label: text, variant } = CLOCK_STATE[state];
+  return <Badge variant={variant}>{text}</Badge>;
+}
+
+/** A delay reason's decision. Pending is the one worth catching the eye. */
+export function DelayReasonBadge({ status }: { status: DelayReasonStatus }) {
+  const map = {
+    PENDING: { label: 'Awaiting approval', variant: 'warning' as const },
+    APPROVED: { label: 'Approved', variant: 'positive' as const },
+    REJECTED: { label: 'Rejected', variant: 'critical' as const },
+  };
+  const { label: text, variant } = map[status];
+  return <Badge variant={variant}>{text}</Badge>;
 }

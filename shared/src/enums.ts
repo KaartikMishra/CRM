@@ -184,6 +184,60 @@ export const FULFILLMENT_STATUSES = ['UNFULFILLED', 'PARTIAL', 'FULFILLED'] as c
 export type FulfillmentStatus = (typeof FULFILLMENT_STATUSES)[number];
 
 // ---------------------------------------------------------------------------
+//  Procurement Clock
+// ---------------------------------------------------------------------------
+
+/**
+ * The factual result of procuring one order, measured against its deadline.
+ *
+ * Its own type rather than SalesEfficiency: that one is decided by dispatch and
+ * this one by coverage, and the schema already says such verdicts "must stay
+ * free to diverge".
+ *
+ * NOT immutable, and deliberately not described as frozen. It states what
+ * happened while the order is covered; if coverage is later lost — an allocation
+ * released, an active line added — it is invalidated rather than left standing as
+ * a claim that is no longer true. Only the deadline itself never moves.
+ */
+export const PROCUREMENT_VERDICTS = ['ON_TIME', 'DELAYED'] as const;
+export type ProcurementVerdict = (typeof PROCUREMENT_VERDICTS)[number];
+
+/**
+ * A delay reason somebody submitted and somebody else decided.
+ *
+ * One vocabulary shared by both chains — the purchase person's item-level reason
+ * and procurement's order-level one — exactly as SalesChangeStatus is shared
+ * across two Sales tables. Three states and no way back: a decided reason is a
+ * historical fact, and a second attempt is a second reason.
+ */
+export const DELAY_REASON_STATUSES = ['PENDING', 'APPROVED', 'REJECTED'] as const;
+export type DelayReasonStatus = (typeof DELAY_REASON_STATUSES)[number];
+
+/**
+ * Where one order stands on the procurement clock.
+ *
+ * Derived, never stored — which is why it is not a Prisma enum. Two of the four
+ * are a comparison against the clock right now:
+ *
+ *   not covered, on or before the deadline   UNFULFILLED
+ *   not covered, past the deadline           UNFULFILLED_WITH_DELAY
+ *   covered, verdict ON_TIME                 FULFILLED_ON_TIME
+ *   covered, verdict DELAYED                 FULFILLED_DELAYED
+ *
+ * The two delayed outcomes are never merged: one is an order still owed goods
+ * and the other is an order that got them late, and a business reads those
+ * differently. A cancelled order is not a fifth value here — it carries the
+ * order's own SalesOrderStatus, and its clock state is null.
+ */
+export const PROCUREMENT_CLOCK_STATES = [
+  'UNFULFILLED',
+  'UNFULFILLED_WITH_DELAY',
+  'FULFILLED_ON_TIME',
+  'FULFILLED_DELAYED',
+] as const;
+export type ProcurementClockState = (typeof PROCUREMENT_CLOCK_STATES)[number];
+
+// ---------------------------------------------------------------------------
 //  Notifications
 // ---------------------------------------------------------------------------
 

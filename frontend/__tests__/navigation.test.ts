@@ -190,3 +190,85 @@ describe('rendering determinism', () => {
     );
   });
 });
+
+describe('Purchase & Procurement is a parent, and Procurement Clock sits under it', () => {
+  const procurement = NAV_ITEMS.find((i) => i.href === '/procurement');
+  const clock = procurement?.children?.find((c) => c.href === '/procurement/clock');
+
+  it('does not expose Procurement Clock as a top-level module', () => {
+    // The whole point of the nesting. If this ever fails, the submodule has
+    // been promoted to a sidebar module of its own.
+    expect(NAV_ITEMS.map((i) => i.href)).not.toContain('/procurement/clock');
+    expect(NAV_ITEMS).toHaveLength(10);
+  });
+
+  it('carries it as a child of Purchase & Procurement', () => {
+    expect(procurement?.children?.map((c) => c.href)).toEqual(['/procurement/clock']);
+    expect(clock?.label).toBe('Procurement Clock');
+    expect(clock?.available).toBe(true);
+  });
+
+  it('leaves the parent route and its availability untouched', () => {
+    // Expanding a module must not cost it the page it already had.
+    expect(procurement?.href).toBe('/procurement');
+    expect(procurement?.label).toBe('Purchase & Procurement');
+    expect(procurement?.available).toBe(true);
+    expect(procurement?.module).toBe('PROCUREMENT');
+  });
+
+  it('gates the submodule on the parent module, inventing no new one', () => {
+    // A submodule inherits its parent's access. A new AppModule value would
+    // mean a schema change and a migration to show one sidebar row.
+    expect(clock?.module).toBe('PROCUREMENT');
+    expect(APP_MODULES).not.toContain('PROCUREMENT_CLOCK' as AppModule);
+  });
+
+  it('nests the child route under the parent route, so active state resolves', () => {
+    // The sidebar marks a row current with pathname.startsWith(href + '/'); a
+    // child outside the parent path would never light up its parent.
+    expect(clock?.href.startsWith('/procurement/')).toBe(true);
+  });
+
+  it('resolves the child icon, and not to the same one as the parent', () => {
+    expect(navIcon(clock!.icon)).toBeDefined();
+    expect(navIcon(clock!.icon)).not.toBe(navIcon(procurement!.icon));
+  });
+
+  it('gives no other module children, so nothing else changed shape', () => {
+    const withChildren = NAV_ITEMS.filter((i) => i.children?.length).map((i) => i.href);
+    expect(withChildren).toEqual(['/procurement']);
+  });
+
+  it('keeps the nested items serializable across the Server -> Client boundary', () => {
+    // Children cross the same boundary the parents do.
+    expect(isSerializable(procurement)).toBe(true);
+    expect(JSON.parse(JSON.stringify(NAV_ITEMS))).toEqual(NAV_ITEMS);
+  });
+});
+
+describe('submodule visibility follows the parent', () => {
+  it('shows the submodule to somebody who holds PROCUREMENT', () => {
+    const items = visibleNavItems(['PROCUREMENT'], false);
+    expect(items.map((i) => i.href)).toEqual(['/dashboard', '/procurement']);
+
+    const parent = items.find((i) => i.href === '/procurement');
+    expect(parent?.children?.map((c) => c.href)).toEqual(['/procurement/clock']);
+  });
+
+  it('hides parent and submodule together without PROCUREMENT', () => {
+    const hrefs = visibleNavItems(['SALES'], false).map((i) => i.href);
+    expect(hrefs).not.toContain('/procurement');
+    // And it cannot leak in as a top-level row either.
+    expect(hrefs).not.toContain('/procurement/clock');
+  });
+
+  it('never mutates the shared table while filtering', () => {
+    // NAV_ITEMS is module-level state; filtering it in place would leak one
+    // person's access into the next request.
+    const before = JSON.stringify(NAV_ITEMS);
+    visibleNavItems(['PROCUREMENT'], false);
+    visibleNavItems([], false);
+    visibleNavItems([...APP_MODULES], true);
+    expect(JSON.stringify(NAV_ITEMS)).toBe(before);
+  });
+});

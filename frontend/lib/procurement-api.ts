@@ -1,11 +1,13 @@
 import { cache } from 'react';
 import type {
+  DelayReasonView,
   OrderRequirementView,
+  ProcurementClockSummary,
   ProductChangeView,
   PurchaseBillDetail,
   PurchaseBillSummary,
-  SalesRequirementRow,
   SalesFulfillmentDetail,
+  SalesRequirementRow,
   ShortageRow,
 } from '@rs/shared';
 import { apiFetch, type ApiResult } from './api-server';
@@ -104,3 +106,58 @@ export async function fetchOrderRequirements(
     `/api/procurement/order-requirements?orderId=${encodeURIComponent(orderId)}`,
   );
 }
+
+/**
+ * The Procurement Clock board.
+ *
+ * An empty list on failure, like the readers above: the clock page renders the
+ * delay queues beside this, and refusing the whole page because one call failed
+ * would hide those too.
+ */
+export async function fetchProcurementClock(
+  params: Record<string, string | undefined> = {},
+): Promise<ProcurementClockSummary[]> {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) if (value) query.set(key, value);
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+
+  const result = await apiFetch<{ orders: ProcurementClockSummary[] }>(
+    `/api/procurement/clock${suffix}`,
+  );
+  return result.success ? result.data.orders : [];
+}
+
+/** Undecided item-level delay reasons, for the procurement reviewer's queue. */
+export async function fetchPurchaseDelayQueue(): Promise<PurchaseDelayQueueRow[]> {
+  const result = await apiFetch<{ reasons: PurchaseDelayQueueRow[] }>(
+    '/api/procurement/clock/queues/purchase-delays',
+  );
+  return result.success ? result.data.reasons : [];
+}
+
+/** Undecided order-level delay reasons, for the administrator's queue. */
+export async function fetchProcurementDelayQueue(): Promise<ProcurementDelayQueueRow[]> {
+  const result = await apiFetch<{ reasons: ProcurementDelayQueueRow[] }>(
+    '/api/procurement/clock/queues/procurement-delays',
+  );
+  return result.success ? result.data.reasons : [];
+}
+
+/**
+ * The queue rows, which are a delay reason plus enough of its order to be
+ * legible without a second call. Declared here rather than in @rs/shared because
+ * they are a view assembled for one screen, not part of the module's contract.
+ */
+export type PurchaseDelayQueueRow = DelayReasonView & {
+  salesOrderItemId: string;
+  productName: string;
+  orderId: string;
+  orderNumber: string;
+  customerName: string;
+};
+
+export type ProcurementDelayQueueRow = DelayReasonView & {
+  orderId: string;
+  orderNumber: string;
+  customerName: string;
+};

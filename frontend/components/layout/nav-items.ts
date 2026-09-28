@@ -19,6 +19,7 @@ export type NavIconKey =
   | 'product-enquiry'
   | 'sales'
   | 'procurement'
+  | 'procurement-clock'
   | 'rs-products'
   | 'dispatch'
   | 'billing'
@@ -40,6 +41,23 @@ export type NavItem = {
   module?: AppModule;
   /** Administrator-only items, which sit outside the seven CRM modules. */
   adminOnly?: boolean;
+  /**
+   * Submodules revealed when the parent is expanded.
+   *
+   * Nested rather than flattened with a `parent` pointer, and that is the whole
+   * point: a submodule is unreachable from the top level because it is not *in*
+   * the top level. `NAV_ITEMS.map(i => i.href)` still lists exactly the ten CRM
+   * destinations, so nothing can accidentally promote a submodule to a sidebar
+   * module of its own — the shape refuses it rather than a convention asking
+   * nicely.
+   *
+   * A child is an ordinary NavItem: same icon registry, same `available` flag,
+   * same module gating. It carries no separate AppModule of its own — a
+   * submodule inherits its parent's access, so Procurement Clock is reachable
+   * by exactly the people who can reach Purchase & Procurement, and granting or
+   * revoking PROCUREMENT moves both together.
+   */
+  children?: NavItem[];
 };
 
 export const NAV_ITEMS: NavItem[] = [
@@ -58,6 +76,21 @@ export const NAV_ITEMS: NavItem[] = [
     icon: 'procurement',
     available: true,
     module: 'PROCUREMENT',
+    /*
+      The parent keeps its own route. Expanding it reveals what sits under it;
+      it does not replace the page that is already there, so every existing
+      Purchase & Procurement link, bookmark and redirect still lands where it
+      always did.
+    */
+    children: [
+      {
+        label: 'Procurement Clock',
+        href: '/procurement/clock',
+        icon: 'procurement-clock',
+        available: true,
+        module: 'PROCUREMENT',
+      },
+    ],
   },
   {
     label: 'RS Products',
@@ -110,9 +143,25 @@ export function visibleNavItems(
 ): NavItem[] {
   const granted = new Set(modules);
 
-  return NAV_ITEMS.filter((item) => {
+  const allowed = (item: NavItem): boolean => {
     if (item.adminOnly) return isAdmin;
     if (!item.module) return true;
     return granted.has(item.module);
+  };
+
+  return NAV_ITEMS.filter(allowed).map((item) => {
+    if (!item.children) return item;
+
+    /*
+      Children are filtered by the same rule, not waved through because the
+      parent passed. Today every submodule shares its parent's module so the
+      result is the same either way — but the day one does not, the sidebar must
+      not offer a link the API will refuse.
+
+      A new object rather than a mutation: NAV_ITEMS is module-level state and
+      filtering it in place would leak one person's access into the next
+      request's list.
+    */
+    return { ...item, children: item.children.filter(allowed) };
   });
 }

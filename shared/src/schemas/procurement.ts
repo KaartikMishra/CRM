@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import { BILL_APPROVAL_STATUSES, PURCHASE_BILL_TYPES, PURCHASE_BILL_STATUSES } from '../enums.js';
+import {
+  BILL_APPROVAL_STATUSES,
+  DELAY_REASON_STATUSES,
+  PROCUREMENT_CLOCK_STATES,
+  PURCHASE_BILL_TYPES,
+  PURCHASE_BILL_STATUSES,
+} from '../enums.js';
 import { amountSchema, cuidSchema, paginationSchema } from './common.js';
 
 /**
@@ -305,6 +311,60 @@ export const salesRequirementQuerySchema = z.object({
     .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a date in YYYY-MM-DD form')
     .optional(),
 });
+
+// ---------------------------------------------------------------------------
+//  Procurement Clock
+// ---------------------------------------------------------------------------
+
+/**
+ * The clock board's filter.
+ *
+ * `state` is the derived four-value view, not a stored column, so the server
+ * computes it and filters on the result rather than pushing a WHERE down to a
+ * column that does not exist.
+ */
+export const procurementClockQuerySchema = z.object({
+  state: z.enum(PROCUREMENT_CLOCK_STATES).optional(),
+  /** Free text over the order number and the customer's name. */
+  q: z.string().trim().max(120).optional(),
+});
+
+/**
+ * A delay reason, for either chain.
+ *
+ * One schema because the two carry the same payload — what the reason is — and
+ * differ only in what they are attached to and who decides them. Mandatory and
+ * a sentence long, for the same reason `requestProductChangeSchema` demands one:
+ * somebody is being asked to accept an explanation, and "late" is not one.
+ */
+export const submitDelayReasonSchema = z.object({
+  reason: z
+    .string()
+    .trim()
+    .min(10, 'Explain the delay — at least a sentence')
+    .max(1000),
+});
+
+/**
+ * Deciding one. The note is optional on an approval and expected on a rejection,
+ * where it is the only thing telling the submitter what to do differently.
+ *
+ * Deliberately carries nothing else: a decision on a reason is an audit record
+ * beside the clock, and it must not be able to move a completion time, a verdict
+ * or a deadline. There is no field here that could.
+ */
+export const reviewDelayReasonSchema = z.object({
+  note: z.string().trim().max(1000).optional(),
+});
+
+export const delayReasonListQuerySchema = z.object({
+  status: z.enum(DELAY_REASON_STATUSES).optional(),
+});
+
+export type ProcurementClockQuery = z.infer<typeof procurementClockQuerySchema>;
+export type SubmitDelayReasonInput = z.infer<typeof submitDelayReasonSchema>;
+export type ReviewDelayReasonInput = z.infer<typeof reviewDelayReasonSchema>;
+export type DelayReasonListQuery = z.infer<typeof delayReasonListQuerySchema>;
 
 export type PurchaseBillItemInput = z.infer<typeof purchaseBillItemInputSchema>;
 export type CreatePurchaseBillInput = z.infer<typeof createPurchaseBillSchema>;

@@ -1,6 +1,9 @@
 import type {
   BillApprovalStatus,
+  DelayReasonStatus,
   FulfillmentStatus,
+  ProcurementClockState,
+  ProcurementVerdict,
   PurchaseBillStatus,
   PurchaseBillType,
 } from '../enums.js';
@@ -431,4 +434,139 @@ export type SalesFulfillmentDetail = {
   status: FulfillmentStatus;
   sources: FulfillmentSource[];
   activity: FulfillmentEvent[];
+};
+
+// ---------------------------------------------------------------------------
+//  Procurement Clock
+// ---------------------------------------------------------------------------
+
+/**
+ * One delay reason and the decision on it, for either chain.
+ *
+ * Deliberately carries nothing about the clock. A reason explains a result and
+ * is decided beside it; it can neither move a completion time nor turn DELAYED
+ * into ON_TIME, and there is no field here through which it could.
+ */
+export type DelayReasonView = {
+  id: string;
+  reason: string;
+  status: DelayReasonStatus;
+  requestedBy: { id: string; name: string };
+  requestedAt: string;
+  /** Both null while it is pending. */
+  reviewedBy: { id: string; name: string } | null;
+  reviewedAt: string | null;
+  reviewNote: string | null;
+};
+
+/**
+ * One order line as the clock reads it.
+ *
+ * Four quantities, and they are four different facts. `orderedQty` is what was
+ * agreed and never moves; `cancelledQty` is what the customer called off;
+ * `requiredQty` is the difference — what procurement is actually asked to cover;
+ * and `outstandingQty` is what is still missing after both supply routes.
+ *
+ * There is deliberately no stock figure here. Stock is shared across every order
+ * for a product, so netting it against one line would let the same units appear
+ * to satisfy several customers — the same reason `OrderLineRequirement` carries
+ * none. Stock reaches a line through `alreadyFulfilled`, which somebody records.
+ */
+export type ClockItemView = {
+  salesOrderItemId: string;
+  lineNo: number;
+  productName: string;
+  /** The RS Product this line is for. Null when nobody has mapped it. */
+  rsProductId: string | null;
+  /** True when `rsProductId` is set — the condition for taking purchased stock. */
+  linked: boolean;
+  orderedQty: number;
+  cancelledQty: number;
+  /** orderedQty − cancelledQty. Derived, never stored. */
+  requiredQty: number;
+  /** Supplied outside procurement, recorded by hand. */
+  alreadyFulfilled: number;
+  /** Supplied through procurement — the sum of this line's allocations. */
+  allocatedQty: number;
+  /** alreadyFulfilled + allocatedQty. */
+  totalFulfilled: number;
+  /** max(0, requiredQty − totalFulfilled). Zero means this line is covered. */
+  outstandingQty: number;
+  status: FulfillmentStatus;
+  /**
+   * The undecided purchase delay reason on this line, if there is one.
+   *
+   * At most one, guaranteed by a partial unique index rather than by the UI.
+   */
+  pendingDelayReason: DelayReasonView | null;
+  /** Every reason ever submitted against this line, newest first. */
+  delayReasons: DelayReasonView[];
+};
+
+/**
+ * One order on the clock board.
+ *
+ * Every figure is computed from the order's own lines and their allocations at
+ * read time. Nothing about the order, its products or its quantities is stored a
+ * second time — the clock owns only its deadline and its completion result.
+ */
+export type ProcurementClockSummary = {
+  /** The sales order's internal cuid — what /sales/{id} uses. */
+  orderId: string;
+  /** The human-entered order number. */
+  orderNumber: string;
+  customerName: string;
+  orderDate: string;
+  /** The order's own SalesOrderStatus, carried rather than folded into `state`. */
+  orderStatus: string;
+  /**
+   * T+2: the last instant of the IST day two days after `orderDate`.
+   *
+   * Written once when the order was created and never recomputed, so editing the
+   * order cannot move the bar procurement was measured against.
+   */
+  deadline: string;
+  /** When coverage reached zero. Null while anything is outstanding. */
+  completedAt: string | null;
+  verdict: ProcurementVerdict | null;
+  /**
+   * True when `completedAt` is the migration's best estimate rather than a
+   * recorded instant — an order covered before the clock existed, part of it
+   * through `alreadyFulfilled`, which carries no timestamp of its own. Rendered
+   * as "estimated" so a guess is never read as a fact.
+   */
+  completionEstimated: boolean;
+  /**
+   * The derived four-value state. Null on a cancelled order: its clock has
+   * stopped, and it is neither fulfilled nor accruing delay.
+   */
+  state: ProcurementClockState | null;
+  itemCount: number;
+  /** Σ outstandingQty across the order's active lines. */
+  outstandingQty: number;
+  /** How many lines still owe something. */
+  outstandingLines: number;
+  /**
+   * Covered, and the order is still live.
+   *
+   * The one signal Packing & Dispatch will read when it exists. Derived here and
+   * stored nowhere, so no packing rule is committed to by publishing it.
+   */
+  readyForDispatch: boolean;
+  /** Undecided purchase delay reasons across the order's lines. */
+  pendingPurchaseDelays: number;
+  /** The undecided order-level reason, if procurement has submitted one. */
+  procurementDelay: DelayReasonView | null;
+  /**
+   * True when the verdict is DELAYED and no reason has been approved yet.
+   *
+   * Reporting only. Its absence never alters `completedAt` or `verdict`.
+   */
+  procurementDelayRequired: boolean;
+};
+
+export type ProcurementClockDetail = ProcurementClockSummary & {
+  items: ClockItemView[];
+  /** Every order-level reason ever submitted, newest first. */
+  procurementDelays: DelayReasonView[];
 };
