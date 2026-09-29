@@ -9,6 +9,7 @@
 import { Router } from 'express';
 import { authRoutes } from '../modules/auth/auth.routes.js';
 import { customerRoutes } from '../modules/customer/customer.routes.js';
+import { dispatchRoutes } from '../modules/dispatch/dispatch.routes.js';
 import { healthRoutes } from '../modules/health/health.routes.js';
 import { procurementRoutes } from '../modules/procurement/procurement.routes.js';
 import { notificationRoutes } from '../modules/notification/notification.routes.js';
@@ -30,6 +31,7 @@ apiRouter.use('/procurement', procurementRoutes);
 apiRouter.use('/rs-products', rsProductRoutes);
 apiRouter.use('/notifications', notificationRoutes);
 apiRouter.use('/customers', customerRoutes);
+apiRouter.use('/dispatch', dispatchRoutes);
 apiRouter.use('/vendors', vendorRoutes);
 apiRouter.use('/vendor-invoices', vendorInvoiceRoutes);
 apiRouter.use('/uploads', uploadRoutes);

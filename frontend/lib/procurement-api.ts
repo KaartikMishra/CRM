@@ -3,6 +3,7 @@ import type {
   DelayReasonView,
   OrderRequirementView,
   ProcurementClockSummary,
+  PendingPartialDispatchRow,
   ProductChangeView,
   PurchaseBillDetail,
   PurchaseBillSummary,
@@ -79,6 +80,25 @@ export async function fetchPendingProductChanges(): Promise<ProductChangeView[]>
     '/api/procurement/product-changes?status=PENDING',
   );
   return result.success ? result.data.changes : [];
+}
+
+/**
+ * Partial-dispatch requests waiting on a procurement decision.
+ *
+ * Served by the Dispatch module — that is where the entity lives and where the
+ * decision service is — but gated on PROCUREMENT:ASSIGN rather than on any
+ * dispatch permission, because deciding whether goods should wait for the rest
+ * of an order is procurement's judgement to make from its own screen.
+ *
+ * An empty list on failure, exactly like the reader above and for the same
+ * reason: this is one section of a page, and a Procurement page that refused to
+ * render because this call failed would hide the bills too.
+ */
+export async function fetchPendingPartialDispatches(): Promise<PendingPartialDispatchRow[]> {
+  const result = await apiFetch<{ requests: PendingPartialDispatchRow[] }>(
+    '/api/dispatch/partial-requests/pending',
+  );
+  return result.success ? result.data.requests : [];
 }
 
 /**

@@ -27,6 +27,22 @@ const created = {
   vendorIds: [] as string[],
   rsProductIds: [] as string[],
   purchaseBillIds: [] as string[],
+  /**
+   * Partial-dispatch requests this run caused, collected for their notices.
+   *
+   * These ids are never used to delete the requests themselves — those cascade
+   * from their sales order like everything else. They exist because
+   * `Notification.entityId` is a plain string with no foreign key, so a notice
+   * about a request is NOT removed when the request is: the row survives,
+   * pointing at an id that no longer resolves, in the inbox of whoever could
+   * have decided it.
+   *
+   * That matters here more than for most fixtures. Partial-dispatch notices go
+   * to everyone holding PROCUREMENT:ASSIGN, which in a real database means real
+   * administrators — so an untidied test run leaves debris in colleagues'
+   * notification bells rather than in a row nobody looks at.
+   */
+  partialDispatchRequestIds: [] as string[],
 };
 
 const short = (): string => randomUUID().replace(/-/g, '').slice(0, 12);
@@ -131,6 +147,20 @@ export function trackEnquiry(id: string): string {
 /** Registers a sales order created through the API so cleanup removes it. */
 export function trackSalesOrder(id: string): string {
   created.salesOrderIds.push(id);
+  return id;
+}
+
+/**
+ * Registers a partial-dispatch request so its notices are cleaned up too.
+ *
+ * Optional for a suite to call: `cleanup` discovers these itself from the
+ * tracked sales orders (see `collectPartialDispatchRequests`). This exists for
+ * a request whose order was never tracked, and is idempotent.
+ */
+export function trackPartialDispatchRequest(id: string): string {
+  if (!created.partialDispatchRequestIds.includes(id)) {
+    created.partialDispatchRequestIds.push(id);
+  }
   return id;
 }
 
@@ -513,8 +543,64 @@ async function sweepTestOwnedRows(failures: unknown[]): Promise<void> {
   await step(failures, () => prisma.user.deleteMany({ where: owned }));
 }
 
+/**
+ * Notes every partial-dispatch request belonging to this run's sales orders.
+ *
+ * MUST run before anything deletes those orders. `PartialDispatchRequest`
+ * cascades from `SalesOrder`, so once the order goes the request goes with it —
+ * and its id, which is the only thing linking a stranded notice back to this
+ * test run, is gone with it too. Reading the ids first is what makes the notices
+ * findable afterwards.
+ *
+ * Failures are collected rather than thrown: an unreadable request list must not
+ * stop the rest of teardown.
+ */
+async function collectPartialDispatchRequests(failures: unknown[]): Promise<void> {
+  if (created.salesOrderIds.length === 0) return;
+
+  await step(failures, async () => {
+    const rows = await prisma.partialDispatchRequest.findMany({
+      where: { salesOrderId: { in: created.salesOrderIds } },
+      select: { id: true },
+    });
+    for (const row of rows) trackPartialDispatchRequest(row.id);
+  });
+}
+
+/**
+ * Removes the notices raised about this run's partial-dispatch requests.
+ *
+ * Scoped by `entityId` against the tracked ids and by `entityType`, never by
+ * notification type alone: the four PARTIAL_DISPATCH types are also produced by
+ * real work, and deleting by type would take a real administrator's real notice
+ * along with the test debris. An id that was never tracked is never matched, so
+ * a notice this run did not cause cannot be removed by it.
+ *
+ * Idempotent — a second call matches nothing, because the rows are gone and the
+ * id list has been cleared.
+ */
+async function deletePartialDispatchNotifications(failures: unknown[]): Promise<void> {
+  if (created.partialDispatchRequestIds.length === 0) return;
+
+  await step(failures, () =>
+    prisma.notification.deleteMany({
+      where: {
+        entityType: 'PartialDispatchRequest',
+        entityId: { in: created.partialDispatchRequestIds },
+      },
+    }),
+  );
+}
+
 export async function cleanup(): Promise<void> {
   const failures: unknown[] = [];
+
+  /*
+    First, before any delete: the partial-dispatch requests cascade away with
+    their sales orders below, taking with them the only link between a stranded
+    notice and this run.
+  */
+  await collectPartialDispatchRequests(failures);
 
   if (created.enquiryIds.length) {
     await step(failures, () =>
@@ -598,6 +684,16 @@ export async function cleanup(): Promise<void> {
   // while its create call was failing, or one the API made for a lost response.
   await sweepTestOwnedRows(failures);
 
+  /*
+    Last, once the requests themselves are gone: their notices outlive them,
+    because `Notification.entityId` carries no foreign key. Deleting the test
+    users above already removed any notice addressed TO a fixture user; this
+    removes the ones addressed to real people about a test request — which is
+    the whole point, since partial-dispatch notices go to everyone holding
+    PROCUREMENT:ASSIGN.
+  */
+  await deletePartialDispatchNotifications(failures);
+
   created.enquiryIds.length = 0;
   created.salesOrderIds.length = 0;
   created.userIds.length = 0;
@@ -605,6 +701,12 @@ export async function cleanup(): Promise<void> {
   created.vendorIds.length = 0;
   created.rsProductIds.length = 0;
   created.purchaseBillIds.length = 0;
+  /*
+    Deliberately NOT cleared. `residualTestRows` runs after this and asserts
+    these notices are gone; clearing the list would leave it nothing to look at,
+    making a check that can never fail. The ids are a few strings per suite and
+    the process ends with it.
+  */
 
   // Teardown attempted everything; now report. Surfacing the first failure keeps
   // a broken cleanup as visible as it was before, while the suites that follow
@@ -616,6 +718,21 @@ export async function cleanup(): Promise<void> {
 
 /** Guards against fixtures escaping — asserted at the end of each suite. */
 export async function residualTestRows(): Promise<number> {
+  /*
+    Partial-dispatch notices are checked separately, and only against the ids
+    this run tracked. There is no prefix to search on — a notice carries an
+    entity id, not a name — so a global count would sweep in real notices about
+    real requests and fail a suite for somebody else's data.
+  */
+  const strandedNotices = created.partialDispatchRequestIds.length
+    ? await prisma.notification.count({
+        where: {
+          entityType: 'PartialDispatchRequest',
+          entityId: { in: created.partialDispatchRequestIds },
+        },
+      })
+    : 0;
+
   const [users, customers, vendors, salesOrders, rsProducts] = await Promise.all([
     prisma.user.count({ where: { name: { startsWith: TEST_PREFIX } } }),
     prisma.customer.count({ where: { name: { startsWith: TEST_PREFIX } } }),
@@ -629,5 +746,5 @@ export async function residualTestRows(): Promise<number> {
     // count — an escaped fixture must not be hidden among them.
     prisma.rsProduct.count({ where: { title: { startsWith: TEST_PREFIX } } }),
   ]);
-  return users + customers + vendors + salesOrders + rsProducts;
+  return users + customers + vendors + salesOrders + rsProducts + strandedNotices;
 }

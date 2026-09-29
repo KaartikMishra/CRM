@@ -166,7 +166,13 @@ export async function reconcileClock(
 
   // Covered, and already recorded as such. The result stands; re-deciding it
   // against the same deadline would only rewrite the same answer.
-  if (clock.completedAt !== null) return;
+  if (clock.completedAt !== null) {
+    // Still offered to Dispatch: the clock may have completed on an earlier
+    // event while a partial request was raised afterwards on an order that is
+    // already covered. The resolver is idempotent, so the repeat costs a read.
+    await resolvePartialDispatch(tx, orderId);
+    return;
+  }
 
   await tx.procurementClock.update({
     where: { id: clock.id },
@@ -177,6 +183,41 @@ export async function reconcileClock(
       completionEstimated: false,
     },
   });
+
+  /*
+    THE DISPATCH HOOK.
+
+    Deliberately here and nowhere else. This is the single point at which an
+    order becomes fully covered, so it is the only place that can tell Dispatch
+    the question it asked has stopped applying — a partial-dispatch request is
+    pointless once the whole order can go.
+
+    Placed AFTER the completion is written, so the resolver reads a settled
+    fact rather than one in progress, and never inside `reconcileLineStock`:
+    stock movement is a lower-level operation that happens several times per
+    reconciliation, and hooking it would fire this repeatedly mid-calculation.
+
+    Narrow by construction — it resolves a request to MOOT and does nothing
+    else — idempotent, and it swallows its own failures, so procurement's work
+    cannot be rolled back by a dispatch courtesy.
+  */
+  await resolvePartialDispatch(tx, orderId);
+}
+
+/**
+ * Tells Dispatch the order is fully ready.
+ *
+ * Imported lazily so the dependency runs one way at module load: Dispatch reads
+ * Procurement's arithmetic, and a static import back would make the two modules
+ * circular. This is the only edge from Procurement to Dispatch, and it is a
+ * notification of a fact, not a request for one.
+ */
+async function resolvePartialDispatch(
+  tx: Prisma.TransactionClient,
+  orderId: string,
+): Promise<void> {
+  const { resolveMootForOrder } = await import('../dispatch/dispatch-partial.service.js');
+  await resolveMootForOrder(tx, orderId);
 }
 
 /**

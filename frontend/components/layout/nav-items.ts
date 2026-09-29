@@ -103,7 +103,7 @@ export const NAV_ITEMS: NavItem[] = [
     label: 'Packing & Dispatch',
     href: '/dispatch',
     icon: 'dispatch',
-    available: false,
+    available: true,
     module: 'PACKING_DISPATCH',
   },
   {

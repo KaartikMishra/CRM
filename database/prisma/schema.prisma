@@ -100,6 +100,11 @@ model User {
   reviewedPurchaseDelays     PurchaseDelayReason[]    @relation("PurchaseDelayReviewedBy")
   requestedProcurementDelays ProcurementDelayReason[] @relation("ProcurementDelayRequestedBy")
   reviewedProcurementDelays  ProcurementDelayReason[] @relation("ProcurementDelayReviewedBy")
+  createdDispatches          Dispatch[]               @relation("DispatchCreatedBy")
+  packedDispatches           Dispatch[]               @relation("DispatchPackedBy")
+  dispatchedDispatches       Dispatch[]               @relation("DispatchDispatchedBy")
+  requestedPartialDispatches PartialDispatchRequest[] @relation("PartialDispatchRequestedBy")
+  decidedPartialDispatches   PartialDispatchRequest[] @relation("PartialDispatchDecidedBy")
   notifications         Notification[]
 
   @@index([role, isActive])
@@ -767,6 +772,10 @@ model SalesOrder {
   /// The procurement clock for this order. Created with the order, and holding
   /// only a deadline and a completion result — never a copy of anything here.
   procurementClock ProcurementClock?
+  /// Shipments of this order, and any request to send part of it early.
+  /// Virtual — both foreign keys live on the other side.
+  dispatches              Dispatch[]
+  partialDispatchRequests PartialDispatchRequest[]
 
   @@index([status, toBeDispatchedBy])
   @@index([customerId])
@@ -925,6 +934,8 @@ model SalesOrderItem {
   allocations    PurchaseAllocation[]
   /// Explanations the purchase person submitted for not covering this line.
   purchaseDelayReasons PurchaseDelayReason[]
+  /// Which shipments carried this line, and how many units each took.
+  dispatchItems DispatchItem[]
 
   @@unique([orderId, lineNo])
   @@index([orderId, status])
@@ -1577,6 +1588,14 @@ model ProcurementDelayReason {
 enum NotificationType {
   ENQUIRY_ASSIGNED
   SALES_ORDER_CREATED
+  /// Packing & Dispatch asking Procurement whether part of an order may go,
+  /// and the ways that question is answered. AUTO_ALLOWED is its own member
+  /// rather than a flag: permitted-by-deadline and agreed-by-a-person are
+  /// different events, and the notice has to say which.
+  PARTIAL_DISPATCH_REQUESTED
+  PARTIAL_DISPATCH_ALLOWED
+  PARTIAL_DISPATCH_DISALLOWED
+  PARTIAL_DISPATCH_AUTO_ALLOWED
 }
 
 /// One thing somebody should know about, addressed to one person.
@@ -1888,4 +1907,168 @@ model ShopifyWebhookEvent {
   @@index([topic, receivedAt])
   /// The recovery sweep's own query: unfinished events, oldest claim first.
   @@index([processedAt, claimedAt])
+}
+
+// ===========================================================================
+//  Packing & Dispatch
+//
+//  What this module owns: the physical movement of goods a customer has
+//  already been committed. It records who packed an order, who sent it, by
+//  which carrier and under which airway bill.
+//
+//  What it deliberately does NOT own is stock. `ShopifyVariant.crmStockQty`
+//  has exactly one writer — reconcileLineStock in Procurement — and dispatch
+//  is not it. Allocation already removed those goods from free stock when they
+//  were committed to the order, so decrementing again here would count the same
+//  units twice. Dispatch moves goods that are already spoken for.
+//
+//  Readiness is likewise not stored. Whether an order can be dispatched is
+//  derived on read from the order's own lines through the same pendingQty and
+//  fulfillmentStatus that Procurement's shortage board uses, so the two screens
+//  cannot disagree about what a customer is still owed.
+// ===========================================================================
+
+/// Where a dispatch has reached.
+///
+/// DISPATCHED is terminal: goods that have left cannot be un-sent, and the
+/// record of what was sent must stay true. CANCELLED is reachable only before
+/// that point, for a pack that was started and abandoned.
+enum DispatchStatus {
+  DRAFT
+  PACKING
+  PACKED
+  DISPATCHED
+  CANCELLED
+}
+
+/// The life of a request to ship part of an order.
+///
+/// MOOT is the state that keeps the record honest. If the rest of the order
+/// becomes ready while the request is still waiting, nobody needs to decide it
+/// any more — but the request was really made, so it is resolved rather than
+/// deleted, and never silently auto-allowed for a question that no longer
+/// applies.
+enum PartialDispatchStatus {
+  PENDING
+  ALLOWED
+  DISALLOWED
+  MOOT
+}
+
+/// One shipment of one order. An order may have several, each carrying part of
+/// what was bought — which is what `isPartial` records.
+model Dispatch {
+  id           String @id @default(cuid())
+  salesOrderId String
+
+  status    DispatchStatus @default(DRAFT)
+  /// True when this shipment deliberately carries less than the whole order.
+  isPartial Boolean        @default(false)
+
+  /// How it was booked. One of DISPATCH_CHANNELS in @rs/shared, with
+  /// `channelOther` carrying the name when the answer is OTHER.
+  ///
+  /// A plain nullable String rather than a Prisma enum, following
+  /// Customer.state and SalesOrderItem.gstRate: courier channels are a
+  /// commercial list that changes, and an enum would charge an ALTER TYPE for
+  /// every revision. The shared z.enum is what restricts the value.
+  channel      String?
+  channelOther String?
+
+  /// Who is carrying it. One of DISPATCH_CARRIERS, same reasoning as above.
+  carrier      String?
+  carrierOther String?
+
+  /// The airway bill. Optional while packing, required before the goods leave:
+  /// a shipment nobody can trace is not dispatched, it is lost.
+  awb String?
+
+  packedById     String?
+  packedAt       DateTime?
+  dispatchedById String?
+  dispatchedAt   DateTime?
+
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  salesOrder   SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  packedBy     User?      @relation("DispatchPackedBy", fields: [packedById], references: [id])
+  dispatchedBy User?      @relation("DispatchDispatchedBy", fields: [dispatchedById], references: [id])
+  createdBy    User       @relation("DispatchCreatedBy", fields: [createdById], references: [id])
+  items        DispatchItem[]
+
+  /// One order's shipments, and the dispatch board's own queue.
+  @@index([salesOrderId, status])
+  @@index([status, createdAt])
+}
+
+/// What one shipment actually carries, line by line.
+///
+/// Quantities live here rather than on the order line because an order line can
+/// be split across several shipments — five of a thing today and two next week
+/// — and the order line must keep saying what was bought.
+model DispatchItem {
+  id               String @id @default(cuid())
+  dispatchId       String
+  salesOrderItemId String
+
+  quantity Int
+
+  dispatch       Dispatch       @relation(fields: [dispatchId], references: [id], onDelete: Cascade)
+  salesOrderItem SalesOrderItem @relation(fields: [salesOrderItemId], references: [id], onDelete: Cascade)
+
+  /// One line appears at most once in one shipment; splitting means a second
+  /// shipment, not a second row here.
+  @@unique([dispatchId, salesOrderItemId])
+  @@index([salesOrderItemId])
+}
+
+/// Dispatch asking Procurement whether part of an order may go now.
+///
+/// Raised when some lines are ready and others are not. Procurement answers
+/// within a deadline; if they do not, the request allows itself — see
+/// `autoDecided`, which is what stops an unanswered question stalling goods
+/// that are sitting packed.
+model PartialDispatchRequest {
+  id           String @id @default(cuid())
+  salesOrderId String
+
+  status PartialDispatchStatus @default(PENDING)
+
+  requestedById String
+  requestedAt   DateTime @default(now())
+
+  /// When the answer stops being awaited, stored as an absolute instant.
+  ///
+  /// A column rather than a timer on purpose: a timer dies with the process,
+  /// and a deadline that survives a restart is the whole point. The sweep runs
+  /// at boot and periodically, so a process that was down across the deadline
+  /// still catches up — the same design the notification retention sweep uses.
+  deadline DateTime
+
+  /// Null on an automatic decision, deliberately: nobody decided it, and
+  /// naming somebody would be a fabrication.
+  decidedById String?
+  /// Set on every terminal state, including MOOT and the automatic allow.
+  decidedAt   DateTime?
+
+  /// Why. Required of a person either way; null when the deadline decided it.
+  reason String?
+  /// Plan of action. Required only when refusing — a refusal has to say what
+  /// happens instead. Optional when allowing.
+  poa String?
+
+  /// True only for the deadline's own decision. What makes the dashboard able
+  /// to say "allowed because Procurement did not respond", rather than
+  /// implying somebody agreed.
+  autoDecided Boolean @default(false)
+
+  salesOrder  SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  requestedBy User       @relation("PartialDispatchRequestedBy", fields: [requestedById], references: [id])
+  decidedBy   User?      @relation("PartialDispatchDecidedBy", fields: [decidedById], references: [id])
+
+  /// The sweep's own query: still pending, deadline first.
+  @@index([status, deadline])
+  @@index([salesOrderId, status])
 }

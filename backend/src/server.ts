@@ -14,12 +14,24 @@ import { logger } from './config/logger.js';
 import { createApp } from './app.js';
 import { attachWebSocketServer, stopWebSocketServer } from './realtime/ws-server.js';
 import { purgeExpired } from './modules/notification/notification.service.js';
+import { sweepOverdueRequests } from './modules/dispatch/dispatch-sweep.service.js';
 
 /** How long a shutdown may take before the process is killed anyway. */
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
 /** How often expired notifications are swept. Daily is ample for a 30-day window. */
 const RETENTION_SWEEP_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * How often overdue partial-dispatch requests are settled.
+ *
+ * Five minutes against a 24-hour deadline: the worst case is that a request is
+ * allowed up to five minutes late, which nobody waiting a day will notice, and
+ * the cost is one indexed query per tick against `(status, deadline)` that
+ * usually matches nothing. A shorter interval would buy precision the deadline
+ * does not have; a much longer one would make "24 hours" visibly untrue.
+ */
+const PARTIAL_DISPATCH_SWEEP_MS = 5 * 60 * 1000;
 
 async function start(): Promise<void> {
   // Fail before binding a port if the database is unreachable.
@@ -51,6 +63,22 @@ async function start(): Promise<void> {
   void purgeExpired();
   const retention = setInterval(() => void purgeExpired(), RETENTION_SWEEP_MS);
   retention.unref();
+
+  /*
+    Partial-dispatch deadlines, on the same pattern and for the same reason: a
+    deadline that only exists as a timer is forgotten by a restart, so the
+    boot pass is what settles requests that came due while this process was
+    down. `void` rather than `await` so a slow first sweep never delays the
+    port being served, and `unref` so a pending tick cannot hold the process
+    open during shutdown — an interrupted sweep is simply redone next time,
+    because every write it makes is conditional on the row still being PENDING.
+  */
+  void sweepOverdueRequests();
+  const partialDispatch = setInterval(
+    () => void sweepOverdueRequests(),
+    PARTIAL_DISPATCH_SWEEP_MS,
+  );
+  partialDispatch.unref();
 
   registerShutdownHandlers(server, wss);
 }

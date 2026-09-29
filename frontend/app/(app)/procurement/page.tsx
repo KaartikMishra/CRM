@@ -13,10 +13,12 @@ import {
 } from '@/components/common/content-page';
 import { EmptyState } from '@/components/common/empty-state';
 import { ErrorMessage } from '@/components/common/error-message';
+import { PartialDispatchQueue } from '@/components/procurement/partial-dispatch-queue';
 import { ProductChangeQueue } from '@/components/procurement/product-change-queue';
 import { PurchaseBillTable } from '@/components/procurement/purchase-bill-table';
 import { ShortageBoard } from '@/components/procurement/shortage-board';
 import {
+  fetchPendingPartialDispatches,
   fetchPendingProductChanges,
   fetchPurchaseBills,
   fetchShortages,
@@ -46,7 +48,7 @@ export default async function ProcurementPage({ searchParams }: { searchParams: 
   const canReview = can(access.user, 'PROCUREMENT', 'ASSIGN');
 
   // Independent of each other, and the API is a long way from here.
-  const [{ result }, shortages, productChanges] = await Promise.all([
+  const [{ result }, shortages, productChanges, partialDispatches] = await Promise.all([
     fetchPurchaseBills({
       q: first(params.q),
       status: first(params.status),
@@ -55,6 +57,13 @@ export default async function ProcurementPage({ searchParams }: { searchParams: 
     }),
     fetchShortages(),
     canReview ? fetchPendingProductChanges() : Promise.resolve([]),
+    /*
+      Partial-dispatch requests waiting on this person. Gated on the same
+      ASSIGN capability as the product-change queue — and on nothing from the
+      Packing & Dispatch module, so a procurement reviewer can answer without
+      access to the dispatch board.
+    */
+    canReview ? fetchPendingPartialDispatches() : Promise.resolve([]),
   ]);
 
   return (
@@ -100,6 +109,10 @@ export default async function ProcurementPage({ searchParams }: { searchParams: 
         reads to the end of the first, which is the one thing this page must not
         do. They share the height instead, and each scrolls on its own.
       */}
+      {/* Deadline-bound, so it leads: an unanswered partial dispatch is allowed
+          automatically after 24 hours, which the product-change queue never is. */}
+      {canReview && <PartialDispatchQueue rows={partialDispatches} />}
+
       {canReview && <ProductChangeQueue changes={productChanges} />}
 
       <ShortageBoard rows={shortages} />

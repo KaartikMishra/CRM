@@ -386,3 +386,109 @@ export const SALES_PAYMENT_REFERENCE_MAX_LENGTH = 120;
 
 /** Room for a sentence explaining a cancellation or a refund, not an essay. */
 export const SALES_CANCELLATION_REASON_MAX_LENGTH = 500;
+
+// ---------------------------------------------------------------------------
+//  Packing & Dispatch
+// ---------------------------------------------------------------------------
+
+/**
+ * How a shipment was booked.
+ *
+ * `OTHER` is a real answer, not a gap: a shipment booked outside the two
+ * aggregators still has to be recordable, and the name then goes in
+ * `channelOther`. Forcing it into one of the named two would make the record
+ * say something untrue.
+ *
+ * Kept here rather than in `enums.ts` for the reason that file states: it is
+ * reserved for values paired with a Prisma enum, and `Dispatch.channel` is a
+ * plain nullable String by design — courier arrangements are commercial and
+ * change, and a Postgres enum would charge an ALTER TYPE for every revision.
+ */
+export const DISPATCH_CHANNELS = ['BIGSHIP', 'SHIPROCKET', 'OTHER'] as const;
+export type DispatchChannel = (typeof DISPATCH_CHANNELS)[number];
+
+export const DISPATCH_CHANNEL_LABELS = {
+  BIGSHIP: 'BigShip',
+  SHIPROCKET: 'Shiprocket',
+  OTHER: 'Other',
+} as const satisfies Record<DispatchChannel, string>;
+
+/**
+ * Who is carrying it.
+ *
+ * Twenty-six named carriers and `OTHER`, in the order the business gave them:
+ * the Indian networks first, then the international ones, because that is the
+ * order somebody scanning the list will look in. The name behind `OTHER` goes
+ * in `carrierOther`.
+ *
+ * A plain String column for the same reason as the channel above — this list
+ * will be revised, and revising it should not require a migration.
+ */
+export const DISPATCH_CARRIERS = [
+  'DELHIVERY',
+  'BLUE_DART',
+  'DTDC',
+  'ECOM_EXPRESS',
+  'XPRESSBEES',
+  'SHADOWFAX',
+  'SHIPROCKET',
+  'SHIPYAARI',
+  'PICKRR',
+  'ITHINK_LOGISTICS',
+  'EKART_LOGISTICS',
+  'INDIA_POST',
+  'AMAZON_SHIPPING',
+  'PORTER',
+  'BORZO',
+  'DHL_EXPRESS',
+  'FEDEX',
+  'UPS',
+  'ARAMEX',
+  'DPD',
+  'GLS',
+  'SF_EXPRESS',
+  'USPS',
+  'ROYAL_MAIL',
+  'CANADA_POST',
+  'AUSTRALIA_POST',
+  'OTHER',
+] as const;
+export type DispatchCarrier = (typeof DISPATCH_CARRIERS)[number];
+
+/** What each carrier is called on screen, spelled as the courier spells it. */
+export const DISPATCH_CARRIER_LABELS = {
+  DELHIVERY: 'Delhivery',
+  BLUE_DART: 'Blue Dart',
+  DTDC: 'DTDC',
+  ECOM_EXPRESS: 'Ecom Express',
+  XPRESSBEES: 'XpressBees',
+  SHADOWFAX: 'Shadowfax',
+  SHIPROCKET: 'Shiprocket',
+  SHIPYAARI: 'Shipyaari',
+  PICKRR: 'Pickrr',
+  ITHINK_LOGISTICS: 'iThink Logistics',
+  EKART_LOGISTICS: 'Ekart Logistics',
+  INDIA_POST: 'India Post',
+  AMAZON_SHIPPING: 'Amazon Shipping',
+  PORTER: 'Porter',
+  BORZO: 'Borzo',
+  DHL_EXPRESS: 'DHL Express',
+  FEDEX: 'FedEx',
+  UPS: 'UPS',
+  ARAMEX: 'Aramex',
+  DPD: 'DPD',
+  GLS: 'GLS',
+  SF_EXPRESS: 'SF Express',
+  USPS: 'USPS',
+  ROYAL_MAIL: 'Royal Mail',
+  CANADA_POST: 'Canada Post',
+  AUSTRALIA_POST: 'Australia Post',
+  OTHER: 'Other',
+} as const satisfies Record<DispatchCarrier, string>;
+
+/** The longest airway bill the CRM will store. Generous: formats vary widely. */
+export const AWB_MAX_LENGTH = 60;
+
+/** How long Procurement has to answer a partial-dispatch request. */
+export const PARTIAL_DISPATCH_DEADLINE_HOURS = 24;
+export const PARTIAL_DISPATCH_DEADLINE_MS = PARTIAL_DISPATCH_DEADLINE_HOURS * 60 * 60 * 1000;

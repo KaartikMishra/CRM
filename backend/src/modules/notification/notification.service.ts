@@ -203,6 +203,103 @@ export const salesOrderCreatedDraft = (
 });
 
 // ---------------------------------------------------------------------------
+//  Partial dispatch
+// ---------------------------------------------------------------------------
+
+/**
+ * Who answers a partial-dispatch question.
+ *
+ * `PROCUREMENT:ASSIGN` rather than VIEW: the question is whether goods may go
+ * before the rest are procured, and the people who can answer it are the ones
+ * who can commit stock to an order. Telling every reader would put a decision
+ * in the inbox of people who cannot make it.
+ */
+export async function partialDispatchDeciders(): Promise<string[]> {
+  const users = await usersWithPermission('PROCUREMENT', 'ASSIGN');
+  return users.map((u) => u.id);
+}
+
+/**
+ * The four partial-dispatch notices.
+ *
+ * All four name the order rather than the request, because that is what the
+ * recipient recognises, and all four link to the order's dispatch page, where
+ * the request and its decision are shown in context.
+ */
+/**
+ * The only one of the four addressed to Procurement rather than to Dispatch,
+ * and therefore the only one that links somewhere else.
+ *
+ * `/procurement`, not `/dispatch/:id`. Recipients are resolved by
+ * PROCUREMENT:ASSIGN, which carries no Packing & Dispatch access — so a
+ * procurement reviewer following a link to the dispatch order page would be
+ * refused by that page's own module guard and could not answer the question
+ * they were just asked. The decision queue lives on their own module's page.
+ *
+ * `salesOrderId` is no longer part of the link but stays in the signature: it
+ * is what a future per-order deep link would need, and dropping it would make
+ * this draft the one that cannot offer one.
+ */
+export const partialDispatchRequestedDraft = (
+  orderNumber: string,
+  requestId: string,
+  _salesOrderId: string,
+): Draft => ({
+  type: 'PARTIAL_DISPATCH_REQUESTED',
+  title: 'Partial dispatch requested',
+  body: `${orderNumber} · Dispatch is asking whether the ready part may be sent`,
+  href: '/procurement',
+  entityType: 'PartialDispatchRequest',
+  entityId: requestId,
+});
+
+export const partialDispatchAllowedDraft = (
+  orderNumber: string,
+  requestId: string,
+  salesOrderId: string,
+): Draft => ({
+  type: 'PARTIAL_DISPATCH_ALLOWED',
+  title: 'Partial dispatch allowed',
+  body: `${orderNumber} · The ready part may be sent`,
+  href: `/dispatch/${salesOrderId}`,
+  entityType: 'PartialDispatchRequest',
+  entityId: requestId,
+});
+
+export const partialDispatchDisallowedDraft = (
+  orderNumber: string,
+  requestId: string,
+  salesOrderId: string,
+): Draft => ({
+  type: 'PARTIAL_DISPATCH_DISALLOWED',
+  title: 'Partial dispatch refused',
+  body: `${orderNumber} · Hold the goods — see the plan of action`,
+  href: `/dispatch/${salesOrderId}`,
+  entityType: 'PartialDispatchRequest',
+  entityId: requestId,
+});
+
+/**
+ * The deadline's own notice.
+ *
+ * The body says *why* it was allowed, because that is the whole difference
+ * between this and a human approval: nobody agreed, the question simply went
+ * unanswered for a day. Saying "allowed" alone would imply somebody decided.
+ */
+export const partialDispatchAutoAllowedDraft = (
+  orderNumber: string,
+  requestId: string,
+  salesOrderId: string,
+): Draft => ({
+  type: 'PARTIAL_DISPATCH_AUTO_ALLOWED',
+  title: 'Partial dispatch allowed automatically',
+  body: `${orderNumber} · No response within 24 hours, so the ready part may be sent`,
+  href: `/dispatch/${salesOrderId}`,
+  entityType: 'PartialDispatchRequest',
+  entityId: requestId,
+});
+
+// ---------------------------------------------------------------------------
 //  Retention
 // ---------------------------------------------------------------------------
 

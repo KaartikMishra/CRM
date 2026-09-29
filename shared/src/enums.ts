@@ -248,5 +248,52 @@ export type ProcurementClockState = (typeof PROCUREMENT_CLOCK_STATES)[number];
  * them identically, and splitting them would only push the union back together
  * at every call site.
  */
-export const NOTIFICATION_TYPES = ['ENQUIRY_ASSIGNED', 'SALES_ORDER_CREATED'] as const;
+export const NOTIFICATION_TYPES = [
+  'ENQUIRY_ASSIGNED',
+  'SALES_ORDER_CREATED',
+  /**
+   * Packing & Dispatch asking Procurement whether part of an order may go now,
+   * and the four ways that question is answered.
+   *
+   * AUTO_ALLOWED is deliberately its own type rather than a flag on ALLOWED: a
+   * shipment permitted because nobody objected within the deadline is a
+   * different event from one somebody agreed to, and the person reading the
+   * notice needs to be able to tell them apart at a glance.
+   */
+  'PARTIAL_DISPATCH_REQUESTED',
+  'PARTIAL_DISPATCH_ALLOWED',
+  'PARTIAL_DISPATCH_DISALLOWED',
+  'PARTIAL_DISPATCH_AUTO_ALLOWED',
+] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
+
+// ---------------------------------------------------------------------------
+//  Packing & Dispatch
+// ---------------------------------------------------------------------------
+
+/**
+ * Where a shipment has reached.
+ *
+ * DISPATCHED is terminal: goods that have left cannot be un-sent, and the
+ * record of what was sent has to stay true. CANCELLED is reachable only before
+ * that, for a pack that was started and abandoned.
+ */
+export const DISPATCH_STATUSES = [
+  'DRAFT',
+  'PACKING',
+  'PACKED',
+  'DISPATCHED',
+  'CANCELLED',
+] as const;
+export type DispatchStatus = (typeof DISPATCH_STATUSES)[number];
+
+/**
+ * The life of a request to ship part of an order.
+ *
+ * MOOT is what keeps the record honest: if the rest of the order becomes ready
+ * while the request is still waiting, nobody needs to decide it any more — but
+ * it was really asked, so it is resolved rather than deleted, and never
+ * auto-allowed for a question that no longer applies.
+ */
+export const PARTIAL_DISPATCH_STATUSES = ['PENDING', 'ALLOWED', 'DISALLOWED', 'MOOT'] as const;
+export type PartialDispatchStatus = (typeof PARTIAL_DISPATCH_STATUSES)[number];
