@@ -46,6 +46,9 @@ enum AppModule {
   CUSTOMER_BILLING
   VENDOR_INVOICE
   POST_SALES
+  /// Create Lead / Deal. Decided after the original set, so — like RS_PRODUCTS
+  /// — it carries an ALTER TYPE migration of its own.
+  LEAD_DEAL
 }
 
 enum PermissionAction {
@@ -101,6 +104,7 @@ model User {
   requestedProcurementDelays ProcurementDelayReason[] @relation("ProcurementDelayRequestedBy")
   reviewedProcurementDelays  ProcurementDelayReason[] @relation("ProcurementDelayReviewedBy")
   createdDispatches          Dispatch[]               @relation("DispatchCreatedBy")
+  createdLeads               Lead[]                   @relation("LeadCreatedBy")
   packedDispatches           Dispatch[]               @relation("DispatchPackedBy")
   dispatchedDispatches       Dispatch[]               @relation("DispatchDispatchedBy")
   requestedPartialDispatches PartialDispatchRequest[] @relation("PartialDispatchRequestedBy")
@@ -179,6 +183,7 @@ model Customer {
 
   enquiries   ProductEnquiry[]
   salesOrders SalesOrder[]
+  leads       Lead[]
 
   /// Not unique: two real firms can legitimately share a name.
   @@index([name])
@@ -2071,4 +2076,95 @@ model PartialDispatchRequest {
   /// The sweep's own query: still pending, deadline first.
   @@index([status, deadline])
   @@index([salesOrderId, status])
+}
+
+// ---------------------------------------------------------------------------
+//  Create Lead / Deal
+// ---------------------------------------------------------------------------
+
+/// Where a lead came to us from.
+///
+/// A Prisma enum rather than a plain String because this is a fixed, small
+/// vocabulary the business named in full, and it is paired with LEAD_SOURCES in
+/// @rs/shared — add a member here and there together, never in one alone.
+enum LeadSource {
+  CALL
+  WHATSAPP
+  EMAIL
+  ABANDONED_CART
+  SOCIAL_MEDIA
+  OTHER
+}
+
+/// What kind of business the lead is asking for.
+///
+/// Deliberately NOT CustomerType. The two vocabularies overlap in wording and
+/// mean different things: CustomerType describes who somebody is on the
+/// Customer master, while this describes what this particular enquiry is for —
+/// the same retail customer can raise a corporate gifting lead.
+enum RequirementType {
+  RETAIL
+  WHOLESALE
+  EXPORT_RETAIL
+  EXPORT_WHOLESALE
+  CORPORATE_GIFTING
+  PERSONAL_GIFTING
+}
+
+/// A lead or deal, as first captured.
+///
+/// Phase 1 records where the enquiry came from, what kind of business it is,
+/// who it is from, and which channel carried it. That is deliberately all:
+/// there is no status, no owner, no follow-up, no products and no pipeline
+/// stage, because those rules have not been specified and guessing at them
+/// would put fields in the database that the business then has to work around.
+///
+/// The record is extensible without redesign — every future workflow field is
+/// an additive column or a new related model, and none of them changes what is
+/// written here.
+model Lead {
+  id String @id @default(cuid())
+
+  /// How it reached us, with `leadSourceOther` carrying the written name when
+  /// the answer is OTHER. The pairing is enforced by the shared schema in both
+  /// directions, exactly as Dispatch does for channel and carrier.
+  leadSource      LeadSource
+  leadSourceOther String?
+
+  /// A free-text reference for the source — a call note, a thread subject, an
+  /// order number from an abandoned cart.
+  ///
+  /// Deliberately generic and optional. The team has not settled what this
+  /// field means per source, so it is one neutral column rather than six
+  /// speculative ones; naming it later costs a rename, not a redesign.
+  sourceDetails String?
+
+  /// When the enquiry actually happened, which is not when the row was made:
+  /// a lead is often entered hours after the call. Stored as an absolute
+  /// instant like every other DateTime in this schema.
+  sourceAt DateTime
+
+  requirementType RequirementType
+
+  /// The existing Customer master, never a second copy of it. Restrict rather
+  /// than Cascade: a customer with leads against them is referenced history,
+  /// and deleting one should fail loudly rather than take the leads with it.
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  /// Which storefront or marketplace carried it. A plain String validated by
+  /// the shared z.enum, following Dispatch's channel/carrier precedent: a
+  /// commercial list that changes should not charge an ALTER TYPE per revision.
+  channel      String
+  channelOther String?
+
+  createdById String
+  createdBy   User   @relation("LeadCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// One customer's leads, newest first — the only two reads Phase 1 has.
+  @@index([customerId, createdAt])
+  @@index([createdAt])
 }

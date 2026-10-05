@@ -11,3 +11,4 @@ export * from './user.js';
 export * from './procurement.js';
 export * from './rs-product.js';
 export * from './notification.js';
+export * from './lead.js';

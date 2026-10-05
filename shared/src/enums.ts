@@ -18,8 +18,42 @@ export const APP_MODULES = [
   'CUSTOMER_BILLING',
   'VENDOR_INVOICE',
   'POST_SALES',
+  'LEAD_DEAL',
 ] as const;
 export type AppModule = (typeof APP_MODULES)[number];
+
+/**
+ * Where a lead reached us from.
+ *
+ * Paired with the LeadSource enum in schema.prisma: add a member here and there
+ * together, never in one alone. OTHER carries a written name alongside it.
+ */
+export const LEAD_SOURCES = [
+  'CALL',
+  'WHATSAPP',
+  'EMAIL',
+  'ABANDONED_CART',
+  'SOCIAL_MEDIA',
+  'OTHER',
+] as const;
+export type LeadSource = (typeof LEAD_SOURCES)[number];
+
+/**
+ * What kind of business a lead is asking for.
+ *
+ * Deliberately not CUSTOMER_TYPES, though the words overlap: that describes who
+ * somebody is on the Customer master, while this describes what one enquiry is
+ * for. The same retail customer can raise a corporate gifting lead.
+ */
+export const REQUIREMENT_TYPES = [
+  'RETAIL',
+  'WHOLESALE',
+  'EXPORT_RETAIL',
+  'EXPORT_WHOLESALE',
+  'CORPORATE_GIFTING',
+  'PERSONAL_GIFTING',
+] as const;
+export type RequirementType = (typeof REQUIREMENT_TYPES)[number];
 
 export const PERMISSION_ACTIONS = ['VIEW', 'CREATE', 'EDIT', 'DELETE', 'ASSIGN'] as const;
 export type PermissionAction = (typeof PERMISSION_ACTIONS)[number];

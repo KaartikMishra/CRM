@@ -6,6 +6,8 @@
  * again as CHECK constraints. Changing a value here changes all three.
  */
 
+import type { LeadSource, RequirementType } from '../enums.js';
+
 /** §62.1 — hard cap on products in one enquiry. Also a DB CHECK constraint. */
 export const MAX_PRODUCTS_PER_ENQUIRY = 20;
 
@@ -162,7 +164,63 @@ export const APP_MODULE_LABELS = {
   CUSTOMER_BILLING: 'Customer Billing',
   VENDOR_INVOICE: 'Vendor Invoices',
   POST_SALES: 'Post Sales & Grievance',
+  LEAD_DEAL: 'Create Lead / Deal',
 } as const satisfies Record<string, string>;
+
+// ---------------------------------------------------------------------------
+//  Create Lead / Deal
+// ---------------------------------------------------------------------------
+
+/** How a lead reached us, as the form offers it. */
+export const LEAD_SOURCE_LABELS = {
+  CALL: 'Call',
+  WHATSAPP: 'WhatsApp',
+  EMAIL: 'Email',
+  ABANDONED_CART: 'Abandoned Cart',
+  SOCIAL_MEDIA: 'Social Media',
+  OTHER: 'Other',
+} as const satisfies Record<LeadSource, string>;
+
+/** What the enquiry is for. */
+export const REQUIREMENT_TYPE_LABELS = {
+  RETAIL: 'Retail',
+  WHOLESALE: 'Wholesale',
+  EXPORT_RETAIL: 'Export Retail',
+  EXPORT_WHOLESALE: 'Export Wholesale',
+  CORPORATE_GIFTING: 'Corporate Gifting',
+  PERSONAL_GIFTING: 'Personal Gifting',
+} as const satisfies Record<RequirementType, string>;
+
+/**
+ * The storefronts and marketplaces a lead can arrive through.
+ *
+ * A plain String list rather than a Prisma enum, following DISPATCH_CHANNELS
+ * and DISPATCH_CARRIERS: a commercial list that changes as storefronts are
+ * added and retired should not charge an ALTER TYPE for every revision. The
+ * z.enum built from this is what restricts the stored value.
+ */
+export const LEAD_CHANNELS = [
+  'ROYALSTUFFS_COM',
+  'ROYALSTUFFS_STORE',
+  'INDIAMART',
+  'AMAZON',
+  'FLIPKART',
+  'OTHER',
+] as const;
+export type LeadChannel = (typeof LEAD_CHANNELS)[number];
+
+export const LEAD_CHANNEL_LABELS = {
+  ROYALSTUFFS_COM: 'RoyalStuffs.com',
+  ROYALSTUFFS_STORE: 'RoyalStuffs.store',
+  INDIAMART: 'IndiaMART',
+  AMAZON: 'Amazon',
+  FLIPKART: 'Flipkart',
+  OTHER: 'Other',
+} as const satisfies Record<LeadChannel, string>;
+
+/** The written name beside an OTHER answer, and the free-text source note. */
+export const LEAD_OTHER_MAX_LENGTH = 120;
+export const LEAD_SOURCE_DETAILS_MAX_LENGTH = 1000;
 
 /**
  * The GST rates a sales line may carry.

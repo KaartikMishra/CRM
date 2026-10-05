@@ -1,5 +1,6 @@
 import {
   Boxes,
+  Sparkles,
   ClipboardList,
   CircleDashed,
   Clock,
@@ -34,6 +35,7 @@ const ICONS: Record<NavIconKey, LucideIcon> = {
   'procurement-clock': Clock,
   'rs-products': Tags,
   dispatch: Package,
+  'lead-deal': Sparkles,
   billing: Receipt,
   'vendor-invoices': FileText,
   'post-sales': LifeBuoy,

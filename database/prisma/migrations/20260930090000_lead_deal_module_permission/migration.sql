@@ -1,0 +1,24 @@
+-- =============================================================================
+--  LEAD_DEAL joins the AppModule enum.
+--
+--  One new member on an existing enum, and nothing else. Postgres has no way to
+--  add an enum value without ALTER TYPE; the schema's own comment on AppModule
+--  records that cost, and RS_PRODUCTS paid it before this.
+--
+--  SEPARATE FROM THE TABLES on purpose. Postgres will not let a value added by
+--  ALTER TYPE be used inside the same transaction that added it, and the next
+--  migration writes permission rows against this module. Two migrations is what
+--  makes both safe to run in one deploy.
+--
+--  `IF NOT EXISTS`, so re-running this migration is a no-op rather than an error.
+--
+--  NOT TOUCHED: every existing UserModulePermission row keeps its module and its
+--  decision. No table is created, altered or dropped. No row is inserted,
+--  updated or deleted. Nobody gains or loses access from this statement alone —
+--  a module nobody has a row for is denied by default, and ADMIN's access comes
+--  from ROLE_DEFAULTS in the application, not from data.
+--
+--  No DROP, TRUNCATE, DELETE, INSERT or UPDATE.
+-- =============================================================================
+
+ALTER TYPE "AppModule" ADD VALUE IF NOT EXISTS 'LEAD_DEAL';

@@ -43,6 +43,13 @@ const ROLE_DEFAULTS: Record<Role, ModuleMatrix> = {
     CUSTOMER_BILLING: ALL,
     VENDOR_INVOICE: ALL,
     POST_SALES: ALL,
+    /*
+      Mandatory, not merely conventional: `effectivePermissions` derives the
+      whole module list from Object.keys(ROLE_DEFAULTS.ADMIN), so a module
+      missing here is invisible to /api/auth/me — and therefore to the sidebar,
+      hasModule and requireModule — even for an administrator.
+    */
+    LEAD_DEAL: ALL,
   },
   USER: {
     PRODUCT_ENQUIRY: { VIEW: true, CREATE: true, EDIT: true, DELETE: false, ASSIGN: false },

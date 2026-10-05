@@ -25,6 +25,7 @@ export type NavIconKey =
   | 'billing'
   | 'vendor-invoices'
   | 'post-sales'
+  | 'lead-deal'
   | 'users';
 
 export type NavItem = {
@@ -62,6 +63,13 @@ export type NavItem = {
 
 export const NAV_ITEMS: NavItem[] = [
   { label: 'Dashboard', href: '/dashboard', icon: 'dashboard', available: true },
+  {
+    label: 'Create Lead / Deal',
+    href: '/create-lead',
+    icon: 'lead-deal',
+    available: true,
+    module: 'LEAD_DEAL',
+  },
   {
     label: 'Product Enquiry',
     href: '/product-enquiry',

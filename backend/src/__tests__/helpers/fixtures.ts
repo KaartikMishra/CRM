@@ -538,6 +538,14 @@ async function sweepTestOwnedRows(failures: unknown[]): Promise<void> {
   // MediaAsset -> uploadedBy is Restrict, so an asset a test user uploaded would
   // otherwise pin that user in place. Every image reference to it is SetNull.
   await step(failures, () => prisma.mediaAsset.deleteMany({ where: { uploadedBy: owned } }));
+  /*
+    Leads before customers: Lead -> Customer is Restrict, so a customer carrying
+    a lead cannot be removed while it stands. Restrict is right for the business
+    — a customer with leads against them is referenced history — and it means
+    teardown has to take the lead first rather than relying on a cascade.
+  */
+  await step(failures, () => prisma.lead.deleteMany({ where: { customer: owned } }));
+  await step(failures, () => prisma.lead.deleteMany({ where: { createdBy: owned } }));
   await step(failures, () => prisma.customer.deleteMany({ where: owned }));
   await step(failures, () => prisma.vendor.deleteMany({ where: owned }));
   await step(failures, () => prisma.user.deleteMany({ where: owned }));
@@ -661,8 +669,19 @@ export async function cleanup(): Promise<void> {
     );
   }
   if (created.customerIds.length) {
+    // Lead -> Customer is Restrict, so any lead raised against these customers
+    // has to go first — see the note in sweepTestOwnedRows.
+    await step(failures, () =>
+      prisma.lead.deleteMany({ where: { customerId: { in: created.customerIds } } }),
+    );
     await step(failures, () =>
       prisma.customer.deleteMany({ where: { id: { in: created.customerIds } } }),
+    );
+  }
+  if (created.userIds.length) {
+    // And any raised BY a fixture user against a customer this run did not make.
+    await step(failures, () =>
+      prisma.lead.deleteMany({ where: { createdById: { in: created.userIds } } }),
     );
   }
   if (created.vendorIds.length) {

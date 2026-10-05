@@ -80,9 +80,10 @@ describe('the icon registry', () => {
 });
 
 describe('the navigation table itself is unchanged', () => {
-  it('still lists all ten destinations in order', () => {
+  it('still lists all eleven destinations in order', () => {
     expect(NAV_ITEMS.map((i) => i.href)).toEqual([
       '/dashboard',
+      '/create-lead',
       '/product-enquiry',
       '/sales',
       '/procurement',
@@ -134,7 +135,8 @@ describe('module visibility is unchanged by the fix', () => {
 
   it('shows an administrator everything, including User Management', () => {
     const hrefs = visibleNavItems([...APP_MODULES], true).map((i) => i.href);
-    expect(hrefs).toHaveLength(10);
+    // Eleven since Create Lead / Deal joined the table.
+    expect(hrefs).toHaveLength(11);
     expect(hrefs).toContain('/users');
   });
 
@@ -200,7 +202,7 @@ describe('Purchase & Procurement is a parent, and Procurement Clock sits under i
     // The whole point of the nesting. If this ever fails, the submodule has
     // been promoted to a sidebar module of its own.
     expect(NAV_ITEMS.map((i) => i.href)).not.toContain('/procurement/clock');
-    expect(NAV_ITEMS).toHaveLength(10);
+    expect(NAV_ITEMS).toHaveLength(11);
   });
 
   it('carries it as a child of Purchase & Procurement', () => {
