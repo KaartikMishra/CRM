@@ -10,6 +10,13 @@ import type {
   DealStatus,
   LeadActivityKind,
   LeadSource,
+  PostSalesActivityKind,
+  PostSalesAttachmentKind,
+  PostSalesCaseStatus,
+  PostSalesCaseType,
+  PostSalesCommunicationChannel,
+  PostSalesIssueCategory,
+  PostSalesPriority,
   ProductMatchKind,
   RequirementType,
 } from '../enums.js';
@@ -687,3 +694,197 @@ export const AWB_MAX_LENGTH = 60;
 /** How long Procurement has to answer a partial-dispatch request. */
 export const PARTIAL_DISPATCH_DEADLINE_HOURS = 24;
 export const PARTIAL_DISPATCH_DEADLINE_MS = PARTIAL_DISPATCH_DEADLINE_HOURS * 60 * 60 * 1000;
+
+// ---------------------------------------------------------------------------
+//  Post Sales & Grievance
+// ---------------------------------------------------------------------------
+
+/**
+ * Display names for the Post Sales vocabularies.
+ *
+ * Beside the enums rather than retyped in each component, so the board, the
+ * filters and the detail page all call a status the same thing. The grouping in
+ * ISSUE labels is for reading order only — the stored value is a flat enum.
+ */
+export const POST_SALES_CASE_TYPE_LABELS = {
+  COMPLAINT: 'Complaint',
+  RETURN: 'Return',
+  REPLACEMENT: 'Replacement',
+  REFUND: 'Refund',
+  EXCHANGE: 'Exchange',
+  WARRANTY: 'Warranty',
+  DELIVERY_ISSUE: 'Delivery issue',
+  PRODUCT_QUESTION: 'Product question',
+  BILLING_ISSUE: 'Billing issue',
+  PAYMENT_ISSUE: 'Payment issue',
+  FEEDBACK: 'Feedback',
+  SUGGESTION: 'Suggestion',
+  REVIEW_ISSUE: 'Review issue',
+  OTHER: 'Other',
+} as const satisfies Record<PostSalesCaseType, string>;
+
+export const POST_SALES_PRIORITY_LABELS = {
+  LOW: 'Low',
+  MEDIUM: 'Medium',
+  HIGH: 'High',
+  CRITICAL: 'Critical',
+} as const satisfies Record<PostSalesPriority, string>;
+
+export const POST_SALES_CASE_STATUS_LABELS = {
+  NEW: 'New',
+  ASSIGNED: 'Assigned',
+  IN_PROGRESS: 'In progress',
+  AWAITING_CUSTOMER: 'Awaiting customer',
+  AWAITING_INTERNAL: 'Awaiting internal',
+  AWAITING_VENDOR: 'Awaiting vendor',
+  AWAITING_COURIER: 'Awaiting courier',
+  RESOLUTION_IN_PROGRESS: 'Resolution in progress',
+  RESOLVED: 'Resolved',
+  CLOSED: 'Closed',
+  REOPENED: 'Reopened',
+} as const satisfies Record<PostSalesCaseStatus, string>;
+
+export const POST_SALES_ACTIVITY_KIND_LABELS = {
+  SYSTEM: 'System',
+  NOTE: 'Note',
+  INTERNAL_NOTE: 'Internal note',
+  CUSTOMER_COMMUNICATION: 'Customer communication',
+  FOLLOW_UP: 'Follow-up',
+  STATUS_CHANGE: 'Status change',
+  ASSIGNMENT_CHANGE: 'Assignment change',
+} as const satisfies Record<PostSalesActivityKind, string>;
+
+export const POST_SALES_COMMUNICATION_CHANNEL_LABELS = {
+  PHONE: 'Phone',
+  WHATSAPP: 'WhatsApp',
+  EMAIL: 'Email',
+  SMS: 'SMS',
+  WEBSITE: 'Website',
+  INSTAGRAM: 'Instagram',
+  FACEBOOK: 'Facebook',
+  MARKETPLACE: 'Marketplace',
+  IN_PERSON: 'In person',
+  INTERNAL: 'Internal',
+} as const satisfies Record<PostSalesCommunicationChannel, string>;
+
+export const POST_SALES_ATTACHMENT_KIND_LABELS = {
+  PRODUCT_PHOTO: 'Product photo',
+  PACKAGING_PHOTO: 'Packaging photo',
+  SCREENSHOT: 'Screenshot',
+  PAYMENT_PROOF: 'Payment proof',
+  DELIVERY_PROOF: 'Delivery proof',
+  OTHER: 'Other',
+} as const satisfies Record<PostSalesAttachmentKind, string>;
+
+/**
+ * Issue category labels, written out rather than derived from the enum name.
+ *
+ * "FINISH_POLISH_ISSUE" reads as "Finish / polish issue", which no mechanical
+ * transformation produces — and the business named these, so the words are theirs.
+ */
+export const POST_SALES_ISSUE_CATEGORY_LABELS = {
+  DAMAGED_PRODUCT: 'Damaged product',
+  MANUFACTURING_DEFECT: 'Manufacturing defect',
+  FINISH_POLISH_ISSUE: 'Finish / polish issue',
+  SIZE_ISSUE: 'Size issue',
+  WRONG_SIZE: 'Wrong size',
+  WRONG_PRODUCT: 'Wrong product',
+  MISSING_PRODUCT: 'Missing product',
+  MISSING_PART: 'Missing part',
+  QUALITY_CONCERN: 'Quality concern',
+  LEAKAGE: 'Leakage',
+  BREAKAGE: 'Breakage',
+  DENT: 'Dent',
+  SCRATCH: 'Scratch',
+  COATING_ISSUE: 'Coating issue',
+  COLOUR_DIFFERENCE: 'Colour difference',
+  PRODUCT_PERFORMANCE: 'Product performance',
+  PRODUCT_USAGE_QUESTION: 'Product usage question',
+  PRODUCT_CARE_QUESTION: 'Product care question',
+  DELAYED_DELIVERY: 'Delayed delivery',
+  DELIVERY_FAILED: 'Delivery failed',
+  WRONG_ADDRESS: 'Wrong address',
+  COURIER_DAMAGE: 'Courier damage',
+  PACKAGE_DAMAGED: 'Package damaged',
+  PACKAGE_MISSING: 'Package missing',
+  WRONG_PACKAGE: 'Wrong package',
+  PARTIAL_DELIVERY: 'Partial delivery',
+  TRACKING_ISSUE: 'Tracking issue',
+  WRONG_ITEM: 'Wrong item',
+  MISSING_ITEM: 'Missing item',
+  QUANTITY_ISSUE: 'Quantity issue',
+  ORDER_MODIFICATION: 'Order modification',
+  CANCELLATION: 'Cancellation',
+  BILLING_ISSUE: 'Billing issue',
+  INVOICE_ISSUE: 'Invoice issue',
+  PAYMENT_ISSUE: 'Payment issue',
+  RETURN_REQUEST: 'Return request',
+  REPLACEMENT_REQUEST: 'Replacement request',
+  REFUND_REQUEST: 'Refund request',
+  EXCHANGE_REQUEST: 'Exchange request',
+  WARRANTY_REQUEST: 'Warranty request',
+  SERVICE_REQUEST: 'Service request',
+  DISSATISFACTION: 'Dissatisfaction',
+  NEGATIVE_FEEDBACK: 'Negative feedback',
+  SUGGESTION: 'Suggestion',
+  PRODUCT_FEEDBACK: 'Product feedback',
+  SERVICE_FEEDBACK: 'Service feedback',
+  OTHER: 'Other',
+} as const satisfies Record<PostSalesIssueCategory, string>;
+
+/**
+ * Which group each issue category belongs to, for the picker's option groups.
+ *
+ * Presentation only. The stored column is the flat enum above; this never reaches
+ * the database, and a category missing from every group would simply not be
+ * offered — which a test guards against.
+ */
+export const POST_SALES_ISSUE_GROUPS = [
+  {
+    label: 'Product',
+    categories: [
+      'DAMAGED_PRODUCT', 'MANUFACTURING_DEFECT', 'FINISH_POLISH_ISSUE', 'SIZE_ISSUE',
+      'WRONG_SIZE', 'WRONG_PRODUCT', 'MISSING_PRODUCT', 'MISSING_PART',
+      'QUALITY_CONCERN', 'LEAKAGE', 'BREAKAGE', 'DENT', 'SCRATCH', 'COATING_ISSUE',
+      'COLOUR_DIFFERENCE', 'PRODUCT_PERFORMANCE', 'PRODUCT_USAGE_QUESTION',
+      'PRODUCT_CARE_QUESTION',
+    ],
+  },
+  {
+    label: 'Delivery',
+    categories: [
+      'DELAYED_DELIVERY', 'DELIVERY_FAILED', 'WRONG_ADDRESS', 'COURIER_DAMAGE',
+      'PACKAGE_DAMAGED', 'PACKAGE_MISSING', 'WRONG_PACKAGE', 'PARTIAL_DELIVERY',
+      'TRACKING_ISSUE',
+    ],
+  },
+  {
+    label: 'Order',
+    categories: [
+      'WRONG_ITEM', 'MISSING_ITEM', 'QUANTITY_ISSUE', 'ORDER_MODIFICATION',
+      'CANCELLATION', 'BILLING_ISSUE', 'INVOICE_ISSUE', 'PAYMENT_ISSUE',
+    ],
+  },
+  {
+    label: 'Post sales',
+    categories: [
+      'RETURN_REQUEST', 'REPLACEMENT_REQUEST', 'REFUND_REQUEST', 'EXCHANGE_REQUEST',
+      'WARRANTY_REQUEST', 'SERVICE_REQUEST',
+    ],
+  },
+  {
+    label: 'Customer experience',
+    categories: [
+      'DISSATISFACTION', 'NEGATIVE_FEEDBACK', 'SUGGESTION', 'PRODUCT_FEEDBACK',
+      'SERVICE_FEEDBACK',
+    ],
+  },
+  { label: 'Other', categories: ['OTHER'] },
+] as const satisfies readonly {
+  label: string;
+  categories: readonly PostSalesIssueCategory[];
+}[];
+
+/** Case number format: PS-<period>-<6 digits>, mirroring ENQ. */
+export const POST_SALES_CASE_PREFIX = 'PS';
+export const POST_SALES_CASE_NUMBER_PAD = 6;

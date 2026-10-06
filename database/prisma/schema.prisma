@@ -112,6 +112,12 @@ model User {
   dispatchedDispatches       Dispatch[]               @relation("DispatchDispatchedBy")
   requestedPartialDispatches PartialDispatchRequest[] @relation("PartialDispatchRequestedBy")
   decidedPartialDispatches   PartialDispatchRequest[] @relation("PartialDispatchDecidedBy")
+  /// Post-sales work: cases this person owns, raised, acted on, or attached a
+  /// photo to. Reverse sides only — the case and its children hold every key.
+  assignedPostSalesCases     PostSalesCase[]          @relation("PostSalesAssignedTo")
+  raisedPostSalesCases       PostSalesCase[]          @relation("PostSalesRaisedBy")
+  postSalesActivities        PostSalesActivity[]      @relation("PostSalesActivityBy")
+  postSalesAttachments       PostSalesAttachment[]    @relation("PostSalesAttachmentBy")
   notifications         Notification[]
 
   @@index([role, isActive])
@@ -187,6 +193,9 @@ model Customer {
   enquiries   ProductEnquiry[]
   salesOrders SalesOrder[]
   leads       Lead[]
+  /// Post-sales cases raised against this customer. Reverse side only; the case
+  /// holds the foreign key and no customer field is copied onto it.
+  postSalesCases PostSalesCase[]
 
   /// Not unique: two real firms can legitimately share a name.
   @@index([name])
@@ -288,6 +297,7 @@ model MediaAsset {
   purchaseBills       PurchaseBill[]           @relation("PurchaseBillImage")
   purchaseBillItems   PurchaseBillItem[]       @relation("PurchaseItemImage")
   leadRequirements    LeadProductRequirement[] @relation("LeadRequirementImage")
+  postSalesAttachments PostSalesAttachment[]    @relation("PostSalesAttachmentMedia")
 
   @@index([uploadedById, createdAt])
 }
@@ -785,6 +795,9 @@ model SalesOrder {
   /// Virtual — both foreign keys live on the other side.
   dispatches              Dispatch[]
   partialDispatchRequests PartialDispatchRequest[]
+  /// Post-sales cases about this order. Reverse side only; Restrict on the case's
+  /// foreign key, so a case can never delete an order.
+  postSalesCases          PostSalesCase[]
   /// The lead this order came from, if it came from one. One-to-one, because the
   /// FK on Lead is unique: one order is the result of at most one lead.
   lead                    Lead?
@@ -948,6 +961,9 @@ model SalesOrderItem {
   purchaseDelayReasons PurchaseDelayReason[]
   /// Which shipments carried this line, and how many units each took.
   dispatchItems DispatchItem[]
+  /// Post-sales case lines naming this order line. Reverse side only; Restrict on
+  /// the case item's foreign key, so no case can delete sales history.
+  postSalesCaseItems PostSalesCaseItem[]
 
   @@unique([orderId, lineNo])
   @@index([orderId, status])
@@ -1608,6 +1624,13 @@ enum NotificationType {
   PARTIAL_DISPATCH_ALLOWED
   PARTIAL_DISPATCH_DISALLOWED
   PARTIAL_DISPATCH_AUTO_ALLOWED
+
+  /// Post Sales & Grievance. Three rather than one per event: the bell groups by
+  /// type, and "a case needs you" is a different message from "a critical case
+  /// was raised". Deliberately few — a notice per field edit would be spam.
+  POST_SALES_CASE_ASSIGNED
+  POST_SALES_CASE_CRITICAL
+  POST_SALES_CASE_REOPENED
 }
 
 /// One thing somebody should know about, addressed to one person.
@@ -2010,6 +2033,9 @@ model Dispatch {
   dispatchedBy User?      @relation("DispatchDispatchedBy", fields: [dispatchedById], references: [id])
   createdBy    User       @relation("DispatchCreatedBy", fields: [createdById], references: [id])
   items        DispatchItem[]
+  /// Delivery-related post-sales cases referencing this shipment. Reverse side
+  /// only, and read-only: Phase 1 creates and modifies no shipment.
+  postSalesCases PostSalesCase[]
 
   /// One order's shipments, and the dispatch board's own queue.
   @@index([salesOrderId, status])
@@ -2362,4 +2388,341 @@ model LeadProductRequirement {
   /// Line numbers are per lead, exactly as EnquiryProduct does per enquiry.
   @@unique([leadId, lineNo])
   @@index([rsProductId])
+}
+
+// ---------------------------------------------------------------------------
+//  Post Sales & Grievance
+// ---------------------------------------------------------------------------
+
+/// What a case is about. Classification only — see POST_SALES_CASE_TYPES in
+/// @rs/shared: REFUND means "this case concerns a refund", never "process one".
+enum PostSalesCaseType {
+  COMPLAINT
+  RETURN
+  REPLACEMENT
+  REFUND
+  EXCHANGE
+  WARRANTY
+  DELIVERY_ISSUE
+  PRODUCT_QUESTION
+  BILLING_ISSUE
+  PAYMENT_ISSUE
+  FEEDBACK
+  SUGGESTION
+  REVIEW_ISSUE
+  OTHER
+}
+
+/// What went wrong. One flat enum rather than a category/subcategory pair: the
+/// grouping is the UI's, and a second stored column could disagree with this one.
+enum PostSalesIssueCategory {
+  DAMAGED_PRODUCT
+  MANUFACTURING_DEFECT
+  FINISH_POLISH_ISSUE
+  SIZE_ISSUE
+  WRONG_SIZE
+  WRONG_PRODUCT
+  MISSING_PRODUCT
+  MISSING_PART
+  QUALITY_CONCERN
+  LEAKAGE
+  BREAKAGE
+  DENT
+  SCRATCH
+  COATING_ISSUE
+  COLOUR_DIFFERENCE
+  PRODUCT_PERFORMANCE
+  PRODUCT_USAGE_QUESTION
+  PRODUCT_CARE_QUESTION
+  DELAYED_DELIVERY
+  DELIVERY_FAILED
+  WRONG_ADDRESS
+  COURIER_DAMAGE
+  PACKAGE_DAMAGED
+  PACKAGE_MISSING
+  WRONG_PACKAGE
+  PARTIAL_DELIVERY
+  TRACKING_ISSUE
+  WRONG_ITEM
+  MISSING_ITEM
+  QUANTITY_ISSUE
+  ORDER_MODIFICATION
+  CANCELLATION
+  BILLING_ISSUE
+  INVOICE_ISSUE
+  PAYMENT_ISSUE
+  RETURN_REQUEST
+  REPLACEMENT_REQUEST
+  REFUND_REQUEST
+  EXCHANGE_REQUEST
+  WARRANTY_REQUEST
+  SERVICE_REQUEST
+  DISSATISFACTION
+  NEGATIVE_FEEDBACK
+  SUGGESTION
+  PRODUCT_FEEDBACK
+  SERVICE_FEEDBACK
+  OTHER
+}
+
+enum PostSalesPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+/// Where a case stands. The four AWAITING_* states name who it is blocked on,
+/// which is what a board reader needs. None of them carries a timer: "overdue" is
+/// deliberately not a status, because it is a fact about a clock and not about the
+/// case. REOPENED is its own state so a case that came back is distinguishable
+/// from one that never closed.
+enum PostSalesCaseStatus {
+  NEW
+  ASSIGNED
+  IN_PROGRESS
+  AWAITING_CUSTOMER
+  AWAITING_INTERNAL
+  AWAITING_VENDOR
+  AWAITING_COURIER
+  RESOLUTION_IN_PROGRESS
+  RESOLVED
+  CLOSED
+  REOPENED
+}
+
+/// One kind of timeline entry. SYSTEM, STATUS_CHANGE and ASSIGNMENT_CHANGE are
+/// written by the service, which is why `performedById` below is nullable.
+enum PostSalesActivityKind {
+  SYSTEM
+  NOTE
+  INTERNAL_NOTE
+  CUSTOMER_COMMUNICATION
+  FOLLOW_UP
+  STATUS_CHANGE
+  ASSIGNMENT_CHANGE
+}
+
+/// How a logged conversation happened. A record, never a sending mechanism — no
+/// WhatsApp, email or SMS integration exists, and this module does not pretend one
+/// does.
+enum PostSalesCommunicationChannel {
+  PHONE
+  WHATSAPP
+  EMAIL
+  SMS
+  WEBSITE
+  INSTAGRAM
+  FACEBOOK
+  MARKETPLACE
+  IN_PERSON
+  INTERNAL
+}
+
+enum PostSalesCommunicationDirection {
+  INCOMING
+  OUTGOING
+}
+
+enum PostSalesAttachmentKind {
+  PRODUCT_PHOTO
+  PACKAGING_PHOTO
+  SCREENSHOT
+  PAYMENT_PROOF
+  DELIVERY_PROOF
+  OTHER
+}
+
+/// Per-period counter for human-facing case numbers, exactly as EnquiryCounter
+/// serves ENQ-. Its own row per period, bumped by an atomic upsert inside the
+/// creating transaction — never COUNT(*) + 1, which two concurrent creates would
+/// both read as the same value.
+model PostSalesCaseCounter {
+  period    String @id
+  lastValue Int    @default(0)
+}
+
+/// One grievance, question or request raised after a sale.
+///
+/// The spine of the module. It copies nothing: the customer, the order, the lines
+/// and the shipment are all references, so a case can never disagree with the
+/// canonical record about who somebody is or what they bought.
+///
+/// ### What this deliberately does not store
+///
+///   * No order total, payment status, address or order date. All are read
+///     through `salesOrder`, so a charge changing there cannot leave a stale
+///     figure here — the same rule Lead follows for Order Value.
+///   * No customer name, phone or email. `customer` is the canonical record.
+///   * No product identity. That comes through `items` to SalesOrderItem and on
+///     to RsProduct, which is the one product identity in this CRM.
+///   * No SLA deadline, no breach flag, no CSAT score. Those are later phases,
+///     and a column added on a guess is one the business has to work around.
+model PostSalesCase {
+  id String @id @default(cuid())
+
+  /// `PS-2026-000001` — what people read out. The cuid above stays the key.
+  caseNumber String @unique
+
+  customerId String
+
+  /// Optional, and that is the point: a product-care question or a piece of
+  /// feedback may arrive with no order behind it, and requiring one would force
+  /// somebody to attach an unrelated order to file a real case.
+  salesOrderId String?
+
+  /// Only for delivery-shaped cases. Read-only here — Phase 1 creates and
+  /// modifies no shipment.
+  dispatchId String?
+
+  caseType      PostSalesCaseType
+  issueCategory PostSalesIssueCategory
+  priority      PostSalesPriority      @default(MEDIUM)
+  status        PostSalesCaseStatus    @default(NEW)
+
+  subject     String
+  description String
+
+  /// Who owns it now. History of who owned it before lives in AuditLog, which is
+  /// why there is no assignment table — see `lead.assigned` for the precedent.
+  assignedToId String?
+  /// The authenticated actor who raised it. Never accepted from a client.
+  raisedById   String
+
+  /// Stamped by the service when the status actually reaches these states, so a
+  /// timestamp cannot disagree with the status it describes.
+  resolvedAt DateTime?
+  closedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  customer   Customer    @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  salesOrder SalesOrder? @relation(fields: [salesOrderId], references: [id], onDelete: Restrict)
+  dispatch   Dispatch?   @relation(fields: [dispatchId], references: [id], onDelete: SetNull)
+  assignedTo User?       @relation("PostSalesAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+  raisedBy   User        @relation("PostSalesRaisedBy", fields: [raisedById], references: [id], onDelete: Restrict)
+
+  items       PostSalesCaseItem[]
+  activities  PostSalesActivity[]
+  attachments PostSalesAttachment[]
+
+  /// The board's own queries: the open queue, one person's workload, and a
+  /// customer's history.
+  @@index([status, createdAt])
+  @@index([assignedToId, status])
+  @@index([customerId, createdAt])
+  @@index([salesOrderId])
+  @@index([priority, status])
+  @@index([createdAt])
+}
+
+/// Which order lines a case is about.
+///
+/// A join, carrying only the affected quantity. The product, SKU, price and image
+/// all come from the line itself — duplicating them here would create a second
+/// product identity, and the line must keep saying what was actually bought.
+model PostSalesCaseItem {
+  id     String @id @default(cuid())
+  caseId String
+
+  salesOrderItemId String
+
+  /// How many of that line are affected. A subset of the line's own quantity: a
+  /// complaint is usually about some of what arrived, not all of it.
+  affectedQty Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Cascade from the case, Restrict toward the order line: removing a case must
+  /// never reach sales history.
+  case          PostSalesCase  @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  salesOrderItem SalesOrderItem @relation(fields: [salesOrderItemId], references: [id], onDelete: Restrict)
+
+  /// One line at most once per case. A second entry for the same line is an edit
+  /// of the quantity, not another affected line.
+  @@unique([caseId, salesOrderItemId])
+  @@index([salesOrderItemId])
+}
+
+/// One entry on a case's timeline.
+///
+/// Notes, internal notes, customer communications, follow-ups and the system's own
+/// records, in one table discriminated by `kind`. They share every field that
+/// matters and differ only in who may read them and whether they carry a deadline;
+/// five tables would mean five queries to draw one timeline.
+///
+/// Patterned on LeadActivity but deliberately not that table: LeadActivity is
+/// bound to `leadId` with a Lead-specific vocabulary, and sharing it would make
+/// one module's semantics the other's constraint.
+model PostSalesActivity {
+  id     String @id @default(cuid())
+  caseId String
+
+  kind PostSalesActivityKind
+
+  /// What happened, in the employee's words. Required: an entry that says nothing
+  /// is not a record.
+  note String
+
+  /// Populated only for a CUSTOMER_COMMUNICATION; null on every other kind, which
+  /// a CHECK constraint enforces.
+  channel   PostSalesCommunicationChannel?
+  direction PostSalesCommunicationDirection?
+
+  /// Only meaningful on a FOLLOW_UP, which must carry one.
+  dueAt       DateTime?
+  /// When it was done. Null while outstanding — never defaulted to now, because
+  /// "due" and "done" are different facts.
+  completedAt DateTime?
+
+  /// Null for the three kinds the service writes itself. A system record has no
+  /// author, and naming one would be a fabrication.
+  performedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  case        PostSalesCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  performedBy User?         @relation("PostSalesActivityBy", fields: [performedById], references: [id], onDelete: SetNull)
+
+  /// One case's timeline in order, and the follow-up queue.
+  @@index([caseId, createdAt])
+  @@index([caseId, kind])
+  @@index([completedAt, dueAt])
+}
+
+/// A case's link to an uploaded image.
+///
+/// A join to MediaAsset, which is the one upload store in this CRM. A separate
+/// table rather than a column on the case, because a case carries several photos;
+/// and a join rather than a new store, because Cloudinary already holds the bytes.
+///
+/// `mediaAssetId` is SetNull so a retired asset leaves the link readable as
+/// history rather than deleting the record of what was attached. Removing an
+/// attachment from a case deletes this row and never the asset — several tables
+/// may reference the same one.
+model PostSalesAttachment {
+  id     String @id @default(cuid())
+  caseId String
+
+  mediaAssetId String?
+
+  kind PostSalesAttachmentKind @default(OTHER)
+
+  /// The authenticated uploader. SetNull so a departed employee's attachment
+  /// stays attached.
+  uploadedById String?
+
+  createdAt DateTime @default(now())
+
+  case       PostSalesCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  media      MediaAsset?   @relation("PostSalesAttachmentMedia", fields: [mediaAssetId], references: [id], onDelete: SetNull)
+  uploadedBy User?         @relation("PostSalesAttachmentBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  /// One asset at most once per case.
+  @@unique([caseId, mediaAssetId])
+  @@index([caseId, createdAt])
+  @@index([mediaAssetId])
 }

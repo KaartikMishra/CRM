@@ -104,10 +104,12 @@ describe('the navigation table itself is unchanged', () => {
     expect(byHref.get('/users')).toBe('User Management');
   });
 
-  it('keeps the six live modules available and the two future ones not', () => {
-    // Packing & Dispatch joined Product Enquiry, Sales, Procurement, RS
-    // Products and Vendor Invoices as a built module; the remaining two are
-    // still placeholders and must keep saying so.
+  it('keeps the live modules available and the one future one not', () => {
+    /*
+      Post Sales & Grievance joined Product Enquiry, Sales, Procurement, RS
+      Products, Packing & Dispatch and Vendor Invoices as a built module. Customer
+      Billing is the last placeholder and must keep saying so.
+    */
     const byHref = new Map(NAV_ITEMS.map((i) => [i.href, i]));
     expect(byHref.get('/product-enquiry')?.available).toBe(true);
     expect(byHref.get('/sales')?.available).toBe(true);
@@ -115,8 +117,9 @@ describe('the navigation table itself is unchanged', () => {
     expect(byHref.get('/rs-products')?.available).toBe(true);
     expect(byHref.get('/vendor-invoices')?.available).toBe(true);
     expect(byHref.get('/dispatch')?.available).toBe(true);
+    expect(byHref.get('/post-sales')?.available).toBe(true);
 
-    for (const href of ['/billing', '/post-sales']) {
+    for (const href of ['/billing']) {
       expect(byHref.get(href)?.available, href).toBe(false);
     }
   });
@@ -164,9 +167,10 @@ describe('module visibility is unchanged by the fix', () => {
   });
 
   it('shows a future module once it is granted, still marked unavailable', () => {
-    const items = visibleNavItems(['POST_SALES'], false);
-    expect(items.map((i) => i.href)).toEqual(['/dashboard', '/post-sales']);
-    expect(items.find((i) => i.href === '/post-sales')?.available).toBe(false);
+    // Customer Billing is the remaining placeholder; Post Sales is now built.
+    const items = visibleNavItems(['CUSTOMER_BILLING'], false);
+    expect(items.map((i) => i.href)).toEqual(['/dashboard', '/billing']);
+    expect(items.find((i) => i.href === '/billing')?.available).toBe(false);
   });
 
   it('an administrator with no granted modules still sees everything', () => {
@@ -244,7 +248,7 @@ describe('Purchase & Procurement is a parent, and Procurement Clock sits under i
       reaches the pair — which is the property the next test checks.
     */
     const withChildren = NAV_ITEMS.filter((i) => i.children?.length).map((i) => i.href);
-    expect(withChildren.sort()).toEqual(['/create-lead', '/procurement']);
+    expect(withChildren.sort()).toEqual(['/create-lead', '/post-sales', '/procurement']);
   });
 
   it('gives every child its parent module, so one grant reaches both', () => {

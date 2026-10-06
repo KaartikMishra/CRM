@@ -327,6 +327,9 @@ export const NOTIFICATION_TYPES = [
   'PARTIAL_DISPATCH_ALLOWED',
   'PARTIAL_DISPATCH_DISALLOWED',
   'PARTIAL_DISPATCH_AUTO_ALLOWED',
+  'POST_SALES_CASE_ASSIGNED',
+  'POST_SALES_CASE_CRITICAL',
+  'POST_SALES_CASE_REOPENED',
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 
@@ -360,3 +363,207 @@ export type DispatchStatus = (typeof DISPATCH_STATUSES)[number];
  */
 export const PARTIAL_DISPATCH_STATUSES = ['PENDING', 'ALLOWED', 'DISALLOWED', 'MOOT'] as const;
 export type PartialDispatchStatus = (typeof PARTIAL_DISPATCH_STATUSES)[number];
+
+// ---------------------------------------------------------------------------
+//  Post Sales & Grievance
+// ---------------------------------------------------------------------------
+
+/**
+ * What a case is about.
+ *
+ * A classification, and only that. `REFUND` means "this case concerns a refund",
+ * never "process a refund" — Phase 1 ships no settlement of any kind, and the
+ * money path stays with SalesRefund where it already lives. The same holds for
+ * RETURN, REPLACEMENT, EXCHANGE and WARRANTY: naming the subject is not doing
+ * the work, and conflating the two is how a case system starts moving goods it
+ * was never authorised to move.
+ */
+export const POST_SALES_CASE_TYPES = [
+  'COMPLAINT',
+  'RETURN',
+  'REPLACEMENT',
+  'REFUND',
+  'EXCHANGE',
+  'WARRANTY',
+  'DELIVERY_ISSUE',
+  'PRODUCT_QUESTION',
+  'BILLING_ISSUE',
+  'PAYMENT_ISSUE',
+  'FEEDBACK',
+  'SUGGESTION',
+  'REVIEW_ISSUE',
+  'OTHER',
+] as const;
+export type PostSalesCaseType = (typeof POST_SALES_CASE_TYPES)[number];
+
+/**
+ * What actually went wrong, in the business's own words.
+ *
+ * One flat enum rather than a category/subcategory pair: the grouping below is
+ * for the UI's benefit, and a second stored column would be free to disagree
+ * with this one. A fixed vocabulary rather than a settings table, deliberately —
+ * configurable categories are a later phase, and inventing the table now would
+ * mean guessing at its shape.
+ */
+export const POST_SALES_ISSUE_CATEGORIES = [
+  // Product
+  'DAMAGED_PRODUCT',
+  'MANUFACTURING_DEFECT',
+  'FINISH_POLISH_ISSUE',
+  'SIZE_ISSUE',
+  'WRONG_SIZE',
+  'WRONG_PRODUCT',
+  'MISSING_PRODUCT',
+  'MISSING_PART',
+  'QUALITY_CONCERN',
+  'LEAKAGE',
+  'BREAKAGE',
+  'DENT',
+  'SCRATCH',
+  'COATING_ISSUE',
+  'COLOUR_DIFFERENCE',
+  'PRODUCT_PERFORMANCE',
+  'PRODUCT_USAGE_QUESTION',
+  'PRODUCT_CARE_QUESTION',
+  // Delivery
+  'DELAYED_DELIVERY',
+  'DELIVERY_FAILED',
+  'WRONG_ADDRESS',
+  'COURIER_DAMAGE',
+  'PACKAGE_DAMAGED',
+  'PACKAGE_MISSING',
+  'WRONG_PACKAGE',
+  'PARTIAL_DELIVERY',
+  'TRACKING_ISSUE',
+  // Order
+  'WRONG_ITEM',
+  'MISSING_ITEM',
+  'QUANTITY_ISSUE',
+  'ORDER_MODIFICATION',
+  'CANCELLATION',
+  'BILLING_ISSUE',
+  'INVOICE_ISSUE',
+  'PAYMENT_ISSUE',
+  // Post sales
+  'RETURN_REQUEST',
+  'REPLACEMENT_REQUEST',
+  'REFUND_REQUEST',
+  'EXCHANGE_REQUEST',
+  'WARRANTY_REQUEST',
+  'SERVICE_REQUEST',
+  // Customer experience
+  'DISSATISFACTION',
+  'NEGATIVE_FEEDBACK',
+  'SUGGESTION',
+  'PRODUCT_FEEDBACK',
+  'SERVICE_FEEDBACK',
+  // Everything else
+  'OTHER',
+] as const;
+export type PostSalesIssueCategory = (typeof POST_SALES_ISSUE_CATEGORIES)[number];
+
+/**
+ * How urgent a case is, as a person judged it.
+ *
+ * Set by hand and changed by hand. Phase 1 derives nothing from order value, VIP
+ * status or the words in a complaint — automatic escalation is a later phase, and
+ * a rule invented now is one the business has to work around later.
+ */
+export const POST_SALES_PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] as const;
+export type PostSalesPriority = (typeof POST_SALES_PRIORITIES)[number];
+
+/**
+ * Where a case stands.
+ *
+ * The four AWAITING_* states name who the case is blocked on, which is the thing
+ * somebody scanning a board actually needs: a case waiting on a courier is not
+ * the same work as one waiting on the customer. They carry no timer — SLA and its
+ * pause states are a later phase, and "overdue" is deliberately NOT a status
+ * here, because it is a fact about a clock rather than about the case.
+ *
+ * REOPENED is its own state rather than a return to IN_PROGRESS, so a case that
+ * came back is visibly distinguishable from one that never closed.
+ */
+export const POST_SALES_CASE_STATUSES = [
+  'NEW',
+  'ASSIGNED',
+  'IN_PROGRESS',
+  'AWAITING_CUSTOMER',
+  'AWAITING_INTERNAL',
+  'AWAITING_VENDOR',
+  'AWAITING_COURIER',
+  'RESOLUTION_IN_PROGRESS',
+  'RESOLVED',
+  'CLOSED',
+  'REOPENED',
+] as const;
+export type PostSalesCaseStatus = (typeof POST_SALES_CASE_STATUSES)[number];
+
+/**
+ * What one entry on the case timeline is.
+ *
+ * One table discriminated by this, rather than separate tables for notes,
+ * internal notes, communications and follow-ups: they share every field that
+ * matters and differ only in who may read them and whether they carry a deadline.
+ * Four tables would mean four queries to draw one timeline.
+ *
+ * SYSTEM, STATUS_CHANGE and ASSIGNMENT_CHANGE are written by the service, never
+ * by a caller — which is why `performedById` is nullable.
+ */
+export const POST_SALES_ACTIVITY_KINDS = [
+  'SYSTEM',
+  'NOTE',
+  'INTERNAL_NOTE',
+  'CUSTOMER_COMMUNICATION',
+  'FOLLOW_UP',
+  'STATUS_CHANGE',
+  'ASSIGNMENT_CHANGE',
+] as const;
+export type PostSalesActivityKind = (typeof POST_SALES_ACTIVITY_KINDS)[number];
+
+/**
+ * How a conversation with the customer happened.
+ *
+ * A record of what took place, not a sending mechanism. Phase 1 integrates no
+ * WhatsApp, email or SMS API and does not pretend to: an activity of this kind
+ * says somebody made a call or sent a message, written down afterwards by the
+ * person who did it.
+ */
+export const POST_SALES_COMMUNICATION_CHANNELS = [
+  'PHONE',
+  'WHATSAPP',
+  'EMAIL',
+  'SMS',
+  'WEBSITE',
+  'INSTAGRAM',
+  'FACEBOOK',
+  'MARKETPLACE',
+  'IN_PERSON',
+  'INTERNAL',
+] as const;
+export type PostSalesCommunicationChannel =
+  (typeof POST_SALES_COMMUNICATION_CHANNELS)[number];
+
+/** Which way a logged communication went. */
+export const POST_SALES_COMMUNICATION_DIRECTIONS = ['INCOMING', 'OUTGOING'] as const;
+export type PostSalesCommunicationDirection =
+  (typeof POST_SALES_COMMUNICATION_DIRECTIONS)[number];
+
+/**
+ * What a case attachment shows.
+ *
+ * Phase 1 accepts only what the existing uploader accepts — JPEG, PNG, WebP and
+ * GIF, at the configured size cap. PDF and video are genuinely needed by the
+ * business requirement and are genuinely not supported today; widening the shared
+ * upload path touches four other modules, so it is a deliberate decision rather
+ * than a detail of this phase.
+ */
+export const POST_SALES_ATTACHMENT_KINDS = [
+  'PRODUCT_PHOTO',
+  'PACKAGING_PHOTO',
+  'SCREENSHOT',
+  'PAYMENT_PROOF',
+  'DELIVERY_PROOF',
+  'OTHER',
+] as const;
+export type PostSalesAttachmentKind = (typeof POST_SALES_ATTACHMENT_KINDS)[number];

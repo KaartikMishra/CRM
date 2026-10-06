@@ -17,6 +17,7 @@ import { notificationRoutes } from '../modules/notification/notification.routes.
 import { productEnquiryRoutes } from '../modules/product-enquiry/product-enquiry.routes.js';
 import { rsProductRoutes } from '../modules/rs-product/rs-product.routes.js';
 import { salesRoutes } from '../modules/sales/sales.routes.js';
+import { postSalesRoutes } from '../modules/post-sales/post-sales.routes.js';
 import { uploadRoutes } from '../modules/upload/upload.routes.js';
 import { userRoutes } from '../modules/user/user.routes.js';
 import { vendorInvoiceRoutes } from '../modules/vendor-invoice/vendor-invoice.routes.js';
@@ -34,6 +35,7 @@ apiRouter.use('/notifications', notificationRoutes);
 apiRouter.use('/customers', customerRoutes);
 apiRouter.use('/dispatch', dispatchRoutes);
 apiRouter.use('/leads', leadRoutes);
+apiRouter.use('/post-sales', postSalesRoutes);
 apiRouter.use('/vendors', vendorRoutes);
 apiRouter.use('/vendor-invoices', vendorInvoiceRoutes);
 apiRouter.use('/uploads', uploadRoutes);

@@ -13,3 +13,4 @@ export * from './rs-product.js';
 export * from './notification.js';
 export * from './lead.js';
 export * from './lead-analytics.js';
+export * from './post-sales.js';

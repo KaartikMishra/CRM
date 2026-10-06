@@ -146,8 +146,40 @@ export const NAV_ITEMS: NavItem[] = [
     label: 'Post Sales & Grievance',
     href: '/post-sales',
     icon: 'post-sales',
-    available: false,
+    available: true,
     module: 'POST_SALES',
+    /*
+      Overview, the board and one person's queue. All three share the module, so
+      one POST_SALES grant reaches every row — exactly as Procurement Clock sits
+      under Purchase & Procurement and the analytics board under Create Lead.
+
+      Deliberately only these: Returns, Replacements, Refunds, Exchanges,
+      Warranty, CSAT, Reports and Settings are later phases, and a nav entry for
+      an unbuilt page is a promise the module cannot keep.
+    */
+    children: [
+      {
+        label: 'All Cases',
+        href: '/post-sales/cases',
+        icon: 'post-sales',
+        available: true,
+        module: 'POST_SALES',
+      },
+      {
+        label: 'My Cases',
+        href: '/post-sales/cases?mine=true',
+        icon: 'post-sales',
+        available: true,
+        module: 'POST_SALES',
+      },
+      {
+        label: 'New Case',
+        href: '/post-sales/cases/new',
+        icon: 'post-sales',
+        available: true,
+        module: 'POST_SALES',
+      },
+    ],
   },
   { label: 'User Management', href: '/users', icon: 'users', available: true, adminOnly: true },
 ];
