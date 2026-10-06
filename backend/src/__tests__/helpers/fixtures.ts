@@ -546,6 +546,15 @@ async function sweepTestOwnedRows(failures: unknown[]): Promise<void> {
   */
   await step(failures, () => prisma.lead.deleteMany({ where: { customer: owned } }));
   await step(failures, () => prisma.lead.deleteMany({ where: { createdBy: owned } }));
+  /*
+    And any a fixture user owns or allocated. Lead -> User is Restrict on both
+    `associate` and `allocatedBy`, so a user who was assigned a lead cannot be
+    removed while it stands — even one raised against a customer this run did
+    not create. Activities cascade from the lead, so they need no step of their
+    own.
+  */
+  await step(failures, () => prisma.lead.deleteMany({ where: { associate: owned } }));
+  await step(failures, () => prisma.lead.deleteMany({ where: { allocatedBy: owned } }));
   await step(failures, () => prisma.customer.deleteMany({ where: owned }));
   await step(failures, () => prisma.vendor.deleteMany({ where: owned }));
   await step(failures, () => prisma.user.deleteMany({ where: owned }));
@@ -682,6 +691,13 @@ export async function cleanup(): Promise<void> {
     // And any raised BY a fixture user against a customer this run did not make.
     await step(failures, () =>
       prisma.lead.deleteMany({ where: { createdById: { in: created.userIds } } }),
+    );
+    // Restrict on both, so these must go before the users do.
+    await step(failures, () =>
+      prisma.lead.deleteMany({ where: { associateId: { in: created.userIds } } }),
+    );
+    await step(failures, () =>
+      prisma.lead.deleteMany({ where: { allocatedById: { in: created.userIds } } }),
     );
   }
   if (created.vendorIds.length) {

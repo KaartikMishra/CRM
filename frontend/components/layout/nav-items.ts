@@ -69,6 +69,20 @@ export const NAV_ITEMS: NavItem[] = [
     icon: 'lead-deal',
     available: true,
     module: 'LEAD_DEAL',
+    /*
+      The analytics board sits under the capture form, sharing its module: one
+      LEAD_DEAL grant reaches both, exactly as Procurement Clock sits under
+      Purchase & Procurement.
+    */
+    children: [
+      {
+        label: 'Lead / Deal Analytics',
+        href: '/leads',
+        icon: 'lead-deal',
+        available: true,
+        module: 'LEAD_DEAL',
+      },
+    ],
   },
   {
     label: 'Product Enquiry',

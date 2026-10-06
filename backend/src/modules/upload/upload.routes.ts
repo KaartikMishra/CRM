@@ -55,18 +55,33 @@ export const uploadRoutes = Router();
 uploadRoutes.use(requireAuth);
 
 /**
- * Guarded on the create capability of either module that attaches images: the
- * same permission that lets someone record an enquiry or a sales order lets them
- * attach a picture to it.
+ * Guarded on the capability of each module that attaches images: the same
+ * permission that lets someone record an enquiry, a sales order or a lead
+ * requirement lets them attach a picture to it.
  *
  * One endpoint rather than one per module, so there is a single Cloudinary path
- * and a single place to fix an upload bug. Both pairs resolve through the
+ * and a single place to fix an upload bug. Every pair resolves through the
  * existing permission system, so a UserModulePermission override still applies,
- * and anyone who could upload before this widened still can.
+ * and anyone who could upload before a widening still can.
+ *
+ * LEAD_DEAL:EDIT is here because Complete the Ideal attaches a photo of what the
+ * customer asked for, and this is the only upload path in the CRM. Without it an
+ * associate holding the Lead/Deal module would meet a 403 on their own form.
+ * EDIT rather than CREATE: requirement lines are added to a lead that already
+ * exists, so EDIT is the capability that actually governs the work — matching
+ * the requirement routes themselves.
+ *
+ * Note no new permission is introduced: this names a capability the Lead/Deal
+ * module already had. The same reasoning widened `GET /api/rs-products` for the
+ * pickers in Sales and Procurement.
  */
 uploadRoutes.post(
   '/',
-  requireAnyPermission(['PRODUCT_ENQUIRY', 'CREATE'], ['SALES', 'CREATE']),
+  requireAnyPermission(
+    ['PRODUCT_ENQUIRY', 'CREATE'],
+    ['SALES', 'CREATE'],
+    ['LEAD_DEAL', 'EDIT'],
+  ),
   receiveImage,
   upload,
 );

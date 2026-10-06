@@ -105,6 +105,9 @@ model User {
   reviewedProcurementDelays  ProcurementDelayReason[] @relation("ProcurementDelayReviewedBy")
   createdDispatches          Dispatch[]               @relation("DispatchCreatedBy")
   createdLeads               Lead[]                   @relation("LeadCreatedBy")
+  ownedLeads                 Lead[]                   @relation("LeadAssociate")
+  allocatedLeads             Lead[]                   @relation("LeadAllocatedBy")
+  leadActivities             LeadActivity[]           @relation("LeadActivityPerformedBy")
   packedDispatches           Dispatch[]               @relation("DispatchPackedBy")
   dispatchedDispatches       Dispatch[]               @relation("DispatchDispatchedBy")
   requestedPartialDispatches PartialDispatchRequest[] @relation("PartialDispatchRequestedBy")
@@ -284,6 +287,7 @@ model MediaAsset {
   salesChangeRequests SalesItemChangeRequest[] @relation("SalesChangeImage")
   purchaseBills       PurchaseBill[]           @relation("PurchaseBillImage")
   purchaseBillItems   PurchaseBillItem[]       @relation("PurchaseItemImage")
+  leadRequirements    LeadProductRequirement[] @relation("LeadRequirementImage")
 
   @@index([uploadedById, createdAt])
 }
@@ -781,6 +785,9 @@ model SalesOrder {
   /// Virtual — both foreign keys live on the other side.
   dispatches              Dispatch[]
   partialDispatchRequests PartialDispatchRequest[]
+  /// The lead this order came from, if it came from one. One-to-one, because the
+  /// FK on Lead is unique: one order is the result of at most one lead.
+  lead                    Lead?
 
   @@index([status, toBeDispatchedBy])
   @@index([customerId])
@@ -1739,6 +1746,7 @@ model RsProduct {
    */
   purchaseBillItems   PurchaseBillItem[]
   salesOrderItems     SalesOrderItem[]
+  leadRequirements    LeadProductRequirement[]
   salesChangeRequests SalesItemChangeRequest[]
   /// Purchase-line re-mapping requests naming this product as the current
   /// mapping, and as the proposed one. Two relations because a single request
@@ -2111,6 +2119,41 @@ enum RequirementType {
   PERSONAL_GIFTING
 }
 
+/// Where a lead ended up.
+///
+/// INPROCESS is the default and the only state a lead is born in — a deal that
+/// has not been decided has not been lost. WON and LOST are terminal as far as
+/// this phase is concerned; nothing here reopens one.
+enum DealStatus {
+  WON
+  LOST
+  INPROCESS
+}
+
+/// What kind of action one LeadActivity row records.
+///
+/// The three stages of the workflow the business described: the first time
+/// somebody reaches the customer, each follow-up after that, and the final
+/// conversation that produced a result. Kept as a vocabulary rather than three
+/// tables because they differ only in meaning, never in shape — all three are
+/// "an action that was due at one moment and happened at another".
+enum LeadActivityKind {
+  FIRST_CONTACT
+  FOLLOW_UP
+  RESULT
+}
+
+/// How closely a catalogue product answers what the customer asked for.
+///
+/// Null when no product has been matched yet, which is why the column is
+/// nullable and paired with `rsProductId` by a CHECK constraint: a match kind
+/// without a product would describe nothing, and a product without a kind would
+/// not say whether it is what the customer wanted or merely the nearest thing.
+enum ProductMatchKind {
+  EXACT
+  SIMILAR
+}
+
 /// A lead or deal, as first captured.
 ///
 /// Phase 1 records where the enquiry came from, what kind of business it is,
@@ -2161,10 +2204,162 @@ model Lead {
   createdById String
   createdBy   User   @relation("LeadCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
 
+  /// Where the deal ended up. Defaulted, so every existing row stays valid
+  /// without a backfill: a lead captured before this column existed was, and
+  /// still is, undecided.
+  dealStatus DealStatus @default(INPROCESS)
+
+  /// The associate who owns the lead, and whose promptness it counts toward.
+  ///
+  /// Nullable because an unassigned lead is a real state — and because every row
+  /// that predates this column has no owner to name. Promptness stays NOT_RATED
+  /// while this is null: a score has to be attributable to somebody.
+  associateId String?
+  associate   User?   @relation("LeadAssociate", fields: [associateId], references: [id], onDelete: Restrict)
+
+  /// Who allocated it. With `associateId`, this is the whole of SELF vs OTHER
+  /// USER — equal means somebody took their own lead, different means it was
+  /// handed to them. Deliberately NOT a stored SELF/OTHER column: that would be
+  /// a second copy of a fact these two already hold, free to disagree with them.
+  allocatedById String?
+  allocatedBy   User?   @relation("LeadAllocatedBy", fields: [allocatedById], references: [id], onDelete: Restrict)
+
+  /// The order this lead became, once it became one.
+  ///
+  /// Unique: one order is the result of at most one lead. Order Value is read
+  /// through this relation and never copied onto the lead — a stored figure
+  /// would start disagreeing with the order the first time a charge changed.
+  salesOrderId String?     @unique
+  salesOrder   SalesOrder? @relation(fields: [salesOrderId], references: [id], onDelete: SetNull)
+
+  activities   LeadActivity[]
+  requirements LeadProductRequirement[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   /// One customer's leads, newest first — the only two reads Phase 1 has.
   @@index([customerId, createdAt])
   @@index([createdAt])
+  /// The analytics table's own reads: one associate's work, and the board by
+  /// status.
+  @@index([associateId, createdAt])
+  @@index([dealStatus, createdAt])
+}
+
+/// One expected action on a lead, and whether it happened on time.
+///
+/// THE SOURCE OF TRUTH FOR PROMPTNESS, and the reason no score is stored
+/// anywhere. Two columns carry the whole rule:
+///
+///   `dueAt`       when the action was expected.
+///   `completedAt` when it actually happened; null while it is outstanding.
+///
+/// From those, promptness is arithmetic over rows rather than a column that has
+/// to be kept true:
+///
+///   expected = rows whose dueAt has passed
+///   onTime   = those of them with completedAt <= dueAt
+///
+/// An action still in the future is not counted either way — it has not been
+/// missed yet. One that is overdue and never completed stays in the denominator
+/// and fails the numerator, which is what stops ignoring a lead from improving
+/// its score.
+///
+/// The same deadline-and-actual shape as ProcurementClock, deliberately: that
+/// model already proved it, and `procurementVerdict` already compares the pair.
+model LeadActivity {
+  id     String @id @default(cuid())
+  leadId String
+
+  kind LeadActivityKind
+
+  /// What was expected, and when.
+  dueAt DateTime
+  /// Null while outstanding. Never defaulted to `now()` — "not done" and "done
+  /// the moment the row was made" are different facts.
+  completedAt DateTime?
+
+  /// Who did it. Nullable: an action can be recorded as done before anybody
+  /// says who closed it, and a user who leaves must not take the history.
+  performedById String?
+  performedBy   User?   @relation("LeadActivityPerformedBy", fields: [performedById], references: [id], onDelete: SetNull)
+
+  note String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  /// One lead's timeline in order, and the promptness query's own shape.
+  @@index([leadId, dueAt])
+  @@index([completedAt, dueAt])
+}
+
+/// What the customer actually wants, line by line.
+///
+/// Borrows EnquiryProduct's field vocabulary exactly — same names, same
+/// Decimal precisions, same raw-plus-normalised pairs — but NOT its table:
+/// EnquiryProduct is keyed to ProductEnquiry, and attaching leads to it would
+/// conflate two modules that happen to describe goods the same way.
+///
+/// `productName` is a snapshot and `rsProductId` a reference, both at once, on
+/// the precedent SalesOrderItem already sets. That is not redundancy: a
+/// requirement legitimately differs from the master — twelve of a ten-piece set,
+/// 2.5 kg where the variant is 2 kg — so the snapshot preserves what was asked
+/// for while the reference records what it was matched to.
+///
+/// Volume is deliberately absent. It is lengthMm × widthMm × heightMm, null if
+/// any of the three is, and a stored copy would be a fourth number free to
+/// disagree with the three it came from.
+model LeadProductRequirement {
+  id     String @id @default(cuid())
+  leadId String
+  lineNo Int
+
+  /// What the customer asked for, in their words. Kept even when a catalogue
+  /// product is matched, because the two are different facts.
+  productName String
+
+  imageId String?
+  image   MediaAsset? @relation("LeadRequirementImage", fields: [imageId], references: [id], onDelete: SetNull)
+
+  /// The catalogue product this was matched to, if one was. Product level like
+  /// every other reference in the CRM, never variant. SetNull so retiring a
+  /// product leaves the requirement readable rather than deleting it.
+  rsProductId String?
+  rsProduct   RsProduct? @relation(fields: [rsProductId], references: [id], onDelete: SetNull)
+
+  /// EXACT or SIMILAR — one column, not two foreign keys. Two would permit a
+  /// row that is both at once, and a boolean could not express "unmatched".
+  /// Paired with `rsProductId` by a CHECK constraint in both directions.
+  matchKind ProductMatchKind?
+
+  quantity Int
+
+  weightValue   Decimal?    @db.Decimal(10, 3)
+  weightUnit    WeightUnit?
+  weightInGrams Decimal?    @db.Decimal(12, 3)
+
+  lengthValue   Decimal?       @db.Decimal(10, 2)
+  widthValue    Decimal?       @db.Decimal(10, 2)
+  heightValue   Decimal?       @db.Decimal(10, 2)
+  dimensionUnit DimensionUnit?
+  lengthMm      Decimal?       @db.Decimal(12, 2)
+  widthMm       Decimal?       @db.Decimal(12, 2)
+  heightMm      Decimal?       @db.Decimal(12, 2)
+
+  /// What the customer's requirement is worth. Separate from the product's own
+  /// price, which is the catalogue's figure and not necessarily this quote's.
+  productValue Decimal? @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  /// Line numbers are per lead, exactly as EnquiryProduct does per enquiry.
+  @@unique([leadId, lineNo])
+  @@index([rsProductId])
 }

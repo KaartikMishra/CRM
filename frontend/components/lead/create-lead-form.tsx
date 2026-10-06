@@ -8,6 +8,7 @@ import {
   COUNTRIES,
   CUSTOMER_TYPES,
   DEFAULT_COUNTRY,
+  dialCodeFor,
   LEAD_CHANNELS,
   LEAD_CHANNEL_LABELS,
   LEAD_OTHER_MAX_LENGTH,
@@ -77,7 +78,14 @@ export function CreateLeadForm() {
 
   // --- customer ------------------------------------------------------------
   const [country, setCountry] = useState<string>(DEFAULT_COUNTRY);
-  const [phone, setPhone] = useState('');
+  /**
+   * The national part only — what somebody types after the prefix.
+   *
+   * The full number is derived below rather than stored, for the same reason
+   * promptness and volume are: two pieces of state holding the prefix and the
+   * whole number would be free to disagree the moment the country changed.
+   */
+  const [localPhone, setLocalPhone] = useState('');
   const [email, setEmail] = useState('');
   const [matches, setMatches] = useState<CustomerView[]>([]);
   const [chosenId, setChosenId] = useState<string | null>(null);
@@ -105,6 +113,18 @@ export function CreateLeadForm() {
     number no longer on screen.
   */
   const requestToken = useRef(0);
+
+  /*
+    The prefix for the chosen country, and the complete number the rest of this
+    form works with. Derived, so the lookup, the validity check and the submit
+    all see one value and the country select has nothing to keep in sync.
+
+    A country with no code is impossible — COUNTRY_DIAL_CODES covers every entry
+    in COUNTRIES, asserted by a test — but `dialCodeFor` returns null rather than
+    throwing, and an absent prefix simply submits the digits as typed.
+  */
+  const dialCode = dialCodeFor(country);
+  const phone = localPhone.trim() === '' ? '' : `${dialCode ?? ''}${localPhone.trim()}`;
 
   useEffect(() => {
     const digits = normalizePhone(phone);
@@ -220,7 +240,7 @@ export function CreateLeadForm() {
     setSourceDetails('');
     setSourceAt(localNow());
     setRequirementType('');
-    setPhone('');
+    setLocalPhone('');
     setEmail('');
     setMatches([]);
     setChosenId(null);
@@ -350,18 +370,38 @@ export function CreateLeadForm() {
 
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="phone">Phone number</Label>
-              <div className="relative">
-                <Input
-                  id="phone"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  placeholder="As the customer gave it"
-                  className="tabular pr-9"
-                  inputMode="tel"
-                />
-                {searching && (
-                  <Loader2 className="absolute right-3 top-1/2 size-4 -translate-y-1/2 animate-spin text-muted" />
-                )}
+              {/*
+                The dial code comes from the country chosen beside this, so
+                nobody types `+91` on every lead. It is a prefix on the field
+                rather than a second dropdown: the country is already answered
+                one input away, and asking twice invites the two to disagree.
+
+                The submitted value is the prefix joined to what was typed —
+                `+91` + `9876543210` — which matches how the existing customer
+                rows are stored. `localPhone` holds only the national part, so
+                changing the country re-prefixes without rewriting the digits.
+              */}
+              <div className="flex gap-2">
+                <span
+                  className="flex h-9 shrink-0 items-center rounded-md border border-line-2 bg-surface-2 px-2.5 text-sm tabular text-ink-2"
+                  aria-label={`Dial code for ${country}`}
+                >
+                  {dialCode ?? '—'}
+                </span>
+
+                <div className="relative flex-1">
+                  <Input
+                    id="phone"
+                    value={localPhone}
+                    onChange={(e) => setLocalPhone(e.target.value)}
+                    placeholder="9876543210"
+                    className="tabular pr-9"
+                    inputMode="tel"
+                  />
+                  {searching && (
+                    <Loader2 className="absolute right-3 top-1/2 size-4 -translate-y-1/2 animate-spin text-muted" />
+                  )}
+                </div>
               </div>
             </div>
           </div>

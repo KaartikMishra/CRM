@@ -55,6 +55,35 @@ export const REQUIREMENT_TYPES = [
 ] as const;
 export type RequirementType = (typeof REQUIREMENT_TYPES)[number];
 
+/**
+ * Where a deal ended up.
+ *
+ * Paired with the DealStatus enum in schema.prisma: add a member here and there
+ * together, never in one alone. INPROCESS is the default — a deal nobody has
+ * decided has not been lost.
+ */
+export const DEAL_STATUSES = ['WON', 'LOST', 'INPROCESS'] as const;
+export type DealStatus = (typeof DEAL_STATUSES)[number];
+
+/**
+ * What one lead activity records.
+ *
+ * The three stages of the workflow: reaching the customer the first time, each
+ * follow-up after that, and the conversation that produced a result.
+ */
+export const LEAD_ACTIVITY_KINDS = ['FIRST_CONTACT', 'FOLLOW_UP', 'RESULT'] as const;
+export type LeadActivityKind = (typeof LEAD_ACTIVITY_KINDS)[number];
+
+/**
+ * How closely a catalogue product answers what the customer asked for.
+ *
+ * Absent — not a third member — when nothing has been matched yet: the match
+ * kind is nullable and travels with `rsProductId`, so "unmatched" is the absence
+ * of both rather than a value of its own.
+ */
+export const PRODUCT_MATCH_KINDS = ['EXACT', 'SIMILAR'] as const;
+export type ProductMatchKind = (typeof PRODUCT_MATCH_KINDS)[number];
+
 export const PERMISSION_ACTIONS = ['VIEW', 'CREATE', 'EDIT', 'DELETE', 'ASSIGN'] as const;
 export type PermissionAction = (typeof PERMISSION_ACTIONS)[number];
 

@@ -237,9 +237,22 @@ describe('Purchase & Procurement is a parent, and Procurement Clock sits under i
     expect(navIcon(clock!.icon)).not.toBe(navIcon(procurement!.icon));
   });
 
-  it('gives no other module children, so nothing else changed shape', () => {
+  it('names exactly the modules that have children', () => {
+    /*
+      Two now: Procurement carries the Clock, and Create Lead / Deal carries the
+      analytics board. Both children share their parent's module, so one grant
+      reaches the pair — which is the property the next test checks.
+    */
     const withChildren = NAV_ITEMS.filter((i) => i.children?.length).map((i) => i.href);
-    expect(withChildren).toEqual(['/procurement']);
+    expect(withChildren.sort()).toEqual(['/create-lead', '/procurement']);
+  });
+
+  it('gives every child its parent module, so one grant reaches both', () => {
+    for (const parent of NAV_ITEMS.filter((i) => i.children?.length)) {
+      for (const child of parent.children ?? []) {
+        expect(child.module, `${child.href} under ${parent.href}`).toBe(parent.module);
+      }
+    }
   });
 
   it('keeps the nested items serializable across the Server -> Client boundary', () => {

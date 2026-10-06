@@ -6,7 +6,13 @@
  * again as CHECK constraints. Changing a value here changes all three.
  */
 
-import type { LeadSource, RequirementType } from '../enums.js';
+import type {
+  DealStatus,
+  LeadActivityKind,
+  LeadSource,
+  ProductMatchKind,
+  RequirementType,
+} from '../enums.js';
 
 /** §62.1 — hard cap on products in one enquiry. Also a DB CHECK constraint. */
 export const MAX_PRODUCTS_PER_ENQUIRY = 20;
@@ -223,6 +229,60 @@ export const LEAD_OTHER_MAX_LENGTH = 120;
 export const LEAD_SOURCE_DETAILS_MAX_LENGTH = 1000;
 
 /**
+ * Where the promptness bands begin.
+ *
+ * Centralised here, and read by both tiers, so the business can move a band
+ * without a migration — the rating is derived on every read, so there is no
+ * stored value to rewrite when a number changes.
+ *
+ *   score >= GOOD     -> GOOD
+ *   score >= AVERAGE  -> AVERAGE
+ *   below that        -> POOR
+ *
+ * A score is `onTime / expected`, both counted from LeadActivity rows. When
+ * `expected` is zero there is no score at all and the rating is NOT_RATED —
+ * which is why these are two thresholds and not three: "not measurable" is not
+ * the bottom band, it is the absence of a band.
+ */
+export const LEAD_PROMPTNESS_THRESHOLDS = {
+  GOOD: 0.65,
+  AVERAGE: 0.5,
+} as const;
+
+/**
+ * The four things promptness can say.
+ *
+ * NOT_RATED is a peer of the other three, not a degenerate POOR: a new lead, or
+ * one with nobody assigned, has earned no verdict rather than a bad one.
+ */
+export const LEAD_PROMPTNESS_RATINGS = ['GOOD', 'AVERAGE', 'POOR', 'NOT_RATED'] as const;
+export type LeadPromptnessRating = (typeof LEAD_PROMPTNESS_RATINGS)[number];
+
+export const LEAD_PROMPTNESS_LABELS = {
+  GOOD: 'Good',
+  AVERAGE: 'Average',
+  POOR: 'Poor',
+  NOT_RATED: 'Not rated',
+} as const satisfies Record<LeadPromptnessRating, string>;
+
+export const DEAL_STATUS_LABELS = {
+  WON: 'Won',
+  LOST: 'Lost',
+  INPROCESS: 'In process',
+} as const satisfies Record<DealStatus, string>;
+
+export const LEAD_ACTIVITY_KIND_LABELS = {
+  FIRST_CONTACT: 'First contact',
+  FOLLOW_UP: 'Follow-up',
+  RESULT: 'Result',
+} as const satisfies Record<LeadActivityKind, string>;
+
+export const PRODUCT_MATCH_KIND_LABELS = {
+  EXACT: 'Exact product',
+  SIMILAR: 'Similar product',
+} as const satisfies Record<ProductMatchKind, string>;
+
+/**
  * The GST rates a sales line may carry.
  *
  * Exactly six, and no seventh: the five statutory slabs plus `NONE`.
@@ -325,6 +385,83 @@ export type Country = (typeof COUNTRIES)[number];
 
 /** What a new customer form starts on. Nearly every customer is domestic. */
 export const DEFAULT_COUNTRY: Country = 'India';
+
+/**
+ * The international dialling code for each country in COUNTRIES above.
+ *
+ * Added so the customer forms can show a prefix beside the number field instead
+ * of asking somebody to type `+91` every time. Keyed by the exact country name,
+ * and complete: every one of the 196 entries in COUNTRIES has a code here,
+ * asserted by a test, so a selector can never land on a country with no prefix.
+ *
+ * ### What this does NOT change
+ *
+ * **Phone matching.** `normalizePhone` still compares digits and nothing else —
+ * it does not consult this map, infer a country, or treat `9876543210` and
+ * `+919876543210` as the same number. This is input assistance, not parsing
+ * intelligence, and the lookup semantics are deliberately untouched.
+ *
+ * Several codes are shared: +1 covers the USA, Canada and the Caribbean, and
+ * Vatican City uses Italy's +39. That is the real numbering plan, not an error —
+ * which is why the map goes country to code and never the reverse.
+ */
+export const COUNTRY_DIAL_CODES = {
+  'Afghanistan': '+93', 'Albania': '+355', 'Algeria': '+213', 'Andorra': '+376',
+  'Angola': '+244', 'Antigua and Barbuda': '+1', 'Argentina': '+54', 'Armenia': '+374',
+  'Australia': '+61', 'Austria': '+43', 'Azerbaijan': '+994', 'Bahamas': '+1',
+  'Bahrain': '+973', 'Bangladesh': '+880', 'Barbados': '+1', 'Belarus': '+375',
+  'Belgium': '+32', 'Belize': '+501', 'Benin': '+229', 'Bhutan': '+975', 'Bolivia': '+591',
+  'Bosnia and Herzegovina': '+387', 'Botswana': '+267', 'Brazil': '+55', 'Brunei': '+673',
+  'Bulgaria': '+359', 'Burkina Faso': '+226', 'Burundi': '+257', 'Cabo Verde': '+238',
+  'Cambodia': '+855', 'Cameroon': '+237', 'Canada': '+1', 'Central African Republic': '+236',
+  'Chad': '+235', 'Chile': '+56', 'China': '+86', 'Colombia': '+57', 'Comoros': '+269',
+  'Congo': '+242', 'Costa Rica': '+506', 'Croatia': '+385', 'Cuba': '+53', 'Cyprus': '+357',
+  'Czechia': '+420', 'Democratic Republic of the Congo': '+243', 'Denmark': '+45',
+  'Djibouti': '+253', 'Dominica': '+1', 'Dominican Republic': '+1', 'Ecuador': '+593',
+  'Egypt': '+20', 'El Salvador': '+503', 'Equatorial Guinea': '+240', 'Eritrea': '+291',
+  'Estonia': '+372', 'Eswatini': '+268', 'Ethiopia': '+251', 'Fiji': '+679',
+  'Finland': '+358', 'France': '+33', 'Gabon': '+241', 'Gambia': '+220', 'Georgia': '+995',
+  'Germany': '+49', 'Ghana': '+233', 'Greece': '+30', 'Grenada': '+1', 'Guatemala': '+502',
+  'Guinea': '+224', 'Guinea-Bissau': '+245', 'Guyana': '+592', 'Haiti': '+509',
+  'Honduras': '+504', 'Hungary': '+36', 'Iceland': '+354', 'India': '+91', 'Indonesia': '+62',
+  'Iran': '+98', 'Iraq': '+964', 'Ireland': '+353', 'Israel': '+972', 'Italy': '+39',
+  'Ivory Coast': '+225', 'Jamaica': '+1', 'Japan': '+81', 'Jordan': '+962',
+  'Kazakhstan': '+7', 'Kenya': '+254', 'Kiribati': '+686', 'Kuwait': '+965',
+  'Kyrgyzstan': '+996', 'Laos': '+856', 'Latvia': '+371', 'Lebanon': '+961',
+  'Lesotho': '+266', 'Liberia': '+231', 'Libya': '+218', 'Liechtenstein': '+423',
+  'Lithuania': '+370', 'Luxembourg': '+352', 'Madagascar': '+261', 'Malawi': '+265',
+  'Malaysia': '+60', 'Maldives': '+960', 'Mali': '+223', 'Malta': '+356',
+  'Marshall Islands': '+692', 'Mauritania': '+222', 'Mauritius': '+230', 'Mexico': '+52',
+  'Micronesia': '+691', 'Moldova': '+373', 'Monaco': '+377', 'Mongolia': '+976',
+  'Montenegro': '+382', 'Morocco': '+212', 'Mozambique': '+258', 'Myanmar': '+95',
+  'Namibia': '+264', 'Nauru': '+674', 'Nepal': '+977', 'Netherlands': '+31',
+  'New Zealand': '+64', 'Nicaragua': '+505', 'Niger': '+227', 'Nigeria': '+234',
+  'North Korea': '+850', 'North Macedonia': '+389', 'Norway': '+47', 'Oman': '+968',
+  'Pakistan': '+92', 'Palau': '+680', 'Palestine': '+970', 'Panama': '+507',
+  'Papua New Guinea': '+675', 'Paraguay': '+595', 'Peru': '+51', 'Philippines': '+63',
+  'Poland': '+48', 'Portugal': '+351', 'Qatar': '+974', 'Romania': '+40', 'Russia': '+7',
+  'Rwanda': '+250', 'Saint Kitts and Nevis': '+1', 'Saint Lucia': '+1',
+  'Saint Vincent and the Grenadines': '+1', 'Samoa': '+685', 'San Marino': '+378',
+  'Sao Tome and Principe': '+239', 'Saudi Arabia': '+966', 'Senegal': '+221',
+  'Serbia': '+381', 'Seychelles': '+248', 'Sierra Leone': '+232', 'Singapore': '+65',
+  'Slovakia': '+421', 'Slovenia': '+386', 'Solomon Islands': '+677', 'Somalia': '+252',
+  'South Africa': '+27', 'South Korea': '+82', 'South Sudan': '+211', 'Spain': '+34',
+  'Sri Lanka': '+94', 'Sudan': '+249', 'Suriname': '+597', 'Sweden': '+46',
+  'Switzerland': '+41', 'Syria': '+963', 'Taiwan': '+886', 'Tajikistan': '+992',
+  'Tanzania': '+255', 'Thailand': '+66', 'Timor-Leste': '+670', 'Togo': '+228',
+  'Tonga': '+676', 'Trinidad and Tobago': '+1', 'Tunisia': '+216', 'Turkey': '+90',
+  'Turkmenistan': '+993', 'Tuvalu': '+688', 'Uganda': '+256', 'Ukraine': '+380',
+  'United Arab Emirates': '+971', 'United Kingdom': '+44', 'United States of America': '+1',
+  'Uruguay': '+598', 'Uzbekistan': '+998', 'Vanuatu': '+678', 'Vatican City': '+39',
+  'Venezuela': '+58', 'Vietnam': '+84', 'Yemen': '+967', 'Zambia': '+260', 'Zimbabwe': '+263',
+} as const satisfies Record<Country, string>;
+
+/** The prefix for a country, or null when the value is not a known country. */
+export function dialCodeFor(country: string | null | undefined): string | null {
+  if (!country) return null;
+  return (COUNTRY_DIAL_CODES as Record<string, string>)[country] ?? null;
+}
+
 
 /**
  * How the price typed onto a sales line is to be read.

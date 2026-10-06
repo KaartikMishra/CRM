@@ -39,6 +39,7 @@ rsProductRoutes.use(requireAuth);
  *   SALES:CREATE          writing an order line
  *   PROCUREMENT:CREATE    typing up a purchase bill
  *   PROCUREMENT:EDIT      mapping a bill line, or requesting it be re-mapped
+ *   LEAD_DEAL:EDIT        matching a customer's requirement to the catalogue
  *
  * Neither of those modules is granted RS Products by role default, so without
  * this the picker would return 403 and read as an empty catalogue. Widening
@@ -69,6 +70,7 @@ rsProductRoutes.get(
     ['SALES', 'CREATE'],
     ['PROCUREMENT', 'CREATE'],
     ['PROCUREMENT', 'EDIT'],
+    ['LEAD_DEAL', 'EDIT'],
   ),
   validate({ query: rsProductListQuerySchema }),
   controller.list,
