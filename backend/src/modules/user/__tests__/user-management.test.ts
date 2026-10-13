@@ -29,7 +29,7 @@ import {
   cleanup,
   makeUser,
   residualTestRows,
-  TEST_PREFIX,
+  RUN_PREFIX,
   type TestUser,
 } from '../../../__tests__/helpers/fixtures.js';
 
@@ -47,8 +47,8 @@ const PASSWORD = `Str0ng-${randomUUID().slice(0, 12)}`;
 function newUserPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   const suffix = randomUUID().replace(/-/g, '').slice(0, 12);
   return {
-    name: `${TEST_PREFIX}-created`,
-    email: `${TEST_PREFIX}-${suffix}@test.invalid`,
+    name: `${RUN_PREFIX}-created`,
+    email: `${RUN_PREFIX}-${suffix}@test.invalid`,
     password: PASSWORD,
     confirmPassword: PASSWORD,
     modules: [],
@@ -168,11 +168,11 @@ describe('ADMIN capabilities', () => {
 
     const res = await api('PATCH', `/api/users/${created.user.id}`, {
       token: adminToken,
-      body: { name: `${TEST_PREFIX}-renamed` },
+      body: { name: `${RUN_PREFIX}-renamed` },
     });
 
     expect(res.status).toBe(200);
-    expect((res.body.data as UserBody).user.name).toBe(`${TEST_PREFIX}-renamed`);
+    expect((res.body.data as UserBody).user.name).toBe(`${RUN_PREFIX}-renamed`);
   });
 
   it('deactivates and reactivates a USER', async () => {
@@ -234,7 +234,7 @@ describe('ADMIN capabilities', () => {
     expect(created.user.modules.sort()).toEqual(['PRODUCT_ENQUIRY', 'SALES']);
   });
 
-  it('assigns all seven modules', async () => {
+  it('assigns every module there is', async () => {
     const created = (await createViaApi(newUserPayload({ modules: [...APP_MODULES] })))
       .body.data as UserBody;
     expect(created.user.modules.sort()).toEqual([...APP_MODULES].sort());
@@ -435,7 +435,7 @@ describe('privilege escalation is impossible', () => {
 
     await api('PATCH', `/api/users/${created.user.id}`, {
       token: adminToken,
-      body: { name: `${TEST_PREFIX}-still-a-user`, role: 'ADMIN' },
+      body: { name: `${RUN_PREFIX}-still-a-user`, role: 'ADMIN' },
     });
 
     const row = await prisma.user.findUniqueOrThrow({
@@ -585,7 +585,7 @@ describe('password handling', () => {
       await api('GET', `/api/users/${id}`, { token: adminToken }),
       await api('PATCH', `/api/users/${id}`, {
         token: adminToken,
-        body: { name: `${TEST_PREFIX}-renamed-again` },
+        body: { name: `${RUN_PREFIX}-renamed-again` },
       }),
       await api('PATCH', `/api/users/${id}/modules`, {
         token: adminToken,

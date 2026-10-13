@@ -32,7 +32,7 @@ import {
   makeCustomer,
   makeUser,
   residualTestRows,
-  TEST_PREFIX,
+  RUN_PREFIX,
   type TestUser,
 } from '../../../__tests__/helpers/fixtures.js';
 
@@ -176,7 +176,7 @@ describe('creating a lead and the customer together', () => {
       ...leadPayload('placeholder'),
       customer: {
         newCustomer: {
-          name: `${TEST_PREFIX}-new-lead-customer`,
+          name: `${RUN_PREFIX}-new-lead-customer`,
           type: 'RETAIL',
           phone: '+919700000001',
           // An Indian customer must name a State — the existing Customer rule,

@@ -1,0 +1,29 @@
+-- =============================================================================
+--  HR Phase 4 — the HR_TRAINING permission namespace.
+--
+--  Its own migration, ahead of the tables, because an ALTER TYPE and a CREATE
+--  TABLE have different transaction rules: Postgres cannot use a newly added enum
+--  value in the same transaction that adds it. Nothing in Phase 4 uses
+--  'HR_TRAINING' as a column default, so one migration would in fact have been
+--  safe — but splitting matches what Phase 3's notification types did, and the
+--  rule is easier to follow than its exceptions.
+--
+--  WHY A NEW NAMESPACE RATHER THAN REUSING HR_PERFORMANCE
+--
+--  HR_PERFORMANCE already exists and has no pages, so reusing it was the cheap
+--  option. It is the wrong one. The seven HR namespaces exist because holding one
+--  capability must not imply another — the schema's own comment on AppModule says
+--  so. A trainer who builds a course and signs off a practical has no business
+--  reading appraisals, and an appraiser has no reason to edit the catalogue.
+--  Folding them together would recreate exactly the conflation the split prevents,
+--  and it could not be undone later without re-granting every user.
+--
+--  The precedent for an additive AppModule value is RS_PRODUCTS and LEAD_DEAL,
+--  each of which shipped the same single statement.
+--
+--  ADMIN gains access through ROLE_DEFAULTS in permission.service.ts, not through
+--  rows inserted here. USER gains nothing: deny by default, as with every other
+--  HR namespace.
+-- =============================================================================
+
+ALTER TYPE "AppModule" ADD VALUE IF NOT EXISTS 'HR_TRAINING';

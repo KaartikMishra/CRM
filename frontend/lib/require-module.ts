@@ -34,7 +34,7 @@ export async function requireModule(module: AppModule): Promise<ModuleAccess> {
   return { allowed: hasModule(user, module), user };
 }
 
-/** The same, for administrator-only areas outside the seven CRM modules. */
+/** The same, for administrator-only areas outside the CRM modules entirely. */
 export async function requireAdminUser(): Promise<{ allowed: boolean; user: CurrentUser }> {
   const user = await getCurrentUser();
   if (!user) redirect('/login');

@@ -11,6 +11,14 @@ import {
   Receipt,
   ShoppingCart,
   Tags,
+  CalendarCheck,
+  CalendarDays,
+  UserPlus,
+  UserCheck,
+  Search,
+  GraduationCap,
+  Gauge,
+  UserRound,
   Users,
   type LucideIcon,
 } from 'lucide-react';
@@ -39,6 +47,24 @@ const ICONS: Record<NavIconKey, LucideIcon> = {
   billing: Receipt,
   'vendor-invoices': FileText,
   'post-sales': LifeBuoy,
+  hr: UserRound,
+  attendance: CalendarCheck,
+  leave: CalendarDays,
+  /*
+    Phase 3. A magnifier for recruitment (searching for people), a plus for
+    onboarding (adding one), a tick for probation (confirming one) — three
+    distinguishable glyphs, because all three sit in the same expanded HR row and
+    three variations of a person outline would be indistinguishable at 16px.
+  */
+  recruitment: Search,
+  onboarding: UserPlus,
+  probation: UserCheck,
+  /* Phase 4. A mortarboard — unmistakably learning, and distinct from the three
+     person-outline glyphs already in the expanded HR row. */
+  training: GraduationCap,
+  /* Phase 5. A gauge — measurement rather than learning, so it reads as distinct
+     from the mortarboard beside it. */
+  performance: Gauge,
   users: Users,
 };
 

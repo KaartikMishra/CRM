@@ -49,6 +49,35 @@ enum AppModule {
   /// Create Lead / Deal. Decided after the original set, so — like RS_PRODUCTS
   /// — it carries an ALTER TYPE migration of its own.
   LEAD_DEAL
+
+  /// HR & Workforce Management — seven namespaces, not one module.
+  ///
+  /// HR is the first area where holding one capability must not imply another:
+  /// the manager who approves leave has no business reading salaries. A single
+  /// HR value would make those the same grant, so the split is the access model
+  /// rather than a UI convenience.
+  ///
+  /// Registered before any HR page exists. An AppModule is a permission
+  /// namespace, and a namespace may precede its screen — see
+  /// MODULES_WITHOUT_NAVIGATION in shared/src/enums.ts, which records that
+  /// deliberately and is asserted by the navigation test.
+  HR_EMPLOYEE
+  HR_ATTENDANCE
+  HR_LEAVE
+  HR_PAYROLL
+  HR_RECRUITMENT
+  HR_PERFORMANCE
+  HR_ADMIN
+
+  /// Training & Learning Management, added in Phase 4 with an ALTER TYPE
+  /// migration of its own — the same route RS_PRODUCTS and LEAD_DEAL took.
+  ///
+  /// A separate namespace from HR_PERFORMANCE rather than a reuse of it, and that
+  /// is the access model rather than tidiness: a trainer who builds a course and
+  /// signs off a practical has no business reading appraisals, and an appraiser
+  /// has no reason to edit the catalogue. Folding the two together would recreate
+  /// exactly the conflation these seven namespaces exist to prevent.
+  HR_TRAINING
 }
 
 enum PermissionAction {
@@ -57,6 +86,20 @@ enum PermissionAction {
   EDIT
   DELETE
   ASSIGN
+
+  /// Deciding somebody else's request. Added with HR, and granted to no
+  /// existing module: the nine shipped modules keep exactly the effective
+  /// permissions they had before these three values existed.
+  APPROVE
+
+  /// Taking data out of the system. Separate from VIEW because reading one
+  /// payslip on screen and downloading the payroll register are different
+  /// risks, and only the second leaves the building.
+  EXPORT
+
+  /// Acting on one's own record only — the narrowest action there is. Lets one
+  /// endpoint serve an employee and their manager without a second route.
+  SELF
 }
 
 /// §6 — created by seed only; there is no public signup in v1.
@@ -119,6 +162,68 @@ model User {
   postSalesActivities        PostSalesActivity[]      @relation("PostSalesActivityBy")
   postSalesAttachments       PostSalesAttachment[]    @relation("PostSalesAttachmentBy")
   notifications         Notification[]
+  /// Cross-cutting foundation. Reverse sides only; every key lives on the other
+  /// table. Both approval sides are named because one person can appear on a
+  /// request twice over its life — as requester on one and decider on another.
+  requestedApprovals    ApprovalRequest[]        @relation("ApprovalRequestedBy")
+  decidedApprovals      ApprovalRequest[]        @relation("ApprovalDecidedBy")
+  updatedHRSettings     HRSetting[]              @relation("HRSettingUpdatedBy")
+  uploadedSecureDocuments SecureDocument[]       @relation("SecureDocumentUploadedBy")
+  /// HR Phase 1. `employee` is the optional 1:1 — this account's HR record, where
+  /// the person holding it is an employee. Reverse side only: Employee.userId
+  /// holds the key and its @unique is what keeps the mapping one-to-one in both
+  /// directions. No credential, role or permission lives on the HR record.
+  employee                  Employee?          @relation("EmployeeAccount")
+  employeeHistoryEntries    EmployeeHistory[]  @relation("EmployeeHistoryBy")
+  verifiedEmployeeDocuments EmployeeDocument[] @relation("EmployeeDocumentVerifiedBy")
+  uploadedEmployeeDocuments EmployeeDocument[] @relation("EmployeeDocumentUploadedBy")
+  /// HR Phase 2 decision trails. Named relations because one person can appear on
+  /// several of these over time.
+  decidedAttendanceCorrections AttendanceCorrectionRequest[] @relation("AttendanceCorrectionDecidedBy")
+  decidedOvertime              OvertimeRecord[]              @relation("OvertimeDecidedBy")
+  decidedLeaveRequests         LeaveRequest[]                @relation("LeaveDecidedBy")
+  leaveLedgerActions           LeaveLedgerEntry[]            @relation("LeaveLedgerBy")
+  /// HR Phase 3 — recruitment, onboarding and probation. Every one of these is a
+  /// record of an action an *account* took, which is why they point here rather
+  /// than at Employee: the audit question is "who clicked this", and a recruiter
+  /// without an HR record still has a login.
+  createdJobRequisitions    JobRequisition[]          @relation("JobCreatedBy")
+  createdCandidates         Candidate[]               @relation("CandidateCreatedBy")
+  selectedApplications      Application[]             @relation("ApplicationSelectedBy")
+  applicationStageChanges   ApplicationStageHistory[] @relation("StageHistoryBy")
+  createdInterviews         Interview[]               @relation("InterviewCreatedBy")
+  createdOffers             Offer[]                   @relation("OfferCreatedBy")
+  verifiedBackgroundChecks  BackgroundCheck[]         @relation("BackgroundVerifiedBy")
+  uploadedCandidateDocuments CandidateDocument[]      @relation("CandidateDocumentUploadedBy")
+  verifiedCandidateDocuments CandidateDocument[]      @relation("CandidateDocumentVerifiedBy")
+  createdOnboardingRecords  OnboardingRecord[]        @relation("OnboardingCreatedBy")
+  completedOnboardingTasks  OnboardingTask[]          @relation("OnboardingTaskCompletedBy")
+  decidedProbations         ProbationRecord[]         @relation("ProbationDecidedBy")
+  /// HR Phase 4 — training. Each records an action an *account* took, which is why
+  /// they point here rather than at Employee: the audit question is "who did this",
+  /// and an HR administrator may hold no HR record at all.
+  createdTrainingCategories TrainingCategory[]       @relation("TrainingCategoryCreatedBy")
+  createdTrainingPrograms   TrainingProgram[]        @relation("TrainingProgramCreatedBy")
+  createdTrainingAssessments TrainingAssessment[]    @relation("TrainingAssessmentCreatedBy")
+  trainingAssignmentsMade   TrainingEnrollment[]     @relation("TrainingAssignedBy")
+  trainingExemptionsGranted TrainingEnrollment[]     @relation("TrainingExemptedBy")
+  qualificationsGranted     TrainingQualification[]  @relation("TrainingQualificationGrantedBy")
+  qualificationsRevoked     TrainingQualification[]  @relation("TrainingQualificationRevokedBy")
+  /// HR Phase 5 — performance. Same reasoning: each records what an *account* did.
+  /// `finalizedPerformanceReviews` matters most — approving an appraisal is the act
+  /// the separation-of-duties rule turns on, and the approver is identified by
+  /// their account because HR approvers do not all have an Employee record.
+  createdReviewCycles         ReviewCycle[]         @relation("ReviewCycleCreatedBy")
+  createdPerformanceGoals     PerformanceGoal[]     @relation("GoalCreatedBy")
+  closedPerformanceGoals      PerformanceGoal[]     @relation("GoalClosedBy")
+  kpisLastUpdated             PerformanceKpi[]      @relation("KpiLastUpdatedBy")
+  kpiProgressRecorded         KpiProgressRecord[]   @relation("KpiProgressRecordedBy")
+  finalizedPerformanceReviews PerformanceReview[]   @relation("PerformanceReviewFinalizedBy")
+  managerAssessmentsSubmitted ManagerAssessment[]   @relation("ManagerAssessmentSubmittedBy")
+  competencyRatingsGiven      CompetencyRating[]    @relation("CompetencyRatedBy")
+  createdDevelopmentPlans     DevelopmentPlan[]     @relation("DevelopmentPlanCreatedBy")
+  closedDevelopmentPlans      DevelopmentPlan[]     @relation("DevelopmentPlanClosedBy")
+  completedDevelopmentActions DevelopmentAction[]   @relation("DevelopmentActionCompletedBy")
 
   @@index([role, isActive])
 }
@@ -1628,9 +1733,51 @@ enum NotificationType {
   /// Post Sales & Grievance. Three rather than one per event: the bell groups by
   /// type, and "a case needs you" is a different message from "a critical case
   /// was raised". Deliberately few — a notice per field edit would be spam.
+  /// HR Phase 1 — three events, each telling somebody something they must act on
+  /// or could not otherwise know. Creating an employee raises nothing: the HR team
+  /// just did it, and a notice nobody needs is how a bell stops being read.
+  HR_EMPLOYEE_ASSIGNED_TO_MANAGER
+  HR_EMPLOYEE_ACCOUNT_LINKED
+  HR_EMPLOYEE_STATUS_CHANGED
+
   POST_SALES_CASE_ASSIGNED
   POST_SALES_CASE_CRITICAL
   POST_SALES_CASE_REOPENED
+
+  /// HR Phase 3 — five events, on the same test the Phase 1 three had to pass:
+  /// does this tell somebody something they must act on and could not otherwise
+  /// know? Each has a named recipient with a deadline attached.
+  ///
+  /// The larger half of the recruitment pipeline raises nothing, deliberately: a
+  /// notice per stage change would put a dozen behind every hire and teach
+  /// everybody to ignore the bell.
+  HR_INTERVIEW_SCHEDULED
+  HR_APPLICATION_DECISION_REQUIRED
+  HR_ONBOARDING_TASK_ASSIGNED
+  HR_PROBATION_REVIEW_DUE
+  HR_PROBATION_ENDING
+
+  /// HR Phase 4 — training. Five events, each with a named recipient who owes an
+  /// action. Completing a lesson or failing a test raises nothing: the learner
+  /// knows, and a notice nobody needs is how a bell stops being read.
+  HR_TRAINING_ASSIGNED
+  HR_TRAINING_OVERDUE
+  HR_TRAINING_PRACTICAL_REVIEW_DUE
+  HR_TRAINING_SHADOWING_SIGNOFF_DUE
+  HR_TRAINING_QUALIFIED
+
+  /// HR Phase 5 — performance. Five events, on the same test the earlier phases
+  /// had to pass: does this tell somebody something they must act on and could
+  /// not otherwise know?
+  ///
+  /// Saving a draft assessment raises nothing — the author knows. Finalisation
+  /// does notify the employee, because a locked appraisal of them is exactly the
+  /// thing they must be told about and can no longer influence.
+  HR_REVIEW_CYCLE_OPENED
+  HR_SELF_ASSESSMENT_DUE
+  HR_MANAGER_REVIEW_DUE
+  HR_REVIEW_FINALIZED
+  HR_IMPROVEMENT_PLAN_OPENED
 }
 
 /// One thing somebody should know about, addressed to one person.
@@ -2725,4 +2872,3514 @@ model PostSalesAttachment {
   @@unique([caseId, mediaAssetId])
   @@index([caseId, createdAt])
   @@index([mediaAssetId])
+}
+
+// ---------------------------------------------------------------------------
+//  Cross-cutting foundation — approvals, settings, secure documents
+// ---------------------------------------------------------------------------
+//
+// Three concerns that are not HR's alone and therefore do not live in an HR
+// module. Each replaces something the codebase was doing by assumption:
+//
+//   ApprovalRequest  the whole approval "engine" was policies/approval.ts —
+//                    `requiresApproval = actor.role !== 'ADMIN'`, four lines,
+//                    with no record of who decided what or why.
+//   HRSetting        working hours, leave quotas and payroll cycles were going
+//                    to be constants in code, so changing one meant a deploy.
+//   SecureDocument   MediaAsset has no access control of any kind and its
+//                    Cloudinary URLs are publicly fetchable. Fine for product
+//                    photos; unacceptable for a payslip.
+
+/// Where one approval request stands. PENDING is the only state that can change.
+///
+/// CANCELLED exists so a requester can withdraw: deleting the row would destroy
+/// the evidence that the request was ever made, and a withdrawn request is a
+/// historical fact like any other decision.
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+/// A request for somebody with authority to decide something.
+///
+/// Polymorphic on `entityType`/`entityId`, exactly as Notification and AuditLog
+/// already are — the third use of a pattern this codebase has settled on, not a
+/// new idea. A typed foreign key per approvable thing would mean a migration
+/// and a nullable column for every future one.
+///
+/// What this is NOT: a workflow engine. There are no stages, no routing rules
+/// and no delegation chains. One request, one decision, recorded. Multi-step
+/// approval is a later decision that this table does not foreclose — a stage
+/// column can be added additively — but inventing it now would mean guessing.
+///
+/// `module` and `action` are the existing AppModule and PermissionAction, so
+/// "who may decide this" is answered by the RBAC resolver every other request
+/// already obeys, rather than by a second authority model living here.
+model ApprovalRequest {
+  id String @id @default(cuid())
+
+  /// What needs deciding. `entityType` is the model name as the service writes
+  /// it ("LeaveRequest"), `entityId` that row's id. Unenforced by the database
+  /// by necessity — the price of polymorphism, and the same price Notification
+  /// and AuditLog already pay.
+  entityType String
+  entityId   String
+
+  /// The permission that decides this request. A would-be approver needs
+  /// `module` + APPROVE, resolved by permission.service.ts.
+  module AppModule
+  action PermissionAction @default(APPROVE)
+
+  status ApprovalStatus @default(PENDING)
+
+  /// Who asked. Not nullable: a request nobody made is not a request. Restrict
+  /// rather than SetNull so the trail cannot be orphaned by a user delete — and
+  /// users are deactivated rather than deleted in this system.
+  requestedById String
+  requestedAt   DateTime @default(now())
+
+  /// Why it is being asked, in the requester's words. Optional: some requests
+  /// are self-explanatory and a forced field would collect "n/a".
+  reason String?
+
+  /// What is being proposed, for requests that change values. Json because the
+  /// shape differs per entity type, and because this is evidence to display
+  /// rather than data to query.
+  payload Json?
+
+  /// Who decided, when, and what they said. All null while PENDING or CANCELLED
+  /// and all present once APPROVED or REJECTED — the approval_decision_consistency
+  /// CHECK enforces exactly that pairing, so there is no such thing as a decided
+  /// request that cannot say who decided it. approval_decided_after_requested
+  /// also forbids a decision that predates its own request.
+  decidedById String?
+  decidedAt   DateTime?
+  decisionNote String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  requestedBy User  @relation("ApprovalRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  decidedBy   User? @relation("ApprovalDecidedBy", fields: [decidedById], references: [id], onDelete: Restrict)
+
+  /// The approver's queue: everything still pending, oldest first.
+  @@index([status, module, requestedAt])
+  /// Every request against one thing, which is how a detail page shows history.
+  @@index([entityType, entityId, requestedAt])
+  @@index([requestedById, requestedAt])
+  @@index([decidedById, decidedAt])
+}
+
+/// A configurable value, namespaced by module.
+///
+/// Key/value rather than a column per setting: HR alone needs working hours,
+/// week-off patterns, leave quotas, probation lengths and payroll cycles, and a
+/// column each would mean a migration per policy change. `value` is Json so a
+/// setting can be a number, a string, a list of week-off days or a nested
+/// object without five typed columns that are null four times out of five.
+///
+/// Deliberately not a generic AppSetting for the whole CRM: every existing
+/// module's constants live in shared/src/constants and are contract values that
+/// the database enforces again as CHECK constraints. Making those editable at
+/// runtime would let somebody change a value the schema still enforces. This
+/// table is for policy the business owns, not for contracts the code owns.
+model HRSetting {
+  id String @id @default(cuid())
+
+  /// The namespace. An AppModule rather than a free string so a setting cannot
+  /// be filed under a module that does not exist, and so reading "every setting
+  /// this module owns" is a typed query.
+  module AppModule
+
+  /// Dotted within its module: "working_hours.start", "leave.annual_quota".
+  key   String
+  value Json
+
+  /// What this controls, for whoever opens the settings screen in six months.
+  description String?
+
+  /// Who last changed it. SetNull so a departed administrator's change stays
+  /// readable as history — the AuditLog carries the full before/after.
+  updatedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  updatedBy User? @relation("HRSettingUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  /// One row per key per module. This is what makes a setting a setting rather
+  /// than an append-only log of attempts to set it.
+  @@unique([module, key])
+  @@index([module])
+}
+
+/// What a secure document is, so access can be decided by kind.
+///
+/// Every member is something that must not be publicly fetchable. The list is
+/// deliberately short and HR-shaped; it is not a general file taxonomy.
+enum SecureDocumentKind {
+  IDENTITY_PROOF
+  ADDRESS_PROOF
+  EDUCATION_CERTIFICATE
+  EXPERIENCE_LETTER
+  OFFER_LETTER
+  APPOINTMENT_LETTER
+  CONTRACT
+  PAYSLIP
+  TAX_DOCUMENT
+  BANK_DETAIL
+  MEDICAL_RECORD
+  DISCIPLINARY_RECORD
+  APPRAISAL
+  RESUME
+  OTHER
+}
+
+/// A file that must never be reachable without an authorised request.
+///
+/// ### Why this is not MediaAsset
+///
+/// MediaAsset carries no access control whatsoever: no owner beyond the
+/// uploader, no kind, no notion of who may read it, and its `secureUrl` is a
+/// plain Cloudinary delivery URL that anybody holding the link can fetch with no
+/// CRM session. That is correct for a product photo, which is public anyway, and
+/// it is why seven tables reference it happily.
+///
+/// A payslip or an Aadhaar scan cannot live there. Adding access control to
+/// MediaAsset would change the delivery behaviour of product, enquiry, sales,
+/// purchase, lead and post-sales images all at once — six shipped modules —
+/// which is explicitly out of scope. So this is a second *table*, using the
+/// same Cloudinary account and the same credentials, with `type: authenticated`
+/// uploads and short-lived signed URLs. One storage provider, two access models.
+///
+/// ### What is deferred
+///
+/// There is no `employeeId` column and no relation to an Employee model, because
+/// Employee does not exist until Phase 1 and inventing a placeholder would
+/// create exactly the duplicate identity this phase forbids. Ownership is
+/// therefore recorded polymorphically for now — `ownerType`/`ownerId`, the same
+/// pattern as ApprovalRequest above — and Phase 1 adds the typed
+/// EmployeeDocument relation additively, against an abstraction that already
+/// works and is already tested.
+model SecureDocument {
+  id String @id @default(cuid())
+
+  /// Cloudinary's identifier, which is what a signed URL is minted from. Unique
+  /// because one stored object is one row.
+  publicId String @unique
+
+  /// Cloudinary's `type` — "authenticated" for everything this table stores.
+  /// Recorded rather than assumed so a row that somehow arrived as a public
+  /// upload is detectable instead of silently served. The
+  /// secure_document_delivery_type CHECK restricts it to Cloudinary's two
+  /// non-public types, so a caller that forgot to pass one — or passed 'upload',
+  /// the public default — is refused by the database rather than producing a row
+  /// this table promises is confidential and that is in fact world-readable.
+  deliveryType String @default("authenticated")
+
+  /// NOTE: there is deliberately no `secureUrl` column. Storing a URL is how
+  /// MediaAsset became publicly fetchable — a stored link outlives every access
+  /// check and cannot be revoked. URLs here are minted per request, signed, and
+  /// expire; the only durable identifier is publicId above.
+
+  kind SecureDocumentKind
+
+  /// Which namespace governs this document. HR_PAYROLL on a payslip means
+  /// reading it needs HR_PAYROLL + VIEW, so access is the existing RBAC
+  /// resolver's answer rather than a rule invented in this module.
+  module AppModule
+
+  /// Whose document this is, polymorphically until Employee exists (see above).
+  /// "User" + a user id is the only pair Phase 0.5 writes; Phase 1 adds
+  /// "Employee".
+  ownerType String
+  ownerId   String
+
+  /// Original filename as the uploader's machine had it, for display. Never
+  /// used to build a path — publicId is the only thing that addresses the file.
+  fileName String?
+  mimeType String?
+  bytes    Int?
+
+  uploadedById String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  uploadedBy User @relation("SecureDocumentUploadedBy", fields: [uploadedById], references: [id], onDelete: Restrict)
+
+  /// The HR metadata for this file, where it is an employee document.
+  ///
+  /// The reverse of a 1:1. Phase 0.5 anticipated exactly this: ownership here is
+  /// polymorphic (`ownerType`/`ownerId`) precisely so a typed relation could be
+  /// added once Employee existed, without this table learning what an employee is.
+  /// Nothing about the storage or delivery model changes.
+  employeeDocument EmployeeDocument?
+
+  /// HR Phase 3, and the same extension point used twice more. A candidate's file
+  /// and an offer letter are both stored objects with HR metadata beside them;
+  /// neither teaches this table what a candidate or an offer is.
+  candidateDocument CandidateDocument? @relation("CandidateDocumentFile")
+  offer             Offer?             @relation("OfferLetter")
+
+  /// HR Phase 4, and the same extension point again. Training material and a
+  /// learner's practical artefact are both stored objects with metadata beside
+  /// them; neither teaches this table what a course is, and neither gets a URL.
+  trainingModules      TrainingModule[]      @relation("TrainingModuleMaterial")
+  practicalSubmissions PracticalSubmission[] @relation("PracticalArtefact")
+
+  @@index([ownerType, ownerId, createdAt])
+  @@index([module, kind])
+  @@index([uploadedById, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+//  HR & Workforce — Phase 1: Employee & Organization
+// ---------------------------------------------------------------------------
+//
+// The first HR business module. It sits on the Phase 0.5 foundation — the seven
+// HR_* AppModule namespaces, the APPROVE/EXPORT/SELF actions, SecureDocument,
+// ApprovalRequest and HRSetting — and adds no second authentication, RBAC,
+// notification, audit or storage system.
+//
+// ### Employee is not User
+//
+// `User` is the authenticated application account: an email, a password hash, a
+// role, and the permission rows that decide what it may do. `Employee` is the
+// HR record of a person the business employs. Most of the business's employees
+// will never hold a CRM login, and a few logins (a shared operations account)
+// belong to no single person, so the two are deliberately separate tables joined
+// by an optional 1:1.
+//
+// No credential is duplicated into Employee. There is no password, no session,
+// no role here — asking "may this person do X" always means asking the User and
+// the existing permission resolver.
+
+/// Whether an organizational record is still in use.
+///
+/// Shared by Department and Designation rather than one enum each: they are the
+/// same question about the same kind of record, and two identical enums would
+/// only mean two migrations the next time the answer changes. Neither is ever
+/// deleted once employees reference it — ARCHIVED is how a department stops being
+/// offered to new employees while its history stays readable.
+enum OrgUnitStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+/// Where an employee stands in their employment.
+///
+/// Deliberately short. The full offboarding lifecycle — notice periods, exit
+/// interviews, clearance, final settlement — is Phase 7, and inventing its states
+/// now would mean guessing at a process the business has not described.
+///
+/// ON_NOTICE is its own state rather than a flag on ACTIVE because the two read
+/// differently to anybody planning work: somebody serving notice is still
+/// employed and still assignable, but not for anything that outlives their
+/// leaving date.
+///
+/// Nothing is ever deleted. An employee who leaves becomes EXITED and keeps every
+/// row that references them — a departed person's history is the business's
+/// record, not theirs.
+enum EmployeeStatus {
+  /// Offer accepted, start date in the future. Not yet countable as headcount.
+  PROBATION
+  ACTIVE
+  ON_NOTICE
+  /// Left, whatever the reason. Why is deliberately not modelled in Phase 1:
+  /// resignation, termination and redundancy carry different process and
+  /// different confidentiality, and conflating them in one enum value is more
+  /// honest than pretending a single field captures the difference.
+  EXITED
+  /// Employed but not working — extended leave, sabbatical, suspension.
+  INACTIVE
+}
+
+/// The contractual basis of employment.
+enum EmploymentType {
+  FULL_TIME
+  PART_TIME
+  CONTRACT
+  INTERN
+  CONSULTANT
+}
+
+/// Where the work happens.
+enum WorkMode {
+  ON_SITE
+  REMOTE
+  HYBRID
+}
+
+/// What one EmployeeHistory row records.
+///
+/// A fixed vocabulary rather than free text, so the timeline can be filtered and
+/// so a reader can tell a transfer from a promotion without parsing prose. Each
+/// member names something an HR person would recognise as an event in somebody's
+/// employment — which is why there is no generic PROFILE_UPDATED: a changed phone
+/// number is not an event, and recording it as one would bury the ones that matter.
+enum EmployeeEventType {
+  JOINED
+  DEPARTMENT_CHANGED
+  DESIGNATION_CHANGED
+  MANAGER_CHANGED
+  STATUS_CHANGED
+  EMPLOYMENT_TYPE_CHANGED
+  WORK_MODE_CHANGED
+  USER_LINKED
+  USER_UNLINKED
+}
+
+/// What an employee document is.
+///
+/// Narrower than SecureDocumentKind, which covers every confidential file the CRM
+/// might hold. These are the ones an employee record carries, and the split keeps
+/// an HR document picker from offering a payslip category Phase 1 does not produce.
+enum EmployeeDocumentType {
+  IDENTITY_PROOF
+  ADDRESS_PROOF
+  EDUCATION_CERTIFICATE
+  EXPERIENCE_LETTER
+  OFFER_LETTER
+  APPOINTMENT_LETTER
+  CONTRACT
+  RESUME
+  OTHER
+}
+
+/// Whether somebody has checked a document against the original.
+enum DocumentVerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+/// A unit of the organization.
+///
+/// Self-referencing through `parentId` so a department can sit under another, with
+/// SetNull rather than Cascade: dissolving a parent must not silently delete every
+/// team inside it. Depth is not constrained by the database — the service refuses a
+/// cycle, which is the failure that actually matters.
+model Department {
+  id   String @id @default(cuid())
+  /// Human-facing name. Not unique: two companies' worth of history can contain
+  /// two "Operations", and `code` is the identifier that must not collide.
+  name String
+  /// The stable business identifier, uppercase. Unique, and what a human quotes.
+  code String @unique
+
+  description String?
+  status      OrgUnitStatus @default(ACTIVE)
+
+  /// The department this one sits inside, if any.
+  parentId String?
+
+  /// The employee who heads it.
+  ///
+  /// SetNull, and deliberately nullable: a department between heads still exists.
+  /// The relation is named because Employee points back at Department twice — once
+  /// as the department it belongs to, once as the department it heads.
+  headId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  parent   Department?  @relation("DepartmentHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children Department[] @relation("DepartmentHierarchy")
+  head     Employee?    @relation("DepartmentHead", fields: [headId], references: [id], onDelete: SetNull)
+
+  employees    Employee[]    @relation("EmployeeDepartment")
+  designations Designation[]
+  /// HR Phase 2 scoping: a holiday or policy may apply to one department.
+  holidays          Holiday[]
+  attendancePolicy  AttendancePolicy?
+  leavePolicies     LeavePolicy[]
+  /// HR Phase 3 — recruitment and onboarding. Reverse sides only.
+  jobRequisitions   JobRequisition[]
+  offers            Offer[]
+  onboardingRecords OnboardingRecord[]
+  /// HR Phase 4 — programs targeted at this department. Reverse side only.
+  trainingPrograms  TrainingProgram[]  @relation("TrainingTargetDepartment")
+  /// HR Phase 5 — performance. A cycle may cover one department, and a department
+  /// may own goals of its own. Reverse sides only.
+  reviewCycles      ReviewCycle[]      @relation("ReviewCycleDepartment")
+  performanceGoals  PerformanceGoal[]  @relation("GoalDepartment")
+
+  @@index([status, name])
+  @@index([parentId])
+  @@index([headId])
+}
+
+/// A job title, optionally scoped to a department.
+model Designation {
+  id   String @id @default(cuid())
+  name String
+  code String @unique
+
+  description String?
+  status      OrgUnitStatus @default(ACTIVE)
+
+  /// The department this title belongs to, where it is department-specific.
+  /// Nullable because titles like "Managing Director" belong to no one
+  /// department. SetNull so archiving a department does not delete its titles.
+  departmentId String?
+
+  /// Seniority, for ordering a list and for nothing else.
+  ///
+  /// Explicitly NOT an authority model: a lower number does not grant anybody
+  /// rights over a higher one. Reporting lines are `Employee.managerId`, and
+  /// permissions are the existing RBAC. Conflating rank with access is how an org
+  /// chart quietly becomes a permission system.
+  level Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  department Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  employees  Employee[]  @relation("EmployeeDesignation")
+  /// HR Phase 3 — recruitment and onboarding. Reverse sides only.
+  jobRequisitions   JobRequisition[]
+  offers            Offer[]
+  onboardingRecords OnboardingRecord[]
+  /// HR Phase 4 — programs targeted at this designation. Reverse side only.
+  trainingPrograms  TrainingProgram[]  @relation("TrainingTargetDesignation")
+
+  @@index([status, level, name])
+  @@index([departmentId])
+}
+
+/// A person the business employs.
+model Employee {
+  id String @id @default(cuid())
+
+  /// The HR business identifier — "RS001". Allocated from an atomic counter
+  /// inside the creating transaction, never by reading the maximum and adding
+  /// one: two simultaneous creates would both read the same maximum.
+  employeeId String @unique
+
+  /// The CRM login this person uses, if they have one.
+  ///
+  /// Unique, which is the whole safety property: one User maps to at most one
+  /// Employee and one Employee to at most one User, enforced by the database
+  /// rather than by a service remembering to check. Nullable because most
+  /// employees never need a login, and SetNull so deactivating an account does
+  /// not delete the person's HR record.
+  userId String? @unique
+
+  firstName  String
+  middleName String?
+  lastName   String
+
+  /// Work contact. `workEmail` is unique — it is how colleagues address somebody
+  /// and two people cannot share one. Personal contact details are kept to the
+  /// minimum the business needs to reach somebody, and nothing more: no date of
+  /// birth, no gender, no home address, no emergency contact in Phase 1. Each of
+  /// those needs a stated purpose, a retention rule and a narrower read scope
+  /// than "anybody with HR_EMPLOYEE:VIEW", and inventing them now would collect
+  /// sensitive data before the rules that protect it exist.
+  workEmail String  @unique
+  phone     String?
+
+  departmentId  String?
+  designationId String?
+
+  /// Who this person reports to.
+  ///
+  /// SetNull: a manager leaving must not delete their reports. Self-reference and
+  /// cycles are refused by the service — Postgres cannot express "not an ancestor
+  /// of itself" as a constraint, so that check lives where it can be tested.
+  managerId String?
+
+  employmentType EmploymentType @default(FULL_TIME)
+  workMode       WorkMode       @default(ON_SITE)
+  status         EmployeeStatus @default(ACTIVE)
+
+  /// Where this person works from. Free text, like Customer.state: the list of
+  /// offices is small, changes by business decision, and belongs in HRSetting
+  /// rather than in a Postgres enum that cannot drop a value.
+  location String?
+
+  joiningDate DateTime
+  /// The last working day. Null while employed; required once EXITED, which a
+  /// CHECK enforces so a departed employee cannot lack a leaving date.
+  exitDate    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user        User?        @relation("EmployeeAccount", fields: [userId], references: [id], onDelete: SetNull)
+  department  Department?  @relation("EmployeeDepartment", fields: [departmentId], references: [id], onDelete: SetNull)
+  designation Designation? @relation("EmployeeDesignation", fields: [designationId], references: [id], onDelete: SetNull)
+  manager     Employee?    @relation("EmployeeHierarchy", fields: [managerId], references: [id], onDelete: SetNull)
+  reports     Employee[]   @relation("EmployeeHierarchy")
+
+  headedDepartments Department[]        @relation("DepartmentHead")
+  history           EmployeeHistory[]
+  documents         EmployeeDocument[]
+  /// HR Phase 2 — attendance and leave. Reverse sides only; every key lives on
+  /// the other table, and all of them reference this one Employee identity.
+  attendanceRecords   AttendanceRecord[]
+  attendanceCorrections AttendanceCorrectionRequest[]
+  overtimeRecords     OvertimeRecord[]
+  leaveBalances       LeaveBalance[]
+  leaveRequests       LeaveRequest[]
+  leaveLedgerEntries  LeaveLedgerEntry[]
+  /// HR Phase 3 — recruitment, onboarding and probation. Reverse sides only.
+  /// Every one of these points back at this single Employee identity: recruitment
+  /// introduces a Candidate, never a second kind of employee.
+  hiringManagerFor       JobRequisition[]       @relation("JobHiringManager")
+  recruiterFor           JobRequisition[]       @relation("JobRecruiter")
+  applicationsRecruiting Application[]          @relation("ApplicationRecruiter")
+  applicationsHiring     Application[]          @relation("ApplicationHiringManager")
+  interviewsLeading      Interview[]            @relation("InterviewLead")
+  interviewsAttending    InterviewParticipant[] @relation("InterviewParticipant")
+  interviewFeedback      InterviewFeedback[]    @relation("FeedbackBy")
+  assessmentsReviewing   Assessment[]           @relation("AssessmentReviewer")
+  onboardingRecord       OnboardingRecord?      @relation("OnboardingEmployee")
+  onboardingManagerFor   OnboardingRecord[]     @relation("OnboardingManager")
+  onboardingTasks        OnboardingTask[]       @relation("OnboardingTaskAssignee")
+  probation              ProbationRecord?       @relation("ProbationEmployee")
+  probationManagerFor    ProbationRecord[]      @relation("ProbationManager")
+  probationReviews       ProbationReview[]      @relation("ProbationReviewer")
+  /// HR Phase 4 — training. Reverse sides only. A learner, a practical reviewer and
+  /// a shadowing mentor are all this same Employee identity: training introduces no
+  /// mentor or trainer model of its own.
+  trainingEnrollments    TrainingEnrollment[]   @relation("TrainingLearner")
+  practicalsToReview     PracticalSubmission[]  @relation("PracticalReviewer")
+  practicalsReviewed     PracticalSubmission[]  @relation("PracticalReviewedBy")
+  shadowingAsMentor      ShadowingRecord[]      @relation("ShadowingMentor")
+  shadowingSignedOff     ShadowingRecord[]      @relation("ShadowingSignedOffBy")
+  /// HR Phase 5 — performance. Reverse sides only. The person appraised, the
+  /// manager who appraises and the owner of a goal are all this same Employee
+  /// identity: performance introduces no reviewer or appraisee model of its own.
+  performanceReviews     PerformanceReview[]    @relation("PerformanceReviewEmployee")
+  reviewsToWrite         PerformanceReview[]    @relation("PerformanceReviewReviewer")
+  performanceGoals       PerformanceGoal[]      @relation("GoalEmployee")
+  developmentPlans       DevelopmentPlan[]      @relation("DevelopmentPlanEmployee")
+
+  /// The directory's default ordering and its commonest filters.
+  @@index([status, lastName, firstName])
+  @@index([departmentId, status])
+  @@index([designationId])
+  @@index([managerId])
+}
+
+/// One allocated employee-id sequence.
+///
+/// A counter table rather than a scan of Employee, for the reason the Post Sales
+/// case counter exists: `SELECT max(...) + 1` read by two concurrent creates
+/// returns the same number to both. `INSERT … ON CONFLICT DO UPDATE … RETURNING`
+/// inside the creating transaction cannot.
+///
+/// `prefix` is the key so the scheme can change — a second prefix is a second row,
+/// not a migration.
+model EmployeeIdCounter {
+  prefix    String   @id
+  lastValue Int
+  updatedAt DateTime @updatedAt
+}
+
+/// One recorded change in somebody's employment.
+///
+/// Append-only by intent: rows are written, never updated or deleted, so the
+/// timeline is what actually happened rather than what the record currently says.
+/// There is no `updatedAt` for that reason.
+///
+/// `fromValue`/`toValue` are display strings, not ids — "Sales" rather than a cuid
+/// — so the timeline stays readable after a department is renamed or archived, and
+/// so reading it needs no joins. Never any salary, bank detail, token or secret:
+/// Phase 1 holds none of those, and history is the wrong place for them regardless.
+model EmployeeHistory {
+  id         String            @id @default(cuid())
+  employeeId String
+  eventType  EmployeeEventType
+
+  fromValue String?
+  toValue   String?
+  /// Why, where somebody gave a reason.
+  note      String?
+
+  /// Who made the change. SetNull so a departed administrator's entry stays
+  /// readable — the AuditLog carries the full before/after either way.
+  performedById String?
+
+  /// When the change happened, which is not always when the row was written.
+  effectiveAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  employee    Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  performedBy User?    @relation("EmployeeHistoryBy", fields: [performedById], references: [id], onDelete: SetNull)
+
+  @@index([employeeId, effectiveAt])
+  @@index([eventType])
+}
+
+/// Metadata for one confidential file belonging to an employee.
+///
+/// The bytes are NOT here. They are in SecureDocument, which Phase 0.5 built:
+/// authenticated Cloudinary delivery, no stored URL, short-lived signed links.
+/// This table adds only what HR needs that a generic document store should not
+/// know — which employee, what kind, issued when, expiring when, verified by whom.
+///
+/// `secureDocumentId` is unique: one stored file is one employee document. Cascade
+/// on delete, because metadata about a file that no longer exists is debris.
+model EmployeeDocument {
+  id         String @id @default(cuid())
+  employeeId String
+
+  /// The stored file. Required — an employee document with no document is a row
+  /// with nothing in it.
+  secureDocumentId String @unique
+
+  documentType EmployeeDocumentType
+  /// What to call it in a list, where the file name is unhelpful.
+  title        String
+
+  issuedOn  DateTime?
+  /// When this document stops being valid, for the ones that expire — a visa, a
+  /// certification. Null means "does not expire", not "unknown".
+  expiresOn DateTime?
+
+  verificationStatus DocumentVerificationStatus @default(PENDING)
+  verifiedById       String?
+  verifiedAt         DateTime?
+
+  uploadedById String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  employee       Employee       @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  secureDocument SecureDocument @relation(fields: [secureDocumentId], references: [id], onDelete: Cascade)
+  verifiedBy     User?          @relation("EmployeeDocumentVerifiedBy", fields: [verifiedById], references: [id], onDelete: SetNull)
+  uploadedBy     User           @relation("EmployeeDocumentUploadedBy", fields: [uploadedById], references: [id], onDelete: Restrict)
+
+  @@index([employeeId, documentType])
+  @@index([verificationStatus])
+  @@index([expiresOn])
+}
+
+// ---------------------------------------------------------------------------
+//  HR Phase 2 — Attendance & Leave
+// ---------------------------------------------------------------------------
+//
+// Built on the Phase 1 Employee. Every record here references that one identity;
+// there is no second employee, department or manager hierarchy.
+//
+// ### Time, which attendance lives or dies by
+//
+// Two different kinds of value, deliberately typed and named differently:
+//
+//   *instants*  — clockInAt, clockOutAt, startedAt. Real moments, stored as
+//                 timestamps, always taken from Postgres `now()` via
+//                 databaseNow(). A client-supplied time is never authoritative:
+//                 a browser clock can be wrong by hours or be deliberately set.
+//
+//   *dates*     — attendanceDate, startDate, holidayDate. Calendar days, not
+//                 moments. Stored at midnight UTC and *interpreted in IST*,
+//                 the fixed +5:30 the business works in, exactly as
+//                 sales-efficiency.ts already treats dispatch deadlines and
+//                 frontend/lib/format.ts already renders every timestamp.
+//
+// Conflating the two is the classic attendance bug: somebody clocking in at
+// 00:30 IST is on today's date, but 19:00 UTC yesterday.
+//
+// ### What Phase 2 deliberately does not do
+//
+// No payroll, salary, payout or encashment. Overtime and leave balances are
+// recorded so a future Payroll phase can consume them, and nothing here turns a
+// minute or a day into money.
+
+/// What an employee's day was, as a fact about attendance.
+///
+/// Deliberately separate from WorkMode below. "Present" and "worked from home"
+/// are different questions — somebody can be PRESENT and REMOTE, or ABSENT with
+/// no work mode at all — and one enum carrying both would make "present in the
+/// office" and "present at home" different statuses, so every query about
+/// presence would have to enumerate work modes.
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  HALF_DAY
+  /// Covered by an approved leave. Set by resolution, never by a clock-in.
+  LEAVE
+  HOLIDAY
+  WEEK_OFF
+}
+
+/// Where the work actually happened on one particular day.
+///
+/// Deliberately NOT the Phase 1 `WorkMode`, which is the employee's contractual
+/// arrangement (ON_SITE / REMOTE / HYBRID). A HYBRID employee works some days in
+/// the office and some at home, so "what is their arrangement" and "where were
+/// they today" are different questions and one enum cannot answer both — a
+/// HYBRID value on an attendance row would say nothing about that day.
+enum AttendanceWorkMode {
+  OFFICE
+  WFH
+  REMOTE
+}
+
+/// Where an attendance record is in its day.
+///
+/// Distinct from AttendanceStatus: this is about the *session* — has the person
+/// clocked in, are they on a break, have they finished — while the status is the
+/// verdict on the day. A record is OPEN between clock-in and clock-out, and the
+/// state machine below is what makes a double clock-in impossible.
+enum AttendanceSessionState {
+  /// Clocked in, working.
+  OPEN
+  /// Clocked in, currently on a break.
+  ON_BREAK
+  /// Clocked out. Terminal for the day unless a correction reopens it.
+  CLOSED
+  /// No session — a holiday, week-off, leave or absence record.
+  NONE
+}
+
+/// Why an attendance record says what it says.
+///
+/// Matters because an auto-resolved ABSENT and a manually corrected one are very
+/// different claims, and a later Payroll phase must be able to tell them apart.
+enum AttendanceSource {
+  /// The employee clocked in and out themselves.
+  SELF
+  /// Written by the resolution service — holiday, week-off, leave or absence.
+  SYSTEM
+  /// Written or amended by HR.
+  MANUAL
+  /// Amended through an approved correction request.
+  CORRECTION
+}
+
+enum AttendanceCorrectionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  /// Withdrawn by the requester before anybody decided.
+  CANCELLED
+}
+
+enum OvertimeStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum LeaveRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  /// Withdrawn by the requester, or cancelled after approval by policy.
+  CANCELLED
+}
+
+/// Which half of the day a half-day leave covers.
+///
+/// Required whenever a request is a half day, which a CHECK enforces: "half a
+/// day off" without saying which half cannot be rostered against.
+enum HalfDayPeriod {
+  FIRST_HALF
+  SECOND_HALF
+}
+
+/// What moved a leave balance.
+///
+/// The ledger's vocabulary. Every balance change is one of these, so a balance is
+/// always explainable by replaying its rows rather than being a number somebody
+/// edited.
+enum LeaveLedgerReason {
+  /// Opening entitlement for a period.
+  ALLOCATION
+  /// Periodic accrual.
+  ACCRUAL
+  /// Brought in from the previous period.
+  CARRY_FORWARD
+  /// Held while a request awaits a decision.
+  RESERVATION
+  /// A reservation released — the request was rejected or cancelled.
+  RESERVATION_RELEASE
+  /// Consumed by an approved leave.
+  CONSUMPTION
+  /// Returned because an approved leave was cancelled.
+  CONSUMPTION_REVERSAL
+  /// A deliberate HR correction.
+  ADJUSTMENT
+  /// Expired at period end rather than carried.
+  LAPSE
+}
+
+/// One employee's day.
+///
+/// Exactly one row per employee per date — enforced by a unique index, not by an
+/// application check, because two concurrent clock-ins would otherwise both read
+/// "no record" and both insert.
+model AttendanceRecord {
+  id         String @id @default(cuid())
+  employeeId String
+
+  /// The calendar day in IST, stored at midnight UTC. Not an instant.
+  attendanceDate DateTime @db.Date
+
+  status       AttendanceStatus
+  workMode     AttendanceWorkMode?
+  sessionState AttendanceSessionState @default(NONE)
+  source       AttendanceSource       @default(SYSTEM)
+
+  /// Real moments, always from Postgres `now()`.
+  clockInAt  DateTime?
+  clockOutAt DateTime?
+
+  /// Derived at clock-out and stored, which is the one deliberate exception to
+  /// this codebase's derive-don't-store rule. The inputs are the policy's
+  /// expected hours and grace period, and a policy legitimately changes over
+  /// time — recomputing a 2024 day against a 2026 policy would silently rewrite
+  /// history. These are frozen facts about what happened under the rules then.
+  workedMinutes    Int @default(0)
+  breakMinutes     Int @default(0)
+  lateMinutes      Int @default(0)
+  earlyExitMinutes Int @default(0)
+  overtimeMinutes  Int @default(0)
+
+  /// The leave that covers this day, where one does. SetNull so cancelling a
+  /// leave leaves the day resolvable rather than deleting the attendance row.
+  leaveRequestId String?
+
+  remarks String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  employee     Employee       @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  leaveRequest LeaveRequest?  @relation(fields: [leaveRequestId], references: [id], onDelete: SetNull)
+  breaks       AttendanceBreak[]
+  corrections  AttendanceCorrectionRequest[]
+
+  /// One day, one record. The constraint that makes clock-in safe.
+  @@unique([employeeId, attendanceDate])
+  /// The directory's commonest query: one employee over a date range.
+  @@index([employeeId, attendanceDate])
+  /// And the team view: everybody on one date.
+  @@index([attendanceDate, status])
+  @@index([leaveRequestId])
+}
+
+/// One break within a day.
+///
+/// A table rather than a running total on the record, because "how long were the
+/// breaks" and "when were they" are different questions and the second cannot be
+/// answered by a number. The partial unique index in the migration allows at most
+/// one open break per record, so a double break-start is refused by the database.
+model AttendanceBreak {
+  id                 String @id @default(cuid())
+  attendanceRecordId String
+
+  startedAt DateTime
+  endedAt   DateTime?
+
+  /// Frozen at break end, for the same reason the record's minutes are.
+  minutes Int?
+
+  createdAt DateTime @default(now())
+
+  attendanceRecord AttendanceRecord @relation(fields: [attendanceRecordId], references: [id], onDelete: Cascade)
+
+  @@index([attendanceRecordId, startedAt])
+}
+
+/// "I forgot to clock out."
+///
+/// Holds what was there and what is asked for, so a reviewer sees both without
+/// the record having to be mutated first. The decision writes the attendance and
+/// the status in one transaction — a request that said APPROVED while the record
+/// was unchanged would be worse than no workflow at all.
+model AttendanceCorrectionRequest {
+  id                 String  @id @default(cuid())
+  attendanceRecordId String?
+  employeeId         String
+
+  /// The day being corrected. Kept even when the record is absent, because the
+  /// commonest correction is for a day with no record at all.
+  attendanceDate DateTime @db.Date
+
+  /// What the record held when the request was raised, for the reviewer's
+  /// benefit and as evidence afterwards. Null where there was no record.
+  currentClockInAt  DateTime?
+  currentClockOutAt DateTime?
+
+  requestedClockInAt  DateTime?
+  requestedClockOutAt DateTime?
+  requestedWorkMode   AttendanceWorkMode?
+
+  /// Required — a correction nobody explained is one nobody can review.
+  reason String
+
+  status AttendanceCorrectionStatus @default(PENDING)
+
+  /// Who decided and what they said. All null while PENDING, all present once
+  /// decided — paired by a CHECK, as the Phase 0.5 approval trail is.
+  decidedById    String?
+  decidedAt      DateTime?
+  decisionNote   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  attendanceRecord AttendanceRecord? @relation(fields: [attendanceRecordId], references: [id], onDelete: SetNull)
+  employee         Employee          @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  decidedBy        User?             @relation("AttendanceCorrectionDecidedBy", fields: [decidedById], references: [id], onDelete: SetNull)
+
+  @@index([employeeId, attendanceDate])
+  @@index([status, createdAt])
+}
+
+/// Extra hours worked, recorded for a future Payroll phase to consume.
+///
+/// Phase 2 records and approves; it computes no money. The hours come from the
+/// attendance record's overtimeMinutes, so this is a decision about hours already
+/// measured rather than a second measurement.
+model OvertimeRecord {
+  id         String @id @default(cuid())
+  employeeId String
+
+  overtimeDate DateTime @db.Date
+  minutes      Int
+
+  status OvertimeStatus @default(PENDING)
+  source AttendanceSource @default(SYSTEM)
+
+  remarks String?
+
+  decidedById String?
+  decidedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  employee  Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  decidedBy User?    @relation("OvertimeDecidedBy", fields: [decidedById], references: [id], onDelete: SetNull)
+
+  @@unique([employeeId, overtimeDate])
+  @@index([status, overtimeDate])
+}
+
+/// A company holiday.
+///
+/// Configurable rather than a hard-coded national calendar: the business decides
+/// which days it closes, and those differ by company, year and location. Scope is
+/// deliberately simple — an optional department — rather than a full location and
+/// calendar model nobody has asked for yet.
+model Holiday {
+  id   String @id @default(cuid())
+  name String
+
+  holidayDate DateTime @db.Date
+
+  description String?
+  isActive    Boolean @default(true)
+
+  /// Null means "the whole company". A department-scoped holiday applies only to
+  /// that department's employees.
+  departmentId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  department Department? @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  /// One holiday per date per scope. A partial unique index in the migration
+  /// handles the company-wide (null department) case, which a plain composite
+  /// unique cannot because NULLs never collide in Postgres.
+  @@index([holidayDate, isActive])
+  @@index([departmentId])
+}
+
+/// When the company expects people to work.
+///
+/// A focused model rather than rules scattered in code or a general policy
+/// engine: expected hours, grace and thresholds are exactly the values that
+/// change by business decision, and hard-coding "09:30 to 18:30" would mean a
+/// deploy to change an office's hours.
+///
+/// Times are minutes from midnight IST, not timestamps — "09:30" is a wall-clock
+/// rule that applies every day, and storing it as a Date would attach it to one.
+model AttendancePolicy {
+  id   String @id @default(cuid())
+  name String
+  code String @unique
+
+  /// Minutes from midnight IST. 570 = 09:30, 1110 = 18:30.
+  expectedStartMinute Int @default(570)
+  expectedEndMinute   Int @default(1110)
+
+  /// How late somebody may be before it counts as late.
+  graceMinutes Int @default(15)
+
+  /// Minimum worked minutes for a full day, and for a half day. Below the half
+  /// threshold the day is ABSENT; between the two it is HALF_DAY.
+  fullDayMinutes Int @default(480)
+  halfDayMinutes Int @default(240)
+
+  /// Worked minutes beyond this count as overtime.
+  overtimeThresholdMinutes Int @default(540)
+
+  /// Which weekdays are off, as ISO numbers (1 = Monday … 7 = Sunday).
+  ///
+  /// An array rather than seven booleans or a separate table: a week-off pattern
+  /// is read as a whole, never queried by individual day, and "Saturday and
+  /// Sunday" is one value rather than seven rows. Deliberately not assumed —
+  /// plenty of businesses work Saturdays.
+  weekOffDays Int[] @default([6, 7])
+
+  isActive Boolean @default(true)
+  /// Exactly one policy is the company default, enforced by a partial unique
+  /// index. An employee with no department policy falls back to it.
+  isDefault Boolean @default(false)
+
+  /// Null means company-wide. A department policy wins over the default.
+  departmentId String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  department Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+
+  @@index([isActive])
+}
+
+/// A kind of leave.
+model LeaveType {
+  id   String @id @default(cuid())
+  name String
+  code String @unique
+
+  description String?
+
+  /// Whether the day is paid. Recorded for a future Payroll phase; Phase 2
+  /// computes no money from it.
+  isPaid   Boolean @default(true)
+  isActive Boolean @default(true)
+
+  halfDayAllowed   Boolean @default(true)
+  approvalRequired Boolean @default(true)
+
+  accrualEnabled      Boolean @default(false)
+  carryForwardEnabled Boolean @default(false)
+  /// Maximum days carried into the next period. Null means unlimited, which is
+  /// different from zero.
+  carryForwardLimit   Decimal? @db.Decimal(5, 2)
+
+  /// Foundation only — Phase 2 stores the flag and implements no payout.
+  encashmentAllowed Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  policies LeavePolicy[]
+  balances LeaveBalance[]
+  requests LeaveRequest[]
+  ledger   LeaveLedgerEntry[]
+
+  @@index([isActive, name])
+}
+
+/// The rules for one leave type, optionally narrowed to a department.
+model LeavePolicy {
+  id          String @id @default(cuid())
+  leaveTypeId String
+
+  /// Null means it applies company-wide.
+  departmentId String?
+
+  /// Days granted per year. Decimal because half days are real.
+  annualEntitlement Decimal @db.Decimal(5, 2) @default(0)
+
+  /// How often accrual runs. Null with accrualEnabled false means the whole
+  /// entitlement is allocated up front.
+  accrualPerPeriod Decimal? @db.Decimal(5, 2)
+
+  /// Days of notice required before the start date.
+  minNoticeDays Int @default(0)
+  /// Longest unbroken stretch allowed. Null means no limit.
+  maxConsecutiveDays Int?
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  leaveType  LeaveType   @relation(fields: [leaveTypeId], references: [id], onDelete: Cascade)
+  department Department? @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  /// One policy per type per scope.
+  @@unique([leaveTypeId, departmentId])
+  @@index([isActive])
+}
+
+/// One employee's balance of one leave type for one period.
+///
+/// The columns here are a *cache* of the ledger below, maintained in the same
+/// transaction as every ledger write. Both exist because each answers a question
+/// the other cannot: the balance answers "how much is left" in one indexed read,
+/// and the ledger answers "why" — which is the question that actually gets asked
+/// when somebody disputes a number.
+///
+/// `available` is deliberately NOT a column. It is allocated + accrued +
+/// carriedForward + adjusted − used − reserved, and a stored copy would be a
+/// fifth number free to disagree with the four it comes from.
+model LeaveBalance {
+  id          String @id @default(cuid())
+  employeeId  String
+  leaveTypeId String
+
+  /// The leave year, as a plain integer — 2026. A year rather than a date range
+  /// because every policy here is annual; a mid-year policy change does not
+  /// create a second period.
+  periodYear Int
+
+  allocated      Decimal @db.Decimal(6, 2) @default(0)
+  accrued        Decimal @db.Decimal(6, 2) @default(0)
+  carriedForward Decimal @db.Decimal(6, 2) @default(0)
+  /// Consumed by approved leave.
+  used           Decimal @db.Decimal(6, 2) @default(0)
+  /// Held by requests awaiting a decision, so two pending requests cannot both
+  /// be approved into the same remaining day.
+  reserved       Decimal @db.Decimal(6, 2) @default(0)
+  /// Signed: an HR correction may add or remove.
+  adjusted       Decimal @db.Decimal(6, 2) @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  employee  Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  leaveType LeaveType @relation(fields: [leaveTypeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, leaveTypeId, periodYear])
+  @@index([employeeId, periodYear])
+}
+
+/// Every movement of every balance, append-only.
+///
+/// The reason a balance can be trusted. A number somebody can edit is a number
+/// nobody can defend; a number that is the sum of its ledger can always be
+/// explained, and a wrong one can be traced to the row that caused it.
+///
+/// Never updated and never deleted — a correction is a new row, not an edit.
+model LeaveLedgerEntry {
+  id          String @id @default(cuid())
+  employeeId  String
+  leaveTypeId String
+  periodYear  Int
+
+  reason LeaveLedgerReason
+  /// Signed: positive adds to the balance, negative takes from it.
+  days   Decimal @db.Decimal(6, 2)
+
+  /// The request that caused this, where one did. SetNull so the trail survives
+  /// a request being removed.
+  leaveRequestId String?
+
+  note String?
+
+  /// Who caused it. Null for system accrual.
+  performedById String?
+
+  createdAt DateTime @default(now())
+
+  employee     Employee      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  leaveType    LeaveType     @relation(fields: [leaveTypeId], references: [id], onDelete: Cascade)
+  leaveRequest LeaveRequest? @relation(fields: [leaveRequestId], references: [id], onDelete: SetNull)
+  performedBy  User?         @relation("LeaveLedgerBy", fields: [performedById], references: [id], onDelete: SetNull)
+
+  @@index([employeeId, leaveTypeId, periodYear])
+  @@index([leaveRequestId])
+}
+
+/// An application for leave.
+model LeaveRequest {
+  id          String @id @default(cuid())
+  employeeId  String
+  leaveTypeId String
+
+  startDate DateTime @db.Date
+  endDate   DateTime @db.Date
+
+  /// A half day is a single date by definition, which a CHECK enforces.
+  isHalfDay     Boolean        @default(false)
+  halfDayPeriod HalfDayPeriod?
+
+  /// Working days, excluding holidays and week-offs. Computed once by the shared
+  /// calculator and frozen: recomputing later against a changed holiday calendar
+  /// would silently restate how much leave somebody took.
+  requestedDays Decimal @db.Decimal(5, 2)
+
+  reason String
+
+  status LeaveRequestStatus @default(PENDING)
+
+  /// Who decided and when. Always both for APPROVED and REJECTED, never either
+  /// for PENDING — the leave_decision_consistency CHECK enforces that pairing.
+  ///
+  /// CANCELLED is deliberately unconstrained on these: a request withdrawn before
+  /// a decision has no decider, while an approved leave later called off KEEPS the
+  /// approver's name. Erasing it would destroy the record of who approved the
+  /// leave, which 20261008090000 corrected after the first version forced exactly
+  /// that choice.
+  decidedById  String?
+  decidedAt    DateTime?
+  decisionNote String?
+
+  /// What marks a cancellation, whichever path it took. Required whenever the
+  /// status is CANCELLED (leave_cancelled_stamped).
+  cancelledAt     DateTime?
+  cancellationNote String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  employee   Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  leaveType  LeaveType @relation(fields: [leaveTypeId], references: [id], onDelete: Restrict)
+  decidedBy  User?     @relation("LeaveDecidedBy", fields: [decidedById], references: [id], onDelete: SetNull)
+
+  attendance AttendanceRecord[]
+  ledger     LeaveLedgerEntry[]
+
+  @@index([employeeId, startDate])
+  @@index([employeeId, status])
+  @@index([status, startDate])
+  @@index([leaveTypeId])
+}
+
+// ---------------------------------------------------------------------------
+//  HR Phase 3 — Recruitment / ATS, Onboarding & Probation
+// ---------------------------------------------------------------------------
+//
+// ### A candidate is not an employee
+//
+// The architectural decision this whole phase rests on. `Candidate` holds
+// somebody the business is considering; `Employee` holds somebody it employs.
+// They are separate tables with separate lifecycles, joined only when onboarding
+// reaches the point of creating the employment record — and even then the
+// candidate and application survive as history rather than being transformed.
+//
+// So there is no CandidateEmployee, no RecruitmentEmployee, and no second
+// employee-id scheme: `allocateEmployeeId` from Phase 1 is the only generator.
+//
+// ### A candidate may apply more than once
+//
+// `Candidate` and `Application` are separate for that reason. Somebody rejected
+// for one role may be right for the next, and folding the application into the
+// candidate would mean either losing that history or duplicating the person.
+//
+// ### Time
+//
+// Calendar days are `@db.Date` interpreted in IST; instants are timestamps taken
+// from Postgres `now()`. Identical to Phase 2 — see `utils/hr-time.ts`. No second
+// timezone implementation.
+
+/// Where a job requisition stands.
+///
+/// DRAFT and PENDING_APPROVAL are separate because a half-written requisition is
+/// not the same thing as one waiting on a decision — the second has somebody
+/// else's queue to appear in. PUBLISHED is distinct from APPROVED so a signed-off
+/// role can be held back until the business is ready to take applications.
+enum JobRequisitionStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  PUBLISHED
+  /// Open but temporarily not accepting applications.
+  PAUSED
+  /// Filled or abandoned. Terminal, and keeps its applications readable.
+  CLOSED
+  CANCELLED
+}
+
+enum JobPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+/// Where somebody heard about the role.
+///
+/// A fixed list rather than free text so the business can later ask which source
+/// produces hires — the one recruitment figure worth measuring, and impossible to
+/// answer from prose typed by five different recruiters.
+enum CandidateSource {
+  DIRECT
+  REFERRAL
+  JOB_PORTAL
+  WALK_IN
+  CAMPUS
+  AGENCY
+  SOCIAL_MEDIA
+  OTHER
+}
+
+/// The ATS pipeline, in order.
+///
+/// The order matters: the transition map in `shared/src/utils/ats-pipeline.ts`
+/// is built from it, and "forward" means later in this list. A stage is never
+/// skipped except through the explicitly permitted shortcuts documented there.
+///
+/// JOB_CREATED and PUBLISHED belong to the *requisition* rather than to an
+/// application, and are deliberately absent here: an application cannot exist
+/// before its job is published, so those two are states of the job and including
+/// them would give every application two stages it could never be in.
+enum ApplicationStage {
+  APPLICATION
+  SCREENING
+  SHORTLISTED
+  HR_INTERVIEW
+  DEPARTMENT_INTERVIEW
+  ASSESSMENT
+  FINAL_INTERVIEW
+  SELECTED
+  OFFER
+  OFFER_ACCEPTED
+  BACKGROUND_VERIFICATION
+  ONBOARDING
+  JOINED
+}
+
+/// Whether an application is still live.
+///
+/// Separate from the stage, which says *where* it is. An application can be
+/// WITHDRAWN at any stage, and conflating the two would mean a withdrawal erasing
+/// the record of how far somebody got.
+enum ApplicationStatus {
+  ACTIVE
+  /// Rejected by the business. The stage records where it ended.
+  REJECTED
+  /// Withdrawn by the candidate.
+  WITHDRAWN
+  /// Reached JOINED. Terminal and successful.
+  HIRED
+  /// The offer lapsed or the candidate declined.
+  DECLINED
+}
+
+enum InterviewType {
+  HR
+  DEPARTMENT
+  TECHNICAL
+  FINAL
+  OTHER
+}
+
+enum InterviewStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+/// What an interviewer concluded.
+///
+/// Five points rather than three, because the middle of a three-point scale
+/// collects everything anybody is unsure about and tells a hiring manager nothing.
+enum InterviewRecommendation {
+  STRONG_YES
+  YES
+  MAYBE
+  NO
+  STRONG_NO
+}
+
+enum AssessmentStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  PASSED
+  FAILED
+}
+
+enum OfferStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  REJECTED
+  EXPIRED
+  WITHDRAWN
+}
+
+enum BackgroundCheckType {
+  IDENTITY
+  EDUCATION
+  EMPLOYMENT
+  CRIMINAL
+  REFERENCE
+  ADDRESS
+  OTHER
+}
+
+enum BackgroundCheckStatus {
+  PENDING
+  IN_PROGRESS
+  CLEAR
+  FLAGGED
+  FAILED
+  /// Deliberately not run. A recorded decision, not an omission.
+  WAIVED
+}
+
+/// Where an onboarding stands.
+///
+/// Mirrors the checklist the business actually works through. EMPLOYEE_CREATED is
+/// the hinge: before it there is no employment record, after it the Phase 1
+/// Employee exists and every later stage is about them.
+enum OnboardingStage {
+  OFFER_ACCEPTED
+  DOCUMENTS
+  VERIFICATION
+  EMPLOYEE_CREATED
+  ACCOUNT
+  ASSETS
+  POLICIES
+  TRAINING
+  DEPARTMENT_INTRODUCTION
+  MANAGER_ASSIGNED
+  FIRST_WEEK
+  DAY_30
+  DAY_60
+  DAY_90
+  PROBATION_DECISION
+  COMPLETED
+}
+
+enum OnboardingTaskStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  /// Deliberately not done — a recorded decision rather than a silent gap.
+  SKIPPED
+  /// Waiting on something outside the assignee's control.
+  BLOCKED
+}
+
+/// Who owns an onboarding task.
+///
+/// Generic on purpose: ASSETS and TRAINING are foundations in this phase, so the
+/// category is how a future Asset or Training module finds its work without this
+/// table knowing anything about either.
+enum OnboardingTaskCategory {
+  DOCUMENTS
+  IT
+  HR
+  MANAGER
+  TRAINING
+  POLICY
+  DEPARTMENT
+}
+
+enum ProbationStatus {
+  NOT_STARTED
+  ACTIVE
+  EXTENDED
+  CONFIRMED
+  TERMINATED
+}
+
+enum ProbationReviewType {
+  FIRST_WEEK
+  DAY_30
+  DAY_60
+  DAY_90
+}
+
+enum ProbationReviewStatus {
+  SCHEDULED
+  COMPLETED
+  MISSED
+}
+
+enum ProbationDecision {
+  CONFIRM
+  EXTEND
+  TERMINATE
+}
+
+/// A role the business is hiring for.
+model JobRequisition {
+  id String @id @default(cuid())
+
+  /// The stable reference people quote — "ENG-2026-004". Unique.
+  code  String @unique
+  title String
+
+  departmentId  String?
+  designationId String?
+
+  /// The employee who owns the hire, and the recruiter running it. Both SetNull:
+  /// a requisition outlives whoever was handling it.
+  hiringManagerId String?
+  recruiterId     String?
+
+  employmentType EmploymentType @default(FULL_TIME)
+  workMode       WorkMode       @default(ON_SITE)
+  location       String?
+
+  /// How many people are being hired. A CHECK keeps it positive.
+  openings Int @default(1)
+
+  description    String?
+  requirements   String?
+  responsibilities String?
+
+  /// Informational only. Phase 3 computes nothing from these and there is no
+  /// payroll anywhere in this module — a range exists so a recruiter can state
+  /// what was advertised, nothing more.
+  salaryRangeMin Decimal? @db.Decimal(12, 2)
+  salaryRangeMax Decimal? @db.Decimal(12, 2)
+  salaryCurrency String?  @default("INR")
+
+  status   JobRequisitionStatus @default(DRAFT)
+  priority JobPriority          @default(NORMAL)
+
+  targetJoinDate DateTime? @db.Date
+
+  /// Publication is recorded rather than inferred from the status, so "when did
+  /// this go live" survives a later pause or close.
+  publishedAt DateTime?
+  closedAt    DateTime?
+
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  department    Department?  @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  designation   Designation? @relation(fields: [designationId], references: [id], onDelete: SetNull)
+  hiringManager Employee?    @relation("JobHiringManager", fields: [hiringManagerId], references: [id], onDelete: SetNull)
+  recruiter     Employee?    @relation("JobRecruiter", fields: [recruiterId], references: [id], onDelete: SetNull)
+  createdBy     User         @relation("JobCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  applications Application[]
+  offers       Offer[]
+
+  @@index([status, priority, createdAt])
+  @@index([departmentId, status])
+  @@index([recruiterId])
+  @@index([hiringManagerId])
+}
+
+/// Somebody the business is considering.
+///
+/// NOT an employee, and never becomes one: onboarding creates a separate Employee
+/// row and this record survives as the history of how that person was found.
+model Candidate {
+  id String @id @default(cuid())
+
+  firstName String
+  lastName  String
+
+  /// Lower-cased on the way in and unique, which is the duplicate guard: one
+  /// person is one candidate however many roles they apply for. Email rather than
+  /// phone because a shared household phone is real and a shared mailbox is not.
+  email String @unique
+
+  /// Not unique, deliberately. Families and agencies share numbers, and a unique
+  /// constraint here would refuse a legitimate second candidate.
+  phone    String?
+  location String?
+
+  source       CandidateSource @default(DIRECT)
+  /// Who referred them, for a REFERRAL. Free text: a referrer may not be an
+  /// employee, so a foreign key would refuse the commonest case.
+  sourceDetail String?
+
+  /// Whole years, as stated. A CHECK keeps it sane.
+  totalExperienceYears Decimal? @db.Decimal(4, 1)
+  currentEmployer      String?
+  currentDesignation   String?
+
+  /// Comma-free list of skills. An array rather than a join table: skills are read
+  /// as a whole and never queried individually in this phase.
+  skills String[]
+
+  /// Internal notes. Never shown to a candidate — there is no candidate-facing
+  /// route in this CRM at all, which is the simplest way to guarantee it.
+  notes String?
+
+  isActive Boolean @default(true)
+
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy User @relation("CandidateCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  applications Application[]
+  documents    CandidateDocument[]
+
+  @@index([isActive, lastName, firstName])
+  @@index([source])
+}
+
+/// One candidate's pursuit of one role.
+///
+/// The join that makes "apply to several jobs" work without duplicating the
+/// person. Unique on (candidateId, jobRequisitionId): the same person cannot have
+/// two live applications for one role, enforced by the database rather than by a
+/// check two concurrent requests could both pass.
+model Application {
+  id               String @id @default(cuid())
+  candidateId      String
+  jobRequisitionId String
+
+  appliedAt DateTime @default(now())
+  /// How this particular application arrived, which can differ from how the
+  /// candidate was first found.
+  source    CandidateSource @default(DIRECT)
+
+  currentStage ApplicationStage  @default(APPLICATION)
+  status       ApplicationStatus @default(ACTIVE)
+
+  /// Who is handling it. Defaults from the requisition but may differ.
+  recruiterId     String?
+  hiringManagerId String?
+
+  /// Screening, recorded on the application because it is a judgement about this
+  /// application rather than about the candidate.
+  screeningScore Int?
+  screeningNotes String?
+
+  /// Required whenever the status is REJECTED — a CHECK enforces it. "No" with no
+  /// reason is the commonest complaint about every hiring process.
+  rejectionReason String?
+
+  selectedById String?
+  selectedAt   DateTime?
+
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  candidate      Candidate      @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  jobRequisition JobRequisition @relation(fields: [jobRequisitionId], references: [id], onDelete: Cascade)
+  recruiter      Employee?      @relation("ApplicationRecruiter", fields: [recruiterId], references: [id], onDelete: SetNull)
+  hiringManager  Employee?      @relation("ApplicationHiringManager", fields: [hiringManagerId], references: [id], onDelete: SetNull)
+  selectedBy     User?          @relation("ApplicationSelectedBy", fields: [selectedById], references: [id], onDelete: SetNull)
+
+  stageHistory ApplicationStageHistory[]
+  interviews   Interview[]
+  assessments  Assessment[]
+  offers       Offer[]
+  backgroundChecks BackgroundCheck[]
+  onboarding   OnboardingRecord?
+
+  /// One live application per candidate per role.
+  @@unique([candidateId, jobRequisitionId])
+  @@index([jobRequisitionId, currentStage])
+  @@index([currentStage, status])
+  @@index([candidateId])
+  @@index([recruiterId])
+}
+
+/// Every stage an application passed through, append-only.
+///
+/// No `updatedAt`, deliberately: a row is what happened, not what somebody later
+/// decided it should say. The pipeline is auditable by replaying these rather than
+/// by trusting the application's current stage.
+model ApplicationStageHistory {
+  id            String @id @default(cuid())
+  applicationId String
+
+  /// Null for the first entry — an application starts somewhere rather than
+  /// moving from nowhere.
+  fromStage ApplicationStage?
+  toStage   ApplicationStage
+
+  reason String?
+
+  /// Who moved it. SetNull so a departed recruiter's decisions stay readable.
+  performedById String?
+  createdAt     DateTime @default(now())
+
+  application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  performedBy User?       @relation("StageHistoryBy", fields: [performedById], references: [id], onDelete: SetNull)
+
+  @@index([applicationId, createdAt])
+}
+
+/// A scheduled conversation with a candidate.
+model Interview {
+  id            String @id @default(cuid())
+  applicationId String
+
+  interviewType InterviewType
+  /// Which round of this type, so two department interviews are distinguishable.
+  round         Int           @default(1)
+
+  /// A real moment, not a calendar day: an interview happens at a time.
+  scheduledAt     DateTime
+  durationMinutes Int      @default(60)
+
+  /// Where, or a meeting link. Plain metadata — Phase 3 integrates no calendar or
+  /// video provider, and inventing one would mean inventing its failure modes.
+  location   String?
+  meetingUrl String?
+
+  status InterviewStatus @default(SCHEDULED)
+
+  /// The lead interviewer. Separate from participants because somebody has to own
+  /// the feedback, and "everyone" owns nothing.
+  interviewerId String?
+
+  completedAt DateTime?
+
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  interviewer Employee?   @relation("InterviewLead", fields: [interviewerId], references: [id], onDelete: SetNull)
+  createdBy   User        @relation("InterviewCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  participants InterviewParticipant[]
+  feedback     InterviewFeedback[]
+
+  @@index([applicationId, scheduledAt])
+  @@index([status, scheduledAt])
+  @@index([interviewerId, scheduledAt])
+}
+
+/// Somebody attending an interview.
+///
+/// A table rather than an array so each participant can be identified for
+/// access control: an interviewer reaches the interviews they are on, and that
+/// question needs rows to join against.
+model InterviewParticipant {
+  id          String @id @default(cuid())
+  interviewId String
+  employeeId  String
+
+  createdAt DateTime @default(now())
+
+  interview Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  employee  Employee  @relation("InterviewParticipant", fields: [employeeId], references: [id], onDelete: Cascade)
+
+  /// One person is on an interview once.
+  @@unique([interviewId, employeeId])
+  @@index([employeeId])
+}
+
+/// What one interviewer concluded.
+///
+/// Separate from the interview so each participant gives their own view: one
+/// feedback column on the interview would make the lead's opinion the only one
+/// recorded, which is the opposite of why several people attend.
+///
+/// `strengths`, `concerns` and `notes` are internal. There is no candidate-facing
+/// route in this CRM, so they cannot leak to the subject by construction.
+model InterviewFeedback {
+  id          String @id @default(cuid())
+  interviewId String
+  /// The employee giving it.
+  employeeId  String
+
+  /// 1–5. A CHECK enforces the range.
+  rating         Int?
+  recommendation InterviewRecommendation
+
+  strengths String?
+  concerns  String?
+  notes     String?
+
+  submittedAt DateTime @default(now())
+
+  interview Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  employee  Employee  @relation("FeedbackBy", fields: [employeeId], references: [id], onDelete: Cascade)
+
+  /// One person's feedback per interview, amended rather than duplicated.
+  @@unique([interviewId, employeeId])
+  @@index([employeeId])
+}
+
+/// A test or exercise set for a candidate.
+///
+/// Foundation only: Phase 3 records what was set and what came back. There is no
+/// assessment platform, no automatic scoring and no candidate-facing submission —
+/// a reviewer enters the result.
+model Assessment {
+  id            String @id @default(cuid())
+  applicationId String
+
+  /// What kind of exercise. Free text because the set of assessments a business
+  /// uses is its own, and an enum would need a migration per new test.
+  assessmentType String
+  title          String
+
+  assignedAt DateTime  @default(now())
+  dueAt      DateTime?
+
+  /// Score out of maxScore. Both nullable until the result is entered.
+  score    Decimal? @db.Decimal(6, 2)
+  maxScore Decimal? @db.Decimal(6, 2)
+
+  status AssessmentStatus @default(PENDING)
+
+  reviewerId String?
+  reviewedAt DateTime?
+  notes      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  reviewer    Employee?   @relation("AssessmentReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+
+  @@index([applicationId, status])
+  @@index([status, dueAt])
+}
+
+/// What the business offered.
+model Offer {
+  id               String @id @default(cuid())
+  applicationId    String
+  /// Denormalised from the application so an offer can be read without it, and so
+  /// the role offered survives a requisition being re-scoped.
+  jobRequisitionId String
+
+  /// The reference quoted in correspondence. Unique.
+  code String @unique
+
+  position      String
+  departmentId  String?
+  designationId String?
+
+  employmentType EmploymentType @default(FULL_TIME)
+  workMode       WorkMode       @default(ON_SITE)
+  location       String?
+
+  proposedJoiningDate DateTime @db.Date
+
+  /// Informational, as on the requisition. **No payroll and no bank or tax
+  /// detail anywhere in this phase** — an offer records what was communicated so
+  /// a later Payroll module has a documented starting point, and nothing else.
+  annualPackage   Decimal? @db.Decimal(12, 2)
+  packageCurrency String?  @default("INR")
+  benefitsSummary String?
+
+  /// When the offer lapses if unanswered. A CHECK keeps it after the offer date.
+  expiresOn DateTime? @db.Date
+
+  status OfferStatus @default(DRAFT)
+
+  sentAt     DateTime?
+  /// Both stamped together with the status — a CHECK enforces the pairing, so a
+  /// decided offer can always say when.
+  respondedAt DateTime?
+  /// Required when REJECTED or WITHDRAWN.
+  responseNote String?
+
+  /// The offer letter itself, where one was stored. SecureDocument, never a
+  /// public URL.
+  secureDocumentId String? @unique
+
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  application    Application     @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  jobRequisition JobRequisition  @relation(fields: [jobRequisitionId], references: [id], onDelete: Cascade)
+  department     Department?     @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  designation    Designation?    @relation(fields: [designationId], references: [id], onDelete: SetNull)
+  secureDocument SecureDocument? @relation("OfferLetter", fields: [secureDocumentId], references: [id], onDelete: SetNull)
+  createdBy      User            @relation("OfferCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([applicationId, status])
+  @@index([status, expiresOn])
+}
+
+/// One background check on one application.
+///
+/// Foundation: Phase 3 records that a check was requested and what came back. No
+/// verification provider is integrated.
+model BackgroundCheck {
+  id            String @id @default(cuid())
+  applicationId String
+
+  checkType BackgroundCheckType
+  status    BackgroundCheckStatus @default(PENDING)
+
+  requestedAt DateTime  @default(now())
+  completedAt DateTime?
+
+  /// What the check found. Internal — a FLAGGED result is exactly the kind of
+  /// thing that must not reach anybody without HR_RECRUITMENT.
+  result String?
+  notes  String?
+
+  /// Who ran it. Free text: a verification agency is not an employee.
+  verifierName String?
+  verifiedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  verifiedBy  User?       @relation("BackgroundVerifiedBy", fields: [verifiedById], references: [id], onDelete: SetNull)
+  documents   CandidateDocument[]
+
+  /// One check of each type per application, re-run by amending rather than
+  /// accumulating rows nobody can order.
+  @@unique([applicationId, checkType])
+  @@index([status, requestedAt])
+}
+
+/// Metadata for one confidential candidate file.
+///
+/// The bytes are in SecureDocument — authenticated Cloudinary delivery, no stored
+/// URL, short-lived signed links. This adds only what recruitment needs: which
+/// candidate, what kind, and which background check it supports.
+///
+/// Deliberately a separate table from `EmployeeDocument` rather than a widened
+/// one: a candidate is not an employee, and a shared table would need a nullable
+/// owner on both sides plus a CHECK to stop both being set at once.
+model CandidateDocument {
+  id          String @id @default(cuid())
+  candidateId String
+
+  secureDocumentId String @unique
+
+  documentType EmployeeDocumentType
+  title        String
+
+  /// Set when the document was supplied for a background check.
+  backgroundCheckId String?
+
+  verificationStatus DocumentVerificationStatus @default(PENDING)
+  verifiedById       String?
+  verifiedAt         DateTime?
+
+  uploadedById String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  candidate       Candidate        @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  secureDocument  SecureDocument   @relation("CandidateDocumentFile", fields: [secureDocumentId], references: [id], onDelete: Cascade)
+  backgroundCheck BackgroundCheck? @relation(fields: [backgroundCheckId], references: [id], onDelete: SetNull)
+  verifiedBy      User?            @relation("CandidateDocumentVerifiedBy", fields: [verifiedById], references: [id], onDelete: SetNull)
+  uploadedBy      User             @relation("CandidateDocumentUploadedBy", fields: [uploadedById], references: [id], onDelete: Restrict)
+
+  @@index([candidateId, documentType])
+  @@index([backgroundCheckId])
+}
+
+/// Bringing an accepted candidate into the business.
+///
+/// One per application, which is what stops two onboardings — and therefore two
+/// employees — being created for one hire. `employeeId` is unique for the same
+/// reason: one onboarding produces at most one employment record, enforced by the
+/// database rather than by a service remembering.
+model OnboardingRecord {
+  id            String @id @default(cuid())
+  applicationId String @unique
+
+  /// The employment record this onboarding produced, once it exists. Null until
+  /// the EMPLOYEE_CREATED stage. SetNull so removing an employee does not delete
+  /// the record of how they were hired.
+  employeeId String? @unique
+
+  stage OnboardingStage @default(OFFER_ACCEPTED)
+
+  /// The agreed start. A calendar day, like every other HR date.
+  joiningDate DateTime @db.Date
+  actualJoiningDate DateTime? @db.Date
+
+  /// Where they will sit, once decided. Assigned during onboarding rather than
+  /// fixed at offer, because these legitimately change.
+  departmentId  String?
+  designationId String?
+  managerId     String?
+
+  completedAt DateTime?
+
+  notes String?
+
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  application  Application  @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  employee     Employee?    @relation("OnboardingEmployee", fields: [employeeId], references: [id], onDelete: SetNull)
+  department   Department?  @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  designation  Designation? @relation(fields: [designationId], references: [id], onDelete: SetNull)
+  manager      Employee?    @relation("OnboardingManager", fields: [managerId], references: [id], onDelete: SetNull)
+  createdBy    User         @relation("OnboardingCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  tasks OnboardingTask[]
+
+  @@index([stage, joiningDate])
+  @@index([joiningDate])
+}
+
+/// One thing somebody must do before or just after a hire starts.
+///
+/// Generic by design. ASSETS, TRAINING and POLICIES are foundations in this
+/// phase: the task records that a laptop is owed or a policy must be
+/// acknowledged, and a future Asset or Training module finds its work by category
+/// without this table knowing anything about either. **No fake asset or course
+/// rows are created** — there is no system to create them in.
+model OnboardingTask {
+  id                 String @id @default(cuid())
+  onboardingRecordId String
+
+  title    String
+  category OnboardingTaskCategory
+  detail   String?
+
+  /// Who owes it. An employee, because every assignee here is internal — a
+  /// candidate's own document upload is recorded as an HR task on their behalf.
+  assigneeId String?
+
+  dueOn DateTime? @db.Date
+
+  status OnboardingTaskStatus @default(PENDING)
+
+  completedAt   DateTime?
+  completedById String?
+  notes         String?
+
+  /// Ordering within the checklist, so it reads in the sequence the business works
+  /// through rather than by creation time.
+  sortOrder Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// HR Phase 4 — the real training this task stands for, once linked.
+  ///
+  /// Nullable and added additively, which is the whole integration. Phase 3
+  /// created a TRAINING task category with no course behind it, deliberately, so
+  /// that Phase 4 would not inherit a fake model. Linking an enrollment here lets
+  /// the task's status follow actual training progress **without the task losing
+  /// its own identity, ordering or history** — it is still the onboarding
+  /// checklist's row, not a view of a course.
+  ///
+  /// SetNull rather than Cascade: withdrawing a training assignment must not
+  /// delete the onboarding task that asked for it. The task reverts to unlinked
+  /// and somebody decides what to do, which is the honest outcome.
+  trainingEnrollmentId String?
+
+  onboardingRecord OnboardingRecord @relation(fields: [onboardingRecordId], references: [id], onDelete: Cascade)
+  trainingEnrollment TrainingEnrollment? @relation(fields: [trainingEnrollmentId], references: [id], onDelete: SetNull)
+  assignee         Employee?        @relation("OnboardingTaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  completedBy      User?            @relation("OnboardingTaskCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+
+  @@index([onboardingRecordId, sortOrder])
+  @@index([status, dueOn])
+  @@index([assigneeId, status])
+}
+
+/// One employee's probation.
+///
+/// Unique on `employeeId`: a person is on probation once per employment. A second
+/// probation would be a second employment, which is a new Employee record.
+model ProbationRecord {
+  id         String @id @default(cuid())
+  employeeId String @unique
+
+  startDate DateTime @db.Date
+  /// Moves when probation is extended; the original is kept in the history below.
+  endDate   DateTime @db.Date
+
+  status ProbationStatus @default(ACTIVE)
+
+  /// Who assesses it. Usually the reporting manager, but recorded separately
+  /// because the assessor and the manager can legitimately differ.
+  managerId String?
+
+  /// The decision, once made. All three move together — a CHECK enforces it, so a
+  /// decided probation can always say who decided and why.
+  decision       ProbationDecision?
+  decisionReason String?
+  decidedById    String?
+  decidedAt      DateTime?
+
+  /// Where an extension moved the end date to, kept so the original term is not
+  /// lost to the `endDate` column.
+  originalEndDate DateTime? @db.Date
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  employee  Employee @relation("ProbationEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+  manager   Employee? @relation("ProbationManager", fields: [managerId], references: [id], onDelete: SetNull)
+  decidedBy User?    @relation("ProbationDecidedBy", fields: [decidedById], references: [id], onDelete: SetNull)
+
+  reviews ProbationReview[]
+
+  @@index([status, endDate])
+  @@index([managerId, status])
+}
+
+/// A first-week, 30, 60 or 90 day review.
+///
+/// Probation-specific and deliberately thin: this is not performance management.
+/// There are no goals, no competencies and no calibration — those are Phase 4, and
+/// building them here would mean guessing at a framework nobody has described.
+model ProbationReview {
+  id                String @id @default(cuid())
+  probationRecordId String
+
+  reviewType ProbationReviewType
+  /// When it is due. The service schedules all four when probation starts.
+  scheduledOn DateTime @db.Date
+
+  status ProbationReviewStatus @default(SCHEDULED)
+
+  reviewerId String?
+
+  /// 1–5, like interview feedback. A CHECK enforces the range.
+  rating         Int?
+  comments       String?
+  recommendation InterviewRecommendation?
+
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  probationRecord ProbationRecord @relation(fields: [probationRecordId], references: [id], onDelete: Cascade)
+  reviewer        Employee?       @relation("ProbationReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+
+  /// One review of each type per probation.
+  @@unique([probationRecordId, reviewType])
+  @@index([status, scheduledOn])
+}
+
+/// One allocated recruitment reference sequence.
+///
+/// The same mechanism as `PostSalesCaseCounter` and `EmployeeIdCounter`, and
+/// present for the same reason: `SELECT max(...) + 1` read by two concurrent
+/// creates returns the same number to both, and a requisition code is quoted in
+/// correspondence — two roles sharing "ENG-2026-004" is a real confusion.
+///
+/// `scope` is the key, holding a kind-and-period string such as "JOB-2026" or
+/// "OFFER-2026". A second series is a second row rather than a migration.
+model RecruitmentCodeCounter {
+  scope     String   @id
+  lastValue Int      @default(0)
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+//  HR Phase 4 — Training & Learning Management
+// ---------------------------------------------------------------------------
+//
+// ### The journey is data, not a code path
+//
+// The business's required sequence — company introduction, product training,
+// customer psychology, communication, customer experience, productivity tools,
+// policies, knowledge test, department training, department test, practical,
+// shadowing, final assessment, qualified — is expressed as **ordered
+// TrainingModule rows inside a TrainingProgram**, with per-program requirement
+// flags saying which gates must pass.
+//
+// It is deliberately NOT a chain of service conditionals. A hard-coded sequence
+// would mean every department that trains differently needs a code change, and the
+// first exception would be expressed as an `if` nobody can find later. So
+// `TrainingProgram` carries the policy (passing score, attempt limit, whether a
+// practical and a shadowing sign-off are required) and the modules carry the order.
+//
+// ### Eleven tables, and why not more
+//
+// The brief lists twenty candidate concepts. Several collapse without losing
+// anything:
+//
+//   Course and Program are one thing here. A "course" that is not a program is a
+//   distinction with no behaviour behind it in this phase — both would carry the
+//   same policy fields and the same enrollment.
+//
+//   Lesson is TrainingModule's content, not its own table. A module with one
+//   ordered body of material is what the journey actually needs; a separate
+//   Lesson table would be a second ordering to keep in step for no present gain.
+//
+//   TrainingSession, TrainingBatch and TrainingTrainer are absent. Cohort
+//   scheduling is a real feature, but nothing in the required journey depends on
+//   it, and an unused batch table is a migration to undo later. The trainer is
+//   recorded where it matters — on the practical reviewer and the shadowing mentor.
+//
+//   TrainingCertificate is a field on TrainingQualification, not a table. A
+//   certificate with no issuer, template or revocation story is a number and a
+//   date, and those fit on the record that grants them.
+//
+// ### Scores
+//
+// Decimal(5,2) throughout — never a float. A pass mark of 80 against a score of
+// 79.995 must not round into a pass, and `0.1 + 0.2 !== 0.3` is exactly the class
+// of bug that decides whether somebody is qualified for live work.
+
+/// Where a program is in its own lifecycle.
+///
+/// DRAFT is separate from ACTIVE because a half-built program must not be
+/// assignable — somebody would be enrolled into a course with no modules.
+/// ARCHIVED keeps existing enrollments readable while refusing new ones, which is
+/// why there is no delete.
+enum TrainingProgramStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+/// What kind of module this is, which decides how it is completed.
+///
+/// The distinction is load-bearing: a LESSON is completed by the learner marking
+/// it read, an ASSESSMENT by passing it, a PRACTICAL by somebody else approving
+/// it, and SHADOWING by a mentor signing it off. The completion rule follows the
+/// kind, which is what lets one ordered list express the whole journey.
+enum TrainingModuleKind {
+  LESSON
+  ASSESSMENT
+  PRACTICAL
+  SHADOWING
+}
+
+/// Where one employee's enrollment stands.
+enum TrainingEnrollmentStatus {
+  /// Assigned, not opened.
+  NOT_STARTED
+  IN_PROGRESS
+  /// Every required gate passed.
+  COMPLETED
+  /// Deliberately excused, with a recorded reason. Not the same as abandoned.
+  EXEMPTED
+  /// Withdrawn by HR — the assignment was a mistake, or the role changed.
+  CANCELLED
+}
+
+/// Whether an assignment is obligatory.
+///
+/// Stored on the enrollment rather than read from the program, deliberately: a
+/// program's mandatory flag can change, and an enrollment records what was asked
+/// of this person at the time. Recomputing it would rewrite history.
+enum TrainingObligation {
+  MANDATORY
+  OPTIONAL
+}
+
+enum AssessmentQuestionKind {
+  SINGLE_CHOICE
+  MULTIPLE_CHOICE
+  TRUE_FALSE
+}
+
+/// Where one attempt stands.
+///
+/// IN_PROGRESS is distinct from the terminal states because an unfinished attempt
+/// still counts against the limit — otherwise abandoning an attempt would be a
+/// free retry.
+enum TrainingAttemptStatus {
+  IN_PROGRESS
+  PASSED
+  FAILED
+  /// Ran out of time, or was superseded. Counts against the limit like a failure.
+  EXPIRED
+}
+
+enum PracticalSubmissionStatus {
+  NOT_STARTED
+  SUBMITTED
+  APPROVED
+  /// Sent back for rework. The learner may submit again.
+  REJECTED
+}
+
+enum ShadowingStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+/// A grouping for the catalogue.
+///
+/// A table rather than an enum because the set of categories is the business's own
+/// and changes by decision, not by deployment — the same reasoning
+/// `Employee.location` is free text and departments are rows.
+model TrainingCategory {
+  id          String  @id @default(cuid())
+  name        String
+  /// The stable identifier a human quotes. Uppercased on the way in.
+  code        String  @unique
+  description String?
+  isActive    Boolean @default(true)
+
+  /// Catalogue ordering, so the list reads the way the business thinks of it.
+  sortOrder Int @default(0)
+
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy User              @relation("TrainingCategoryCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  programs  TrainingProgram[]
+
+  @@index([isActive, sortOrder, name])
+}
+
+/// One training program — the unit a person is enrolled into.
+///
+/// Carries the *policy*; the modules carry the sequence. That split is what makes
+/// the required journey configurable rather than compiled in.
+model TrainingProgram {
+  id   String @id @default(cuid())
+  /// The reference quoted internally — "TRN-2026-0004". Allocated server-side.
+  code String @unique
+
+  title       String
+  description String?
+  /// What somebody will be able to do afterwards. Prose, shown on the detail page.
+  objectives  String?
+
+  categoryId String?
+
+  /// Who this is for. Both nullable: a company-wide induction targets nobody in
+  /// particular, and SetNull so archiving a department does not delete its courses.
+  targetDepartmentId  String?
+  targetDesignationId String?
+
+  status      TrainingProgramStatus @default(DRAFT)
+  /// The default obligation for new assignments. Each enrollment stores its own.
+  obligation  TrainingObligation    @default(OPTIONAL)
+
+  /// Informational, for planning a learner's time. Nothing is computed from it.
+  estimatedMinutes Int?
+
+  /*
+    The qualification policy. Every one of these is per-program, which is the
+    point: the business's default pass mark is 80, and a CHECK keeps it in range,
+    but a program may set its own. Nothing hard-codes 80.
+  */
+  passingScore Decimal @default(80.00) @db.Decimal(5, 2)
+  maxAttempts  Int     @default(3)
+
+  /// Whether a practical approval and a shadowing sign-off gate completion.
+  /// Read by `qualificationGaps` — absent flags mean those modules are optional
+  /// rather than silently skipped.
+  requiresPractical Boolean @default(false)
+  requiresShadowing Boolean @default(false)
+  /// Whether passing the final assessment is required to qualify for live work.
+  requiresFinalAssessment Boolean @default(true)
+
+  /// Days from assignment to the due date. Null means no deadline.
+  dueWithinDays Int?
+
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  publishedAt DateTime?
+  archivedAt  DateTime?
+
+  category          TrainingCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  targetDepartment  Department?       @relation("TrainingTargetDepartment", fields: [targetDepartmentId], references: [id], onDelete: SetNull)
+  targetDesignation Designation?      @relation("TrainingTargetDesignation", fields: [targetDesignationId], references: [id], onDelete: SetNull)
+  createdBy         User              @relation("TrainingProgramCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  modules     TrainingModule[]
+  enrollments TrainingEnrollment[]
+  assessments TrainingAssessment[]
+
+  @@index([status, title])
+  @@index([categoryId, status])
+  @@index([targetDepartmentId])
+}
+
+/// One step in a program, in order.
+///
+/// The journey lives here. `sortOrder` with a unique index per program means two
+/// modules cannot claim the same position — without it, "the next module" is
+/// ambiguous and a learner's progress depends on insertion order.
+model TrainingModule {
+  id        String @id @default(cuid())
+  programId String
+
+  title   String
+  kind    TrainingModuleKind
+  /// Where it sits in the sequence. Unique within the program.
+  sortOrder Int
+
+  /// Lesson material. Plain text and optional links — deliberately not a rich
+  /// content model: this application has no editor, and inventing a block format
+  /// here would mean migrating away from it when one arrives.
+  content String?
+  /// An external reference. A URL field only — **this is not video integration**,
+  /// and nothing in this phase plays or tracks media.
+  referenceUrl String?
+
+  /// Stored material, where the module has any. A SecureDocument id, never a URL:
+  /// links are minted per request, signed and short-lived.
+  secureDocumentId String?
+
+  /// Whether this module must be completed for the program to complete. An
+  /// optional module is offered and not gated on.
+  isRequired Boolean @default(true)
+
+  /// Instructions for a PRACTICAL or SHADOWING module. The learner sees these.
+  instructions String?
+
+  estimatedMinutes Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  program        TrainingProgram @relation(fields: [programId], references: [id], onDelete: Cascade)
+  secureDocument SecureDocument? @relation("TrainingModuleMaterial", fields: [secureDocumentId], references: [id], onDelete: SetNull)
+
+  assessment TrainingAssessment?
+  progress   TrainingModuleProgress[]
+  practicals PracticalSubmission[]
+  shadowings ShadowingRecord[]
+
+  /// One position per program, so "next module" is never ambiguous.
+  @@unique([programId, sortOrder])
+  @@index([programId, sortOrder])
+}
+
+/// One employee's enrollment in one program.
+///
+/// Unique on (employeeId, programId) **where the enrollment is still live** — a
+/// partial unique index, because somebody legitimately retakes a programme years
+/// later and a plain unique would refuse that. The partial index is in the
+/// migration; Prisma cannot express it.
+model TrainingEnrollment {
+  id         String @id @default(cuid())
+  employeeId String
+  programId  String
+
+  status     TrainingEnrollmentStatus @default(NOT_STARTED)
+  obligation TrainingObligation       @default(OPTIONAL)
+
+  /// Who assigned it, and when. A User rather than an Employee: the audit question
+  /// is "who did this", and an HR administrator may hold no HR record.
+  assignedById String
+  assignedAt   DateTime @default(now())
+
+  /// A calendar day, interpreted in IST like every other HR date.
+  dueOn DateTime? @db.Date
+
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  /*
+    How this enrollment came about. Recorded rather than derived, because a
+    department-wide assignment must not silently change when the employee later
+    moves department — the enrollment is what was asked of them at the time.
+  */
+  assignedVia String @default("INDIVIDUAL")
+
+  /// Exemption, where granted. All three move together — a CHECK enforces it, so
+  /// an excused learner can always say who excused them and why.
+  exemptedById String?
+  exemptedAt   DateTime?
+  exemptionReason String?
+
+  /// Withdrawal, where the assignment was a mistake.
+  cancelledAt     DateTime?
+  cancellationReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  employee   Employee        @relation("TrainingLearner", fields: [employeeId], references: [id], onDelete: Cascade)
+  program    TrainingProgram @relation(fields: [programId], references: [id], onDelete: Restrict)
+  assignedBy User            @relation("TrainingAssignedBy", fields: [assignedById], references: [id], onDelete: Restrict)
+  exemptedBy User?           @relation("TrainingExemptedBy", fields: [exemptedById], references: [id], onDelete: SetNull)
+
+  moduleProgress TrainingModuleProgress[]
+  attempts       TrainingAttempt[]
+  practicals     PracticalSubmission[]
+  shadowings     ShadowingRecord[]
+  qualification  TrainingQualification?
+  onboardingTasks OnboardingTask[]
+
+  @@index([employeeId, status])
+  @@index([programId, status])
+  @@index([status, dueOn])
+}
+
+/// One learner's progress through one module.
+///
+/// A row per (enrollment, module), created lazily when the learner first touches
+/// it. Unique on the pair, which is what makes "completed twice" impossible.
+model TrainingModuleProgress {
+  id           String @id @default(cuid())
+  enrollmentId String
+  moduleId     String
+
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  /// Minutes the learner reports spending. Informational, never used as a gate —
+  /// a self-reported duration is not evidence of anything.
+  timeSpentMinutes Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  enrollment TrainingEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  module     TrainingModule     @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  @@unique([enrollmentId, moduleId])
+  @@index([enrollmentId])
+}
+
+/// An assessment attached to a program, optionally to one module.
+///
+/// `moduleId` is unique where set: one module has at most one assessment, which is
+/// what lets a module of kind ASSESSMENT be completed by passing "its" test.
+/// `isFinal` marks the one that gates live-work qualification.
+model TrainingAssessment {
+  id        String  @id @default(cuid())
+  programId String
+  moduleId  String? @unique
+
+  title        String
+  instructions String?
+
+  /// Null means "inherit the program's". Stored nullable rather than copied, so
+  /// changing the program's policy reaches assessments that never set their own.
+  passingScore Decimal? @db.Decimal(5, 2)
+  maxAttempts  Int?
+
+  /// Minutes allowed once started. Null means untimed.
+  timeLimitMinutes Int?
+
+  /// The final assessment — the one `requiresFinalAssessment` refers to. A partial
+  /// unique index in the migration allows exactly one per program.
+  isFinal  Boolean @default(false)
+  isActive Boolean @default(true)
+
+  /// Whether to shuffle question order per attempt. A mild integrity measure, not
+  /// a security control — the real control is that answers are graded server-side.
+  shuffleQuestions Boolean @default(false)
+
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  program   TrainingProgram @relation(fields: [programId], references: [id], onDelete: Cascade)
+  module    TrainingModule? @relation(fields: [moduleId], references: [id], onDelete: SetNull)
+  createdBy User            @relation("TrainingAssessmentCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  questions TrainingQuestion[]
+  attempts  TrainingAttempt[]
+
+  @@index([programId, isActive])
+}
+
+/// One question.
+///
+/// `points` is Decimal, not Int, so a 3-question test can total 100 without
+/// forcing whole numbers — and a weighted question does not need a fudge.
+model TrainingQuestion {
+  id           String @id @default(cuid())
+  assessmentId String
+
+  kind   AssessmentQuestionKind
+  prompt String
+  /// Shown after submission only. Never sent with the question paper.
+  explanation String?
+
+  points    Decimal @default(1.00) @db.Decimal(5, 2)
+  sortOrder Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  assessment TrainingAssessment     @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  options    TrainingQuestionOption[]
+  answers    TrainingAnswer[]
+
+  @@unique([assessmentId, sortOrder])
+  @@index([assessmentId, sortOrder])
+}
+
+/// One answer option.
+///
+/// `isCorrect` lives here and **must never be serialised to a learner before
+/// submission**. The paper-building select in the repository omits it; that
+/// omission is the control, and it is asserted by a test.
+model TrainingQuestionOption {
+  id         String @id @default(cuid())
+  questionId String
+
+  label     String
+  isCorrect Boolean @default(false)
+  sortOrder Int
+
+  createdAt DateTime @default(now())
+
+  question TrainingQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  answers  TrainingAnswerOption[]
+
+  @@unique([questionId, sortOrder])
+  @@index([questionId])
+}
+
+/// One sitting of one assessment by one learner.
+///
+/// `attemptNumber` is unique per (enrollment, assessment), which is what enforces
+/// the attempt limit under concurrency: two simultaneous starts cannot both claim
+/// attempt 3.
+model TrainingAttempt {
+  id           String @id @default(cuid())
+  enrollmentId String
+  assessmentId String
+
+  attemptNumber Int
+
+  status TrainingAttemptStatus @default(IN_PROGRESS)
+
+  startedAt DateTime  @default(now())
+  /// When the attempt must be in by, where the assessment is timed. Computed on
+  /// start from the server's clock, never the client's.
+  expiresAt DateTime?
+  submittedAt DateTime?
+
+  /*
+    The result. All four move together on submission — a CHECK enforces that a
+    settled attempt carries them and an in-progress one does not, so a score can
+    never exist without the pass decision that goes with it.
+  */
+  score       Decimal? @db.Decimal(5, 2)
+  maxScore    Decimal? @db.Decimal(5, 2)
+  percentage  Decimal? @db.Decimal(5, 2)
+  passed      Boolean?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  enrollment TrainingEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  assessment TrainingAssessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+
+  answers TrainingAnswer[]
+
+  @@unique([enrollmentId, assessmentId, attemptNumber])
+  @@index([enrollmentId, status])
+  @@index([assessmentId, status])
+}
+
+/// One learner's answer to one question within one attempt.
+model TrainingAnswer {
+  id         String @id @default(cuid())
+  attemptId  String
+  questionId String
+
+  /// Graded server-side at submission. Never accepted from the client.
+  isCorrect   Boolean @default(false)
+  pointsAwarded Decimal @default(0.00) @db.Decimal(5, 2)
+
+  createdAt DateTime @default(now())
+
+  attempt  TrainingAttempt  @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  question TrainingQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  selectedOptions TrainingAnswerOption[]
+
+  /// One answer per question per attempt.
+  @@unique([attemptId, questionId])
+  @@index([attemptId])
+}
+
+/// Which options a learner selected.
+///
+/// A join table rather than an array, so a selection can be validated against the
+/// question that owns it — the check that stops an answer referring to another
+/// assessment's options.
+model TrainingAnswerOption {
+  id       String @id @default(cuid())
+  answerId String
+  optionId String
+
+  answer TrainingAnswer         @relation(fields: [answerId], references: [id], onDelete: Cascade)
+  option TrainingQuestionOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+
+  @@unique([answerId, optionId])
+  @@index([optionId])
+}
+
+/// A practical exercise submission.
+///
+/// The reviewer is an Employee, and the service refuses a learner reviewing their
+/// own — enforced there rather than by a CHECK, because the comparison needs the
+/// enrollment's employee and a row-local constraint cannot reach it.
+model PracticalSubmission {
+  id           String @id @default(cuid())
+  enrollmentId String
+  moduleId     String
+
+  status PracticalSubmissionStatus @default(NOT_STARTED)
+
+  /// What the learner submitted. Prose and an optional stored artefact.
+  submissionNotes  String?
+  secureDocumentId String?
+  submittedAt      DateTime?
+
+  /// Who reviews it. Assigned up front where known.
+  reviewerId String?
+
+  /// The decision. All three move together — a CHECK enforces it.
+  reviewedAt   DateTime?
+  reviewNotes  String?
+  reviewedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  enrollment     TrainingEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  module         TrainingModule     @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  reviewer       Employee?          @relation("PracticalReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+  reviewedBy     Employee?          @relation("PracticalReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  secureDocument SecureDocument?    @relation("PracticalArtefact", fields: [secureDocumentId], references: [id], onDelete: SetNull)
+
+  /// One submission row per module per enrollment, amended on resubmission rather
+  /// than accumulating rows nobody can order.
+  @@unique([enrollmentId, moduleId])
+  @@index([reviewerId, status])
+  @@index([status])
+}
+
+/// A shadowing period — learning by watching somebody do the work.
+model ShadowingRecord {
+  id           String @id @default(cuid())
+  enrollmentId String
+  moduleId     String
+
+  /// Who is being shadowed. An existing Employee — no fake mentor records.
+  mentorId String?
+
+  status ShadowingStatus @default(SCHEDULED)
+
+  scheduledFrom DateTime? @db.Date
+  scheduledTo   DateTime? @db.Date
+
+  /// What the learner should observe. Plain text, one item per line — a checklist
+  /// table would be a second ordering for no behaviour this phase needs.
+  checklist String?
+
+  /// The mentor's account of it, and the sign-off. All three move together.
+  feedback    String?
+  signedOffAt DateTime?
+  signedOffById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  enrollment  TrainingEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  module      TrainingModule     @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  mentor      Employee?          @relation("ShadowingMentor", fields: [mentorId], references: [id], onDelete: SetNull)
+  signedOffBy Employee?          @relation("ShadowingSignedOffBy", fields: [signedOffById], references: [id], onDelete: SetNull)
+
+  @@unique([enrollmentId, moduleId])
+  @@index([mentorId, status])
+  @@index([status])
+}
+
+/// Qualification for live work.
+///
+/// Deliberately a record of its own rather than a flag on Employee, because it is
+/// a different business state from employment: somebody can be employed and not yet
+/// qualified, and qualifying must not touch `Employee.status`, probation, or the
+/// employment timeline.
+///
+/// Unique on `enrollmentId`: one enrollment grants qualification once.
+model TrainingQualification {
+  id           String @id @default(cuid())
+  enrollmentId String @unique
+
+  /// Granted only when `qualificationGaps` is empty — computed server-side from
+  /// the program's requirement flags and the learner's actual progress. There is
+  /// no field a client can set to make this true.
+  qualifiedAt DateTime
+
+  /// Who granted it. A User, because it is an action an account took.
+  grantedById String
+
+  /// The final assessment result it rested on, where one was required.
+  finalAttemptId String?
+  finalScore     Decimal? @db.Decimal(5, 2)
+
+  notes String?
+
+  /// Revocation. Kept rather than deleted — that somebody was qualified and then
+  /// was not is exactly the history worth having.
+  revokedAt      DateTime?
+  revokedById    String?
+  revocationReason String?
+
+  /// The certificate reference, where one was issued. A number and a date on this
+  /// record rather than a table of its own: a certificate with no template,
+  /// issuer or renewal story is not an entity yet.
+  certificateCode String?   @unique
+  certificateIssuedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  enrollment TrainingEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  grantedBy  User               @relation("TrainingQualificationGrantedBy", fields: [grantedById], references: [id], onDelete: Restrict)
+  revokedBy  User?              @relation("TrainingQualificationRevokedBy", fields: [revokedById], references: [id], onDelete: SetNull)
+
+  @@index([qualifiedAt])
+}
+
+/// One allocated training reference sequence.
+///
+/// The same mechanism as `RecruitmentCodeCounter` and `EmployeeIdCounter`:
+/// INSERT … ON CONFLICT DO UPDATE … RETURNING inside the creating transaction,
+/// because `SELECT max(...) + 1` read by two concurrent creates hands both the
+/// same number.
+model TrainingCodeCounter {
+  scope     String   @id
+  lastValue Int      @default(0)
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+//  HR Phase 5 — Performance Management
+// ---------------------------------------------------------------------------
+//
+// ### The separation-of-duties rule this schema is shaped around
+//
+// An appraisal is only worth something if the person being appraised did not write
+// it, and did not approve it. Three of the decisions below exist for that reason
+// alone:
+//
+//   - `SelfAssessment` and `ManagerAssessment` are **separate tables**, not two
+//     halves of one review row. One row with `selfComments` and `managerComments`
+//     would mean a single UPDATE could write both, and the only thing standing
+//     between an employee and their own manager review would be a service
+//     remembering which columns it was allowed to touch.
+//   - `PerformanceReview.finalizedById` references **User**, not Employee, and is
+//     written only at finalisation. The service refuses a finaliser who is the
+//     subject; `performance_review_finalized_has_approver` makes a finalized review
+//     without a named approver impossible at the database level.
+//   - `CompetencyRating` carries a `source` and is keyed unique per
+//     (review, competency, source). An employee writing a MANAGER-sourced rating
+//     into their own review collides with the manager's row rather than silently
+//     adding a second opinion.
+//
+// ### Why a cycle owns its competency sheet
+//
+// `CompetencyDefinition.cycleId` is required and cascades. A global competency
+// library was the obvious alternative and is wrong: the attributes a business rates
+// change, and a shared library means either editing the definition a past review
+// was judged against — rewriting history — or accumulating retired competencies
+// forever. A cycle's sheet is fixed when it opens, so a review always shows what it
+// was actually rated on.
+//
+// ### Decimal, never Float
+//
+// Every rating, weight, target, measured value and attainment is `Decimal`. An
+// appraisal figure feeds pay conversations; `0.1 + 0.2 !== 0.3` is not an
+// acceptable property for a number somebody disputes. The same reasoning as the
+// money columns in Sales and the pass marks in Training.
+
+enum ReviewCycleStatus {
+  DRAFT
+  ACTIVE
+  CLOSED
+  ARCHIVED
+}
+
+enum ReviewCycleCadence {
+  MONTHLY
+  QUARTERLY
+  HALF_YEARLY
+  ANNUAL
+  AD_HOC
+}
+
+/// Where one person's review stands. The order is the progression; the service
+/// decides which transitions are legal and who may make each one.
+enum PerformanceReviewStatus {
+  NOT_STARTED
+  SELF_ASSESSMENT
+  PENDING_MANAGER
+  MANAGER_REVIEW
+  PENDING_APPROVAL
+  FINALIZED
+  CANCELLED
+}
+
+enum GoalScope {
+  EMPLOYEE
+  DEPARTMENT
+}
+
+/// Three outcomes rather than two: forcing a 70%-of-target result to be called
+/// either a success or a failure produces a number worth nothing.
+enum GoalStatus {
+  DRAFT
+  ACTIVE
+  ACHIEVED
+  PARTIALLY_MET
+  MISSED
+  CANCELLED
+}
+
+/// How a KPI is measured, and therefore how its attainment is computed.
+enum KpiMetricKind {
+  NUMBER
+  PERCENTAGE
+  CURRENCY
+  DURATION
+  BOOLEAN
+}
+
+/// Which way is good. Without this, a KPI for "average handling time" would score
+/// a team as failing for reducing exactly what they were asked to reduce.
+enum KpiDirection {
+  HIGHER_IS_BETTER
+  LOWER_IS_BETTER
+}
+
+enum CompetencyCategory {
+  CORE
+  FUNCTIONAL
+  LEADERSHIP
+  BEHAVIOURAL
+}
+
+/// Who gave a rating. Part of the unique key on CompetencyRating, which is what
+/// stops an employee filing a MANAGER-sourced rating in their own review.
+enum RatingSource {
+  SELF
+  MANAGER
+  HR
+}
+
+enum DevelopmentPlanStatus {
+  OPEN
+  COMPLETED
+  ABANDONED
+}
+
+/// IMPROVEMENT is the formal underperformance case; GROWTH is a next step. Kept
+/// distinct so no screen shows a promotion track and a formal warning alike.
+enum DevelopmentPlanKind {
+  IMPROVEMENT
+  GROWTH
+}
+
+/// One appraisal period.
+///
+/// Born DRAFT so it can be configured — dates, thresholds, competencies — without
+/// anybody being reviewed against a half-built sheet. Opening it is a named act
+/// that stamps `activatedAt`, because a cycle that became live with nothing saying
+/// who opened it is a cycle nobody can audit.
+model ReviewCycle {
+  id   String @id @default(cuid())
+  /// The reference quoted internally — "PRF-2026-0001". Allocated server-side from
+  /// the same counter mechanism as employee numbers and requisition codes.
+  code String @unique
+
+  name        String
+  description String?
+
+  cadence ReviewCycleCadence @default(ANNUAL)
+  status  ReviewCycleStatus  @default(DRAFT)
+
+  /// The period being appraised. Dates, not instants: an appraisal period is a
+  /// span of calendar days in company time, and storing a timestamp would make
+  /// "Q1" depend on the reader's timezone.
+  periodStart DateTime @db.Date
+  periodEnd   DateTime @db.Date
+
+  /// When each side's work is expected. Null means no stated deadline, which is
+  /// different from a deadline of today — the overdue figures skip these.
+  selfAssessmentDueOn DateTime? @db.Date
+  managerReviewDueOn  DateTime? @db.Date
+
+  /// Which department this covers. Null is the whole company. SetNull so
+  /// archiving a department does not delete the cycle that appraised it.
+  targetDepartmentId String?
+
+  /*
+    This cycle's own goal thresholds. The business defaults are 100 and 50 and a
+    CHECK keeps them ordered and in range, but a cycle may state its own — a
+    stretch cycle might call 110% "achieved". Nothing in the services compares
+    against the constants; they read whatever the cycle holds.
+  */
+  goalAchievementThreshold Decimal @default(100.00) @db.Decimal(6, 2)
+  goalPartialThreshold     Decimal @default(50.00) @db.Decimal(6, 2)
+
+  createdById String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  activatedAt DateTime?
+  closedAt    DateTime?
+  archivedAt  DateTime?
+  /// Why it was closed early, where it was.
+  closureReason String?
+
+  targetDepartment Department? @relation("ReviewCycleDepartment", fields: [targetDepartmentId], references: [id], onDelete: SetNull)
+  createdBy        User        @relation("ReviewCycleCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  competencies CompetencyDefinition[]
+  reviews      PerformanceReview[]
+  goals        PerformanceGoal[]
+
+  @@index([status, periodStart])
+  @@index([targetDepartmentId, status])
+}
+
+/// One attribute a cycle rates.
+///
+/// Cascade from the cycle: a deleted cycle's sheet has nothing to describe. The
+/// service refuses deleting a cycle that has reviews, so this cascade only ever
+/// fires on a DRAFT cycle nobody was reviewed in.
+model CompetencyDefinition {
+  id      String @id @default(cuid())
+  cycleId String
+
+  name        String
+  category    CompetencyCategory @default(CORE)
+  description String?
+
+  /// Relative importance within the sheet. A CHECK keeps it in (0, 100].
+  weight Decimal @default(100.00) @db.Decimal(5, 2)
+
+  sortOrder Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  cycle   ReviewCycle        @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  ratings CompetencyRating[]
+
+  /// One competency of a given name per cycle. Two "Communication" rows on one
+  /// sheet would mean a reviewer rating the same thing twice with no way to tell
+  /// the rows apart.
+  @@unique([cycleId, name])
+  @@index([cycleId, sortOrder])
+}
+
+/// A goal, owned by exactly one employee or one department.
+///
+/// Two nullable owner columns with a CHECK rather than a polymorphic owner, because
+/// the two are read by different people and scoped differently — and a polymorphic
+/// `ownerType`/`ownerId` pair cannot be a foreign key at all, so a goal could
+/// reference an employee who no longer exists.
+model PerformanceGoal {
+  id   String @id @default(cuid())
+  /// The reference quoted in conversation — "GOL-2026-0042".
+  code String @unique
+
+  title           String
+  description     String?
+  /// How success was defined, in the words agreed at the time. Kept verbatim: a
+  /// goal renegotiated later should show what was originally asked.
+  successCriteria String?
+
+  scope  GoalScope
+  status GoalStatus @default(DRAFT)
+
+  /// Exactly one is set — `goal_exactly_one_owner` enforces it.
+  employeeId   String?
+  departmentId String?
+
+  /// The cycle this is appraised in. Null for a goal that stands outside any
+  /// cycle, which is legitimate: a project objective with its own dates.
+  /// SetNull so archiving a cycle does not delete the goals it contained.
+  cycleId String?
+
+  startOn DateTime @db.Date
+  dueOn   DateTime @db.Date
+
+  /// Weight within the owner's goal set. A CHECK keeps it in (0, 100].
+  weight Decimal @default(100.00) @db.Decimal(5, 2)
+
+  /*
+    Cached roll-up of this goal's KPI attainment, as a percentage.
+
+    Stored rather than computed on read, and that is a deliberate trade: the
+    dashboard and the goal list both need it across hundreds of rows, and
+    recomputing from child KPIs per row is a join and an aggregate per goal. It is
+    written only by the service, inside the same transaction as the KPI progress
+    that changed it, so it cannot drift from its inputs.
+
+    Null means no KPI has a recorded value — which is NOT zero, and the UI shows
+    them differently: nothing recorded is not the same as nothing achieved.
+  */
+  attainment Decimal? @db.Decimal(8, 2)
+
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  /// Set together when the goal reaches a terminal status.
+  /// `goal_closure_complete` requires all three or none.
+  closedById   String?
+  closedAt     DateTime?
+  closureNote  String?
+
+  employee   Employee?    @relation("GoalEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+  department Department?  @relation("GoalDepartment", fields: [departmentId], references: [id], onDelete: Cascade)
+  cycle      ReviewCycle? @relation(fields: [cycleId], references: [id], onDelete: SetNull)
+  createdBy  User         @relation("GoalCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  closedBy   User?        @relation("GoalClosedBy", fields: [closedById], references: [id], onDelete: SetNull)
+
+  kpis          PerformanceKpi[]
+  reviewLinks   ReviewGoalLink[]
+
+  @@index([employeeId, status])
+  @@index([departmentId, status])
+  @@index([cycleId, status])
+  @@index([status, dueOn])
+}
+
+/// One measurable indicator under a goal.
+///
+/// This model is what makes a target *measurable* rather than a sentence somebody
+/// rates out of five. `targetValue` and `currentValue` are Decimal; `direction`
+/// decides whether attainment improves by going up or down, and without it a KPI
+/// for "average handling time" would score a team as failing for reducing exactly
+/// what they were asked to reduce.
+model PerformanceKpi {
+  id     String @id @default(cuid())
+  goalId String
+
+  name        String
+  description String?
+
+  metricKind KpiMetricKind
+  direction  KpiDirection  @default(HIGHER_IS_BETTER)
+
+  /// Decimal(14,2): wide enough for a currency target, exact for a percentage.
+  targetValue   Decimal  @db.Decimal(14, 2)
+  /// Where it stood at the start. Optional, and used by the attainment arithmetic
+  /// when present so progress is measured from the baseline rather than from zero.
+  baselineValue Decimal? @db.Decimal(14, 2)
+  /// The latest recorded figure. Null until somebody records progress.
+  currentValue  Decimal? @db.Decimal(14, 2)
+
+  /// Display only — "orders", "₹", "minutes". No arithmetic reads it; the unit a
+  /// calculation cares about comes from `metricKind`.
+  unitLabel String?
+
+  /// Weight within the goal. A CHECK keeps it in (0, 100].
+  weight Decimal @default(100.00) @db.Decimal(5, 2)
+
+  /// Cached attainment percentage, written with `currentValue` in one transaction.
+  /// Uncapped: 140% of target is a fact worth keeping, and clamping it to 100 would
+  /// erase exactly what an appraisal exists to surface.
+  attainment Decimal? @db.Decimal(8, 2)
+
+  sortOrder Int @default(0)
+
+  lastUpdatedById String?
+  lastUpdatedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  goal          PerformanceGoal    @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  lastUpdatedBy User?              @relation("KpiLastUpdatedBy", fields: [lastUpdatedById], references: [id], onDelete: SetNull)
+  progress      KpiProgressRecord[]
+
+  @@unique([goalId, name])
+  @@index([goalId, sortOrder])
+}
+
+/// One recorded movement on a KPI.
+///
+/// Append-only by intent, like `EmployeeHistory`: rows are written and never
+/// updated, so the history of a number cannot be quietly rewritten. The KPI's
+/// `currentValue` is the latest of these and is cached on the parent for reading.
+model KpiProgressRecord {
+  id    String @id @default(cuid())
+  kpiId String
+
+  value Decimal @db.Decimal(14, 2)
+  note  String?
+
+  recordedById String
+  recordedAt   DateTime @default(now())
+
+  kpi        PerformanceKpi @relation(fields: [kpiId], references: [id], onDelete: Cascade)
+  recordedBy User           @relation("KpiProgressRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+
+  @@index([kpiId, recordedAt])
+}
+
+/// One person's review within one cycle.
+///
+/// The spine of the phase. Status drives everything, and the two assessment tables
+/// hang off it rather than living in its columns — see the file note on separation
+/// of duties.
+///
+/// `reviewerId` is the manager who owes the review, captured **at generation time**
+/// rather than read live from `Employee.managerId`. That is deliberate: if somebody
+/// changes manager mid-cycle, the review is still owed by the person who actually
+/// managed them over the period, and a live lookup would silently reassign it.
+model PerformanceReview {
+  id      String @id @default(cuid())
+  cycleId String
+
+  employeeId String
+  /// Who owes the manager review. Nullable: an employee with no manager set still
+  /// gets a review, and HR writes it. SetNull so a departing manager does not
+  /// delete their reports' appraisals.
+  reviewerId String?
+
+  status PerformanceReviewStatus @default(NOT_STARTED)
+
+  /*
+    The three ratings, each Decimal(4,2) over the 1.00–5.00 scale and each null
+    until its own side has submitted. Three columns rather than one, because they
+    answer different questions and the gap between them is what the appraisal
+    conversation is about.
+
+    `finalRating` is the figure of record. It is written once, at finalisation, by
+    somebody holding APPROVE who is not the subject.
+  */
+  selfOverallRating    Decimal? @db.Decimal(4, 2)
+  managerOverallRating Decimal? @db.Decimal(4, 2)
+  finalRating          Decimal? @db.Decimal(4, 2)
+
+  /// Weighted goal attainment across this review's goals, cached at finalisation
+  /// and refreshed on read while the review is open. Null when nothing is recorded.
+  goalAttainment Decimal? @db.Decimal(8, 2)
+
+  selfSubmittedAt    DateTime?
+  managerSubmittedAt DateTime?
+
+  /// Finalisation. `finalizedById` is a **User**, because approving is an act of
+  /// the account rather than of an employment record — and HR approvers do not all
+  /// have Employee rows. `performance_review_finalized_has_approver` makes a
+  /// FINALIZED review with no named approver impossible.
+  finalizedById String?
+  finalizedAt   DateTime?
+  finalComments String?
+
+  cancelledAt        DateTime?
+  cancellationReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  cycle       ReviewCycle @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  employee    Employee    @relation("PerformanceReviewEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+  reviewer    Employee?   @relation("PerformanceReviewReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+  finalizedBy User?       @relation("PerformanceReviewFinalizedBy", fields: [finalizedById], references: [id], onDelete: SetNull)
+
+  selfAssessment    SelfAssessment?
+  managerAssessment ManagerAssessment?
+  competencyRatings CompetencyRating[]
+  goalLinks         ReviewGoalLink[]
+  developmentPlans  DevelopmentPlan[]
+
+  /// One review per person per cycle. The invariant that stops a second review
+  /// being generated for somebody a batch already covered.
+  @@unique([cycleId, employeeId])
+  @@index([reviewerId, status])
+  @@index([employeeId, status])
+  @@index([cycleId, status])
+}
+
+/// The employee's own account of their period.
+///
+/// A separate table from `ManagerAssessment` on purpose. One row carrying both
+/// sides would mean a single UPDATE could write either, and the only protection
+/// against an employee writing their own manager review would be a service
+/// remembering which columns it may touch. Two tables make the wrong write
+/// impossible to express rather than merely forbidden.
+///
+/// `@unique` on reviewId: one self-assessment per review, enforced by the database.
+model SelfAssessment {
+  id       String @id @default(cuid())
+  reviewId String @unique
+
+  achievements      String?
+  challenges        String?
+  /// What they want next. Usually what a development plan is built from.
+  developmentWishes String?
+
+  overallRating Decimal? @db.Decimal(4, 2)
+
+  /// Null while a draft. Set by the submit endpoint, never by the client.
+  submittedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  review PerformanceReview @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+}
+
+/// The manager's assessment of the period.
+///
+/// `submittedById` is the User who submitted, recorded because HR may legitimately
+/// write a review for an employee whose manager has left — and the record should
+/// say who actually wrote it rather than implying the stored reviewer did.
+model ManagerAssessment {
+  id       String @id @default(cuid())
+  reviewId String @unique
+
+  strengths        String?
+  improvementAreas String?
+  comments         String?
+
+  overallRating Decimal? @db.Decimal(4, 2)
+
+  /// Null means not stated, which is different from "no". A screen must not read
+  /// an unanswered question as a negative recommendation.
+  promotionRecommended Boolean?
+
+  submittedAt   DateTime?
+  submittedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  review      PerformanceReview @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  submittedBy User?             @relation("ManagerAssessmentSubmittedBy", fields: [submittedById], references: [id], onDelete: SetNull)
+}
+
+/// One rating of one competency by one party.
+///
+/// Rows rather than `selfRating`/`managerRating` columns, for two reasons. A third
+/// rater — a peer, a skip-level — is a plausible later requirement and would
+/// otherwise be a migration plus every query rewritten. And the unique key below
+/// does real work: an employee attempting to write a MANAGER-sourced rating into
+/// their own review collides with the manager's row rather than silently adding a
+/// second opinion the averages would then include.
+model CompetencyRating {
+  id           String @id @default(cuid())
+  reviewId     String
+  competencyId String
+
+  source RatingSource
+
+  /// 1–5. A CHECK enforces the range, matching Phase 3's interview feedback and
+  /// probation reviews — two HR scales differing by a point would make the two
+  /// incomparable for no benefit.
+  rating   Int
+  comments String?
+
+  /// The User who recorded it. Restrict: a rating whose author vanished is a
+  /// rating nobody can stand behind.
+  ratedById String
+  ratedAt   DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  review     PerformanceReview    @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  competency CompetencyDefinition @relation(fields: [competencyId], references: [id], onDelete: Cascade)
+  ratedBy    User                 @relation("CompetencyRatedBy", fields: [ratedById], references: [id], onDelete: Restrict)
+
+  @@unique([reviewId, competencyId, source])
+  @@index([reviewId])
+}
+
+/// Which goals a review appraises.
+///
+/// A join table rather than `PerformanceGoal.reviewId`, because a goal can
+/// legitimately appear in more than one review — a two-year objective appraised in
+/// both years — and a single foreign key would force a choice between duplicating
+/// the goal and losing one of the appraisals.
+model ReviewGoalLink {
+  id       String @id @default(cuid())
+  reviewId String
+  goalId   String
+
+  /// The goal's attainment as it stood when this review was finalized. A snapshot,
+  /// because the live figure keeps moving and a finalized review must not change.
+  attainmentAtFinalisation Decimal? @db.Decimal(8, 2)
+
+  createdAt DateTime @default(now())
+
+  review PerformanceReview @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  goal   PerformanceGoal   @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  @@unique([reviewId, goalId])
+  @@index([goalId])
+}
+
+/// A development or improvement plan.
+///
+/// `kind` separates the two cases that must not look alike: IMPROVEMENT is the
+/// formal underperformance case with a mandatory review date, GROWTH is somebody
+/// doing well who wants a next step. A screen showing them identically would put a
+/// promotion track beside a formal warning and call both "development".
+model DevelopmentPlan {
+  id         String @id @default(cuid())
+  employeeId String
+
+  kind   DevelopmentPlanKind
+  status DevelopmentPlanStatus @default(OPEN)
+
+  title          String
+  objective      String?
+  /// What the business will do to help. An improvement plan that lists only what
+  /// the employee must change is a warning, not a plan.
+  supportOffered String?
+
+  /// When it will be reviewed. Required for IMPROVEMENT —
+  /// `development_plan_improvement_has_review_date` enforces it.
+  reviewOn DateTime? @db.Date
+
+  /// The review this came out of, where it did. SetNull so deleting a draft review
+  /// does not delete the plan that outlived it.
+  reviewId String?
+
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  closedById  String?
+  closedAt    DateTime?
+  outcomeNote String?
+
+  employee  Employee           @relation("DevelopmentPlanEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+  review    PerformanceReview? @relation(fields: [reviewId], references: [id], onDelete: SetNull)
+  createdBy User               @relation("DevelopmentPlanCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  closedBy  User?              @relation("DevelopmentPlanClosedBy", fields: [closedById], references: [id], onDelete: SetNull)
+
+  actions DevelopmentAction[]
+
+  @@index([employeeId, status])
+  @@index([status, reviewOn])
+  @@index([reviewId])
+}
+
+/// One thing a plan says will be done.
+model DevelopmentAction {
+  id     String @id @default(cuid())
+  planId String
+
+  description String
+  dueOn       DateTime? @db.Date
+
+  isCompleted   Boolean   @default(false)
+  completedAt   DateTime?
+  completedById String?
+
+  sortOrder Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  plan        DevelopmentPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  completedBy User?           @relation("DevelopmentActionCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+
+  @@index([planId, sortOrder])
+}
+
+/// One allocated performance reference sequence.
+///
+/// The same mechanism as `RecruitmentCodeCounter` and `EmployeeIdCounter`, present
+/// for the same reason: `SELECT max(...) + 1` read by two concurrent creates hands
+/// both the same number, and these references are quoted in appraisal conversations.
+///
+/// `scope` holds a kind-and-period string — "PRF-2026" for cycles, "GOL-2026" for
+/// goals. A second series is a second row rather than a migration.
+model PerformanceCodeCounter {
+  scope     String   @id
+  lastValue Int      @default(0)
+  updatedAt DateTime @updatedAt
 }

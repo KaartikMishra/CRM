@@ -9,13 +9,46 @@
  * resolver; controllers never decide access for themselves.
  */
 
-import type { AppModule, PermissionAction, Role } from '@rs/shared';
+import { PERMISSION_ACTIONS, type AppModule, type PermissionAction, type Role } from '@rs/shared';
 import { prisma } from '../config/database.js';
 
 type ActionSet = Partial<Record<PermissionAction, boolean>>;
 type ModuleMatrix = Partial<Record<AppModule, ActionSet>>;
 
-const ALL: ActionSet = { VIEW: true, CREATE: true, EDIT: true, DELETE: true, ASSIGN: true };
+/**
+ * The original five actions, granted together.
+ *
+ * Called ALL until APPROVE, EXPORT and SELF were added for HR. `ActionSet` is a
+ * Partial, so those three compiled without touching a single entry below — and
+ * that is exactly why the rename matters: a constant named ALL would have gone
+ * on reading as "everything" while quietly meaning "everything except the three
+ * newest", with no compile error anywhere to say so. The name now states its
+ * contents, and the nine modules that use it keep precisely the effective
+ * permissions they had before those actions existed.
+ *
+ * A module that genuinely needs APPROVE, EXPORT or SELF names it explicitly.
+ */
+const CRUD_ASSIGN: ActionSet = {
+  VIEW: true,
+  CREATE: true,
+  EDIT: true,
+  DELETE: true,
+  ASSIGN: true,
+};
+
+/** CRUD_ASSIGN plus the three HR actions — full authority over an HR namespace. */
+const CRUD_ASSIGN_APPROVE_EXPORT: ActionSet = {
+  ...CRUD_ASSIGN,
+  APPROVE: true,
+  EXPORT: true,
+  /*
+    SELF is deliberately absent even here. It does not widen access — it narrows
+    it, meaning "your own record only". An administrator who already holds VIEW
+    over everybody's records gains nothing from it, and granting it would make
+    `can(user, module, 'SELF')` true for someone whose access is not self-scoped
+    at all, which is the opposite of what any caller asking that question wants.
+  */
+};
 
 /**
  * §22 — the approved defaults.
@@ -35,21 +68,51 @@ const ALL: ActionSet = { VIEW: true, CREATE: true, EDIT: true, DELETE: true, ASS
  */
 const ROLE_DEFAULTS: Record<Role, ModuleMatrix> = {
   ADMIN: {
-    PRODUCT_ENQUIRY: ALL,
-    SALES: ALL,
-    PROCUREMENT: ALL,
-    RS_PRODUCTS: ALL,
-    PACKING_DISPATCH: ALL,
-    CUSTOMER_BILLING: ALL,
-    VENDOR_INVOICE: ALL,
-    POST_SALES: ALL,
+    PRODUCT_ENQUIRY: CRUD_ASSIGN,
+    SALES: CRUD_ASSIGN,
+    PROCUREMENT: CRUD_ASSIGN,
+    RS_PRODUCTS: CRUD_ASSIGN,
+    PACKING_DISPATCH: CRUD_ASSIGN,
+    CUSTOMER_BILLING: CRUD_ASSIGN,
+    VENDOR_INVOICE: CRUD_ASSIGN,
+    POST_SALES: CRUD_ASSIGN,
     /*
       Mandatory, not merely conventional: `effectivePermissions` derives the
       whole module list from Object.keys(ROLE_DEFAULTS.ADMIN), so a module
       missing here is invisible to /api/auth/me — and therefore to the sidebar,
       hasModule and requireModule — even for an administrator.
     */
-    LEAD_DEAL: ALL,
+    LEAD_DEAL: CRUD_ASSIGN,
+
+    /*
+      HR — the same mandatory rule, which is why these are here in Phase 0.5
+      rather than waiting for Phase 1's pages. A namespace omitted from this
+      object does not exist as far as /api/auth/me is concerned, so an
+      administrator could not be granted it even deliberately.
+
+      APPROVE and EXPORT are granted here and nowhere else. That is the whole of
+      the deny-by-default decision: the two actions exist, exactly one role on
+      exactly these seven namespaces holds them, and every other module in the
+      system is unchanged.
+    */
+    HR_EMPLOYEE: CRUD_ASSIGN_APPROVE_EXPORT,
+    HR_ATTENDANCE: CRUD_ASSIGN_APPROVE_EXPORT,
+    HR_LEAVE: CRUD_ASSIGN_APPROVE_EXPORT,
+    HR_PAYROLL: CRUD_ASSIGN_APPROVE_EXPORT,
+    HR_RECRUITMENT: CRUD_ASSIGN_APPROVE_EXPORT,
+    HR_PERFORMANCE: CRUD_ASSIGN_APPROVE_EXPORT,
+    HR_ADMIN: CRUD_ASSIGN_APPROVE_EXPORT,
+    /*
+      Training, Phase 4. Mandatory here rather than conventional:
+      `effectivePermissions` derives the whole module list from
+      Object.keys(ROLE_DEFAULTS.ADMIN), so a namespace missing from this object is
+      invisible to /api/auth/me — and therefore to the sidebar, hasModule and
+      requireModule — even for an administrator who holds it.
+
+      USER stays absent, as with every other HR namespace: deny by default, granted
+      through the existing overrides screen.
+    */
+    HR_TRAINING: CRUD_ASSIGN_APPROVE_EXPORT,
   },
   USER: {
     PRODUCT_ENQUIRY: { VIEW: true, CREATE: true, EDIT: true, DELETE: false, ASSIGN: false },
@@ -57,6 +120,22 @@ const ROLE_DEFAULTS: Record<Role, ModuleMatrix> = {
     // orders, while deleting one and reassigning stay with administrators. The
     // ownership rules in sales-access.ts narrow "edit" to orders they created.
     SALES: { VIEW: true, CREATE: true, EDIT: true, DELETE: false, ASSIGN: false },
+
+    /*
+      No HR entry, deliberately.
+
+      The tempting default is `HR_LEAVE: { SELF: true }` so every employee can
+      apply for their own leave. It is withheld for two reasons. A role default
+      is granted to everybody at once and silently: it would take effect the
+      moment Phase 1 mounts a route, on every existing account, before anybody
+      decided that was wanted. And Phase 0.5 ships no HR endpoint, so such a
+      default could not be tested against a real request — only asserted to
+      exist, which §27 of the brief is precisely about.
+
+      HR access therefore comes only from an explicit UserModulePermission row
+      until Phase 1 brings the screens. The mechanism for that already works:
+      a USER holds no PROCUREMENT by default either.
+    */
   },
 };
 
@@ -95,7 +174,14 @@ export async function effectivePermissions(
 
   const overrideMap = new Map(overrides.map((o) => [`${o.module}:${o.action}`, o.allowed]));
   const modules = Object.keys(ROLE_DEFAULTS.ADMIN) as AppModule[];
-  const actions: PermissionAction[] = ['VIEW', 'CREATE', 'EDIT', 'DELETE', 'ASSIGN'];
+  /*
+    PERMISSION_ACTIONS rather than a literal list. The literal was five actions
+    typed out by hand, so APPROVE, EXPORT and SELF would have been absent from
+    /api/auth/me — and therefore false everywhere `can()` is asked — while
+    ROLE_DEFAULTS said otherwise. Reading the enum means the matrix cannot fall
+    behind it again.
+  */
+  const actions: readonly PermissionAction[] = PERMISSION_ACTIONS;
 
   return modules.flatMap((module) =>
     actions.map((action) => ({

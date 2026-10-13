@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { APP_MODULES, type AppModule } from '@rs/shared';
+import { APP_MODULES, MODULES_WITHOUT_NAVIGATION, type AppModule } from '@rs/shared';
 import { NAV_ITEMS, visibleNavItems, type NavIconKey } from '@/components/layout/nav-items';
 import { navIcon } from '@/components/layout/nav-icons';
 
@@ -80,7 +80,8 @@ describe('the icon registry', () => {
 });
 
 describe('the navigation table itself is unchanged', () => {
-  it('still lists all eleven destinations in order', () => {
+  it('still lists all twelve destinations in order', () => {
+    // HR & Workforce joined in Phase 1, between Post Sales and User Management.
     expect(NAV_ITEMS.map((i) => i.href)).toEqual([
       '/dashboard',
       '/create-lead',
@@ -92,6 +93,7 @@ describe('the navigation table itself is unchanged', () => {
       '/billing',
       '/vendor-invoices',
       '/post-sales',
+      '/hr',
       '/users',
     ]);
   });
@@ -128,8 +130,150 @@ describe('the navigation table itself is unchanged', () => {
     const dashboard = NAV_ITEMS.find((i) => i.href === '/dashboard');
     expect(dashboard?.module).toBeUndefined();
 
+    /*
+      Every gated item names a real AppModule. This is the invariant that
+      matters: a nav item gated on a module that does not exist is a row nobody
+      can ever be granted, and nothing else in the system would catch it.
+
+      It replaces an equality assertion — `gated.sort()` === `[...APP_MODULES]` —
+      which additionally required every AppModule to have a nav item. That held
+      only by coincidence of timing, because until now every module got its
+      sidebar row in the same change that added its enum value. It is not the
+      architecture: an AppModule is a permission namespace, and a namespace is
+      registered before the screen that uses it exists — which is exactly what HR
+      does. The equality direction would have made registering a namespace early
+      impossible, so the test, not the architecture, was wrong.
+    */
     const gated = NAV_ITEMS.filter((i) => i.module).map((i) => i.module);
-    expect(gated.sort()).toEqual([...APP_MODULES].sort());
+    for (const module of gated) {
+      expect(APP_MODULES, `${module} is not an AppModule`).toContain(module);
+    }
+  });
+
+  it('includes every navigable module and excludes the registered-only ones', () => {
+    /*
+      The other half of the invariant, asserted explicitly so an unused namespace
+      is a recorded decision rather than a forgotten nav item.
+
+      A module is in exactly one of two states: it has a nav item, or it appears
+      in MODULES_WITHOUT_NAVIGATION with a reason. Nothing may be in neither (a
+      module nobody can reach) or both (a contradiction). Adding an AppModule and
+      forgetting its sidebar row therefore fails here, which is the protection the
+      old equality assertion really provided — kept, without also forbidding a
+      namespace from preceding its page.
+    */
+    const gated = new Set(NAV_ITEMS.filter((i) => i.module).map((i) => i.module));
+    const registeredOnly = new Set<AppModule>(MODULES_WITHOUT_NAVIGATION);
+
+    for (const module of APP_MODULES) {
+      const hasNav = gated.has(module);
+      const isRegisteredOnly = registeredOnly.has(module);
+      expect(
+        hasNav !== isRegisteredOnly,
+        hasNav
+          ? `${module} has a nav item and is also listed as having none`
+          : `${module} has no nav item and is not listed in MODULES_WITHOUT_NAVIGATION`,
+      ).toBe(true);
+    }
+  });
+
+  it('registers the HR namespaces with no top-level row, and nothing else', () => {
+    /*
+      Phase 0.5 ships the HR permission vocabulary and deliberately no HR pages.
+      Naming the seven exactly is what stops this list quietly becoming a place to
+      park modules somebody forgot to finish: when Phase 1 adds the HR screens,
+      each one leaves this list in the same change, and this assertion is what
+      forces that to be noticed.
+    */
+    expect([...MODULES_WITHOUT_NAVIGATION].sort()).toEqual([
+      /*
+        HR_EMPLOYEE left this list in Phase 1 — it has the directory and profile.
+        HR_ADMIN remains deliberately: it governs the department and designation
+        masters, which have pages but no sidebar row, because every child must
+        share its parent's module and HR_ADMIN is a different grant. The rest are
+        Phases 2–7.
+      */
+      'HR_ADMIN',
+      'HR_ATTENDANCE',
+      'HR_LEAVE',
+      'HR_PAYROLL',
+      'HR_PERFORMANCE',
+      'HR_RECRUITMENT',
+      /*
+        HR_TRAINING joins in Phase 4 *with* working pages, which is not a
+        contradiction: this list tracks modules with no **top-level** sidebar row,
+        and Training is a child of HR & Workforce — exactly like Attendance, Leave
+        and Recruitment before it.
+
+        HR_PERFORMANCE remains the only entry here that is genuinely unbuilt. It
+        stays registered so an administrator's grant matrix is stable across phases
+        rather than growing a column each time a module ships.
+      */
+      'HR_TRAINING',
+    ]);
+
+    // And they really are absent from the sidebar, not merely declared absent.
+    const gated = NAV_ITEMS.filter((i) => i.module).map((i) => i.module);
+    for (const module of MODULES_WITHOUT_NAVIGATION) {
+      expect(gated, module).not.toContain(module);
+    }
+  });
+
+  /*
+    What the invariant actually means, pinned.
+
+    Five of the modules on that list have working pages and a *child* sidebar row —
+    Attendance, Leave, Recruitment, Training and Performance. They stay on the list
+    because it counts **top-level** rows, and reading it as "has no navigation at all" would
+    make somebody either delete a correct entry or widen the invariant to walk
+    children, which would then demand a top-level row for every HR namespace and put
+    structural administration beside the directory.
+
+    So this asserts both halves explicitly: each of those five is absent from the
+    top-level rows (why it is on the list) and present among the children (why
+    removing it would be wrong). A future change that moves one to the top level
+    fails the first expectation; one that drops a child row fails the second.
+  */
+  it('counts top-level rows only — a listed module may still have a child row', () => {
+    const topLevel = new Set(NAV_ITEMS.filter((i) => i.module).map((i) => i.module));
+    const children = new Set(
+      NAV_ITEMS.flatMap((i) => i.children ?? []).map((child) => child.module),
+    );
+
+    for (const module of [
+      'HR_ATTENDANCE',
+      'HR_LEAVE',
+      'HR_RECRUITMENT',
+      'HR_TRAINING',
+      // Phase 5 joins them: Performance is a child row under HR & Workforce.
+      'HR_PERFORMANCE',
+    ] as const) {
+      expect(MODULES_WITHOUT_NAVIGATION, module).toContain(module);
+      expect(topLevel, `${module} must not have a top-level row`).not.toContain(module);
+      expect(children, `${module} must have a child row`).toContain(module);
+    }
+  });
+
+  /*
+    HR_PERFORMANCE is the one entry that genuinely has nothing, and saying so
+    separates "registered before its phase" from "has a child row" — the two reasons
+    a module sits on that list, which the list itself cannot distinguish.
+  */
+  /*
+    HR_PAYROLL is now the only entry with nothing at either level, and saying so
+    separates the two reasons a module sits on that list — "registered before its
+    phase" from "has a child row". The list itself cannot distinguish them.
+
+    HR_PERFORMANCE left this case in Phase 5: it gained a child row under HR &
+    Workforce, exactly as HR_ATTENDANCE, HR_LEAVE, HR_RECRUITMENT and HR_TRAINING
+    did before it, and is covered by the top-level-only test above.
+  */
+  it('keeps HR_PAYROLL with no row at either level, top or child', () => {
+    const topLevel = NAV_ITEMS.filter((i) => i.module).map((i) => i.module);
+    const children = NAV_ITEMS.flatMap((i) => i.children ?? []).map((child) => child.module);
+
+    expect(topLevel).not.toContain('HR_PAYROLL');
+    expect(children).not.toContain('HR_PAYROLL');
   });
 });
 
@@ -138,8 +282,8 @@ describe('module visibility is unchanged by the fix', () => {
 
   it('shows an administrator everything, including User Management', () => {
     const hrefs = visibleNavItems([...APP_MODULES], true).map((i) => i.href);
-    // Eleven since Create Lead / Deal joined the table.
-    expect(hrefs).toHaveLength(11);
+    // Twelve since HR & Workforce joined the table.
+    expect(hrefs).toHaveLength(12);
     expect(hrefs).toContain('/users');
   });
 
@@ -206,7 +350,7 @@ describe('Purchase & Procurement is a parent, and Procurement Clock sits under i
     // The whole point of the nesting. If this ever fails, the submodule has
     // been promoted to a sidebar module of its own.
     expect(NAV_ITEMS.map((i) => i.href)).not.toContain('/procurement/clock');
-    expect(NAV_ITEMS).toHaveLength(11);
+    expect(NAV_ITEMS).toHaveLength(12);
   });
 
   it('carries it as a child of Purchase & Procurement', () => {
@@ -243,20 +387,184 @@ describe('Purchase & Procurement is a parent, and Procurement Clock sits under i
 
   it('names exactly the modules that have children', () => {
     /*
-      Two now: Procurement carries the Clock, and Create Lead / Deal carries the
-      analytics board. Both children share their parent's module, so one grant
-      reaches the pair — which is the property the next test checks.
+      Four: Procurement carries the Clock, Create Lead / Deal the analytics board,
+      Post Sales its case views, and HR the directory, create form, Attendance and
+      Leave. The first three share their parent's module; HR's Attendance and Leave
+      deliberately do not, because HR is seven namespaces and a single grant must
+      not open all of them. The department and designation masters stay off the
+      sidebar entirely, on HR_ADMIN.
     */
     const withChildren = NAV_ITEMS.filter((i) => i.children?.length).map((i) => i.href);
-    expect(withChildren.sort()).toEqual(['/create-lead', '/post-sales', '/procurement']);
+    expect(withChildren.sort()).toEqual(['/create-lead', '/hr', '/post-sales', '/procurement']);
   });
 
-  it('gives every child its parent module, so one grant reaches both', () => {
+  it('gates every child on a real module of its own', () => {
+    /*
+      This replaced a stricter rule — `child.module === parent.module` — which held
+      for Procurement, Create Lead and Post Sales because each of those is one
+      permission namespace with sub-pages.
+
+      HR is not. It is seven namespaces by design, and Phase 2's Attendance and
+      Leave are gated on HR_ATTENDANCE and HR_LEAVE so an administrator can grant
+      attendance access without also handing over the employee directory. Forcing
+      them onto the parent's HR_EMPLOYEE to satisfy the old rule would make one
+      grant open all three — the exact conflation the namespaces exist to prevent.
+
+      So the invariant is the weaker, true one: every child names a module that
+      exists. `visibleNavItems` already filters children by their own module, so a
+      row is never offered to somebody the API would refuse.
+    */
     for (const parent of NAV_ITEMS.filter((i) => i.children?.length)) {
       for (const child of parent.children ?? []) {
-        expect(child.module, `${child.href} under ${parent.href}`).toBe(parent.module);
+        expect(child.module, `${child.href} under ${parent.href}`).toBeDefined();
+        expect(APP_MODULES, `${child.href}`).toContain(child.module);
       }
     }
+  });
+
+  it('names exactly the children that differ from their parent, and why', () => {
+    /*
+      The other half: a child on a different module is a real decision, so it is
+      listed here rather than left to be noticed. Anything else diverging fails,
+      which is what the old equality rule was really protecting.
+    */
+    const diverging = NAV_ITEMS.flatMap((parent) =>
+      (parent.children ?? [])
+        .filter((child) => child.module !== parent.module)
+        .map((child) => child.href),
+    );
+
+    /*
+      Four, all under HR, all on HR's own namespaces: Attendance on HR_ATTENDANCE,
+      Leave on HR_LEAVE, Recruitment and Onboarding on HR_RECRUITMENT.
+
+      Probation is deliberately absent from this list. It sits on HR_EMPLOYEE — its
+      parent's own module — because a probation is a fact about somebody's
+      employment reviewed by their reporting manager, not a hiring activity. A
+      recruiter has no business in a confirmed employee's probation, so putting it
+      on HR_RECRUITMENT would have been the wrong grant as well as a fifth
+      divergence.
+    */
+    // Sorted, so the order below is alphabetical rather than chronological.
+    expect(diverging.sort()).toEqual([
+      '/hr/attendance',
+      '/hr/leave',
+      '/hr/onboarding',
+      // Phase 5. HR_PERFORMANCE — the namespace registered in Phase 0.5 and built
+      // here. An appraiser reads reviews and ratings; that is not HR_EMPLOYEE's
+      // directory access, so the divergence is the access model rather than tidiness.
+      '/hr/performance',
+      '/hr/recruitment',
+      // Phase 4. HR_TRAINING, its own namespace rather than HR_PERFORMANCE: a
+      // trainer has no business reading appraisals, and an appraiser none editing
+      // the catalogue.
+      '/hr/training',
+    ]);
+  });
+
+  it('keeps the parent reachable for somebody holding only a child’s module', () => {
+    /*
+      The behaviour the divergence exists for, and a bug this test originally
+      asserted the wrong way round.
+
+      HR's children sit on their own modules, the sidebar renders children only
+      *inside* their parent row, and the parent is gated on HR_EMPLOYEE. So
+      filtering the parent out for somebody granted HR_ATTENDANCE alone left the
+      page reachable only by typing the URL — invisible in the navigation they were
+      meant to use it from.
+
+      Keeping the parent exposes nothing: `/hr` itself is refused by
+      requireModule('HR_EMPLOYEE') with the standard no-access panel, and the only
+      child shown is the one they hold.
+    */
+    const items = visibleNavItems(['HR_ATTENDANCE'], false);
+    const hr = items.find((i) => i.href === '/hr');
+    expect(hr).toBeDefined();
+    expect(hr?.children?.map((c) => c.href)).toEqual(['/hr/attendance']);
+  });
+
+  it('shows each HR child only to somebody holding its own module', () => {
+    const attendanceOnly = visibleNavItems(['HR_EMPLOYEE', 'HR_ATTENDANCE'], false);
+    expect(
+      attendanceOnly.find((i) => i.href === '/hr')?.children?.map((c) => c.href),
+    ).toEqual(['/hr/employees', '/hr/employees/new', '/hr/attendance', '/hr/probation']);
+
+    const leaveOnly = visibleNavItems(['HR_EMPLOYEE', 'HR_LEAVE'], false);
+    expect(leaveOnly.find((i) => i.href === '/hr')?.children?.map((c) => c.href)).toEqual([
+      '/hr/employees',
+      '/hr/employees/new',
+      '/hr/leave',
+      '/hr/probation',
+    ]);
+
+    /*
+      HR_EMPLOYEE alone reaches neither Phase 2 page nor Recruitment and Onboarding —
+      the separation the seven namespaces exist for.
+
+      It *does* reach Probation, and that is the point of putting Probation on this
+      module: the reporting manager who reviews somebody's probation is exactly the
+      person who already needs HR_EMPLOYEE to see their team, and requiring them to
+      hold a recruitment grant for it would mean handing every line manager access to
+      the hiring pipeline.
+    */
+    const employeeOnly = visibleNavItems(['HR_EMPLOYEE'], false);
+    expect(employeeOnly.find((i) => i.href === '/hr')?.children?.map((c) => c.href)).toEqual([
+      '/hr/employees',
+      '/hr/employees/new',
+      '/hr/probation',
+    ]);
+
+    /*
+      And a recruiter holding only HR_RECRUITMENT reaches the two hiring pages and
+      nothing else — no directory, no attendance, no probation. The parent row
+      survives so the pages are reachable by navigation at all, which is the Phase 2
+      fix; `/hr` itself still refuses them.
+    */
+    const recruiterOnly = visibleNavItems(['HR_RECRUITMENT'], false);
+    expect(recruiterOnly.find((i) => i.href === '/hr')?.children?.map((c) => c.href)).toEqual([
+      '/hr/recruitment',
+      '/hr/onboarding',
+    ]);
+
+    /*
+      And a trainer holding only HR_TRAINING reaches the catalogue and nothing else —
+      no directory, no attendance, no recruitment, no probation. The separation the
+      namespace exists for, asserted from the other direction.
+    */
+    const trainerOnly = visibleNavItems(['HR_TRAINING'], false);
+    expect(trainerOnly.find((i) => i.href === '/hr')?.children?.map((c) => c.href)).toEqual([
+      '/hr/training',
+    ]);
+
+    /*
+      An ordinary employee with HR_EMPLOYEE does NOT see the Training row. That is
+      deliberate rather than a gap: the row leads to the *catalogue and
+      administration*, which is a trainer's screen. Their own assigned work is
+      reachable from the HR overview, so a learner is not stranded.
+    */
+    expect(
+      employeeOnly.find((i) => i.href === '/hr')?.children?.map((c) => c.href),
+    ).not.toContain('/hr/training');
+  });
+
+  it('hides HR entirely from somebody with no HR grant', () => {
+    const items = visibleNavItems(['SALES'], false);
+    expect(items.find((i) => i.href === '/hr')).toBeUndefined();
+  });
+
+  it('shows an administrator every HR child', () => {
+    const items = visibleNavItems([...APP_MODULES], true);
+    expect(items.find((i) => i.href === '/hr')?.children?.map((c) => c.href)).toEqual([
+      '/hr/employees',
+      '/hr/employees/new',
+      '/hr/attendance',
+      '/hr/leave',
+      '/hr/recruitment',
+      '/hr/onboarding',
+      '/hr/probation',
+      '/hr/training',
+      '/hr/performance',
+    ]);
   });
 
   it('keeps the nested items serializable across the Server -> Client boundary', () => {

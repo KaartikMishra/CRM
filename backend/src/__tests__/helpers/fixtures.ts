@@ -17,7 +17,83 @@ import type { CustomerType, Role } from '@rs/shared';
 import { prisma } from '../../config/database.js';
 import { reconcileLineStock } from '../../modules/procurement/procurement.service.js';
 
+/**
+ * The marker that says "this row is a test fixture".
+ *
+ * Every fixture name in this file begins with it, so anything that escapes is
+ * obviously debris rather than looking like real business data — and so the
+ * sweep below has something to recognise test-owned rows by.
+ */
 export const TEST_PREFIX = 'zz-test';
+
+/**
+ * This run's own marker, and the mechanism that makes cleanup safe.
+ *
+ * ### The problem two mechanisms could not solve on their own
+ *
+ * Cleanup has to satisfy two requirements that pull in opposite directions:
+ *
+ *   1. A run must never delete a *concurrent* run's fixtures. Tearing down
+ *      somebody else's rows mid-test shows up as an inexplicable flake.
+ *   2. An orphan from a run that already ended must not survive, because
+ *      `residualTestRows()` counts test rows *globally* and fails the `afterAll`
+ *      of every later suite on rows it never created.
+ *
+ * A bare `{ name: { startsWith: 'zz-test' } }` delete satisfies (2) and violates
+ * (1): it reaches every run's rows. Bounding that delete by age instead satisfies
+ * (1) and violates (2): an orphan younger than the threshold is skipped by the
+ * sweep and then fails every subsequent suite's residual check until it ages out.
+ * Age cannot distinguish "young because a concurrent run just made it" from
+ * "young because a run died a minute ago", because the two are the same
+ * observation.
+ *
+ * ### Ownership, not timing
+ *
+ * So ownership is written into the name. Every fixture is called
+ * `zz-test-r<runId>-…`, where runId is unique to this process. That turns an
+ * unanswerable timing question into a decidable one:
+ *
+ *   - `zz-test-r<thisRun>-…`   mine. Delete unconditionally, at any age.
+ *   - `zz-test-r<otherRun>-…`  another run's. Reclaim only once it is old enough
+ *                              to be certain that run has ended.
+ *   - no run marker at all     a fixture from before this scheme, or one built by
+ *                              hand. Reclaimed on age, as before.
+ *
+ * Requirement (2) is met for the common case — a suite's own orphans, including
+ * rows the API created whose ids were never tracked, carry this run's marker and
+ * go immediately. Requirement (1) is met absolutely: a concurrent run's rows
+ * carry a different marker and are unreachable while that run could still be
+ * using them.
+ *
+ * The age bound survives, but only for rows this run demonstrably does not own.
+ * It is no longer the ownership mechanism — it is the fallback for rows whose
+ * owner cannot be identified.
+ *
+ * ### Why the process id is part of it
+ *
+ * `randomUUID` alone would be enough for uniqueness. The pid is included because
+ * it makes an escaped row traceable: `zz-test-r4e91c2-42317-customer-…` names the
+ * process that made it, which is what somebody looking at a stray row in the
+ * database actually wants to know.
+ */
+export const TEST_RUN_ID = `${randomUUID().replace(/-/g, '').slice(0, 6)}-${process.pid}`;
+
+/**
+ * The prefix every fixture in this run is named with.
+ *
+ * Keeps TEST_PREFIX as its own leading segment, so the global "is this a test
+ * row" checks in `residualTestRows()` and the sweep keep working unchanged.
+ */
+export const RUN_PREFIX = `${TEST_PREFIX}-r${TEST_RUN_ID}`;
+
+/** Matches any run's marker, so "some run owns this" is testable. */
+const RUN_MARKER_PATTERN = /^zz-test-r[0-9a-f]{6}-\d+-/;
+
+/** Whether a fixture name carries a run marker, and whether it is this run's. */
+export function fixtureOwnership(name: string): 'mine' | 'other-run' | 'unmarked' {
+  if (name.startsWith(`${RUN_PREFIX}-`)) return 'mine';
+  return RUN_MARKER_PATTERN.test(name) ? 'other-run' : 'unmarked';
+}
 
 const created = {
   enquiryIds: [] as string[],
@@ -61,8 +137,8 @@ export async function makeUser(role: Role = 'USER', isActive = true): Promise<Te
   const user = await prisma.user.create({
     data: {
       employeeId: `ZZ${suffix.slice(0, 8).toUpperCase()}`,
-      name: `${TEST_PREFIX}-${role.toLowerCase()}`,
-      email: `${TEST_PREFIX}-${suffix}@test.invalid`,
+      name: `${RUN_PREFIX}-${role.toLowerCase()}`,
+      email: `${RUN_PREFIX}-${suffix}@test.invalid`,
       passwordHash: await bcrypt.hash(`pw-${suffix}`, 4),
       role,
       isActive,
@@ -103,7 +179,7 @@ export async function makeCustomer(
 }> {
   const customer = await prisma.customer.create({
     data: {
-      name: `${TEST_PREFIX}-customer-${short()}`,
+      name: `${RUN_PREFIX}-customer-${short()}`,
       type,
       companyName: contact.companyName ?? null,
       phone: contact.phone ?? null,
@@ -131,7 +207,7 @@ export async function makeCustomer(
 
 export async function makeVendor(isActive = true): Promise<{ id: string; name: string }> {
   const vendor = await prisma.vendor.create({
-    data: { name: `${TEST_PREFIX}-vendor-${short()}`, isActive },
+    data: { name: `${RUN_PREFIX}-vendor-${short()}`, isActive },
     select: { id: true, name: true },
   });
   created.vendorIds.push(vendor.id);
@@ -246,7 +322,7 @@ export async function makeRsProduct(
     imageUrl?: string;
   } = {},
 ): Promise<{ id: string; title: string; sku: string | null; variantId: string }> {
-  const title = options.title ?? `${TEST_PREFIX}-rs-${short()}`;
+  const title = options.title ?? `${RUN_PREFIX}-rs-${short()}`;
   const product = await prisma.rsProduct.create({
     data: {
       source: 'MANUAL',
@@ -310,13 +386,13 @@ export function purchaseBillPayload(
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
-    billNumber: `${TEST_PREFIX}-BILL-${short()}`.toUpperCase(),
+    billNumber: `${RUN_PREFIX}-BILL-${short()}`.toUpperCase(),
     vendorId,
     billType: 'CREDIT',
     billDate: new Date().toISOString(),
     items: [
       {
-        productName: `${TEST_PREFIX}-bill-line`,
+        productName: `${RUN_PREFIX}-bill-line`,
         ...(rsProductId ? { rsProductId } : {}),
         orderedQty: 10,
         receivedQty: 10,
@@ -333,14 +409,14 @@ export function purchaseBillPayload(
  * SalesOrder.orderId is unique across the whole table, so a fixed literal would
  * collide the second time a suite runs against the same database.
  */
-export const salesOrderId = (): string => `${TEST_PREFIX}-SO-${short()}`.toUpperCase();
+export const salesOrderId = (): string => `${RUN_PREFIX}-SO-${short()}`.toUpperCase();
 
 /** One product line, as the create endpoint expects it. */
 export function salesItemPayload(
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
-    productName: `${TEST_PREFIX}-product`,
+    productName: `${RUN_PREFIX}-product`,
     quantity: 12,
     price: '1250.50',
     ...overrides,
@@ -351,7 +427,7 @@ export function salesItemPayload(
 export function addRequestPayload(
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
-  return { type: 'ADD', productName: `${TEST_PREFIX}-added`, quantity: 2, price: '50.00', ...overrides };
+  return { type: 'ADD', productName: `${RUN_PREFIX}-added`, quantity: 2, price: '50.00', ...overrides };
 }
 
 /** An EDIT change-request payload against a given line. */
@@ -361,7 +437,7 @@ export function editRequestPayload(
 ): Record<string, unknown> {
   return {
     type: 'EDIT', itemId,
-    productName: `${TEST_PREFIX}-edited`, quantity: 3, price: '100.00',
+    productName: `${RUN_PREFIX}-edited`, quantity: 3, price: '100.00',
     ...overrides,
   };
 }
@@ -419,7 +495,7 @@ export function enquiryPayload(
     source: 'CALL',
     assignedToId,
     products: Array.from({ length: count }, (_, i) => ({
-      name: `${TEST_PREFIX}-product-${i + 1}`,
+      name: `${RUN_PREFIX}-product-${i + 1}`,
       quantity: 10 * (i + 1),
       similarOptionNeeded: i % 2 === 0,
       weight: { value: 1.5, unit: 'KG' },
@@ -499,12 +575,75 @@ async function step(failures: unknown[], run: () => Promise<unknown>): Promise<v
  * real CRM data is unreachable from here by construction. Order follows the
  * foreign keys, exactly as the tracked deletes above do.
  *
- * This is safe only because `vitest.config.ts` sets `fileParallelism: false` —
- * suites share one database and run one at a time, so no other suite's fixtures
- * can be in flight while this runs. Enabling parallelism would break that.
+ * ### How the sweep is scoped, and why a prefix alone will not do
+ *
+ * This is the one way this function could destroy work somebody cares about, so
+ * the scope is worth being precise about.
+ *
+ * `{ name: { startsWith: 'zz-test' } }` matches every test-owned row in the
+ * database, not merely this run's. One `prisma.user.deleteMany` with that filter
+ * reaches the fixtures of any other run sharing the database — a colleague's
+ * suite, a CI job against the same branch database, or a second terminal — and
+ * tearing those out mid-test surfaces as an inexplicable flake.
+ *
+ * Bounding it purely by age does not work either, and that failure is the reason
+ * this section exists: age cannot distinguish "young because a concurrent run
+ * just created this" from "young because a run died a minute ago". Those are the
+ * same observation. Treating both as untouchable leaves an orphan behind, and
+ * because `residualTestRows()` counts test rows *globally*, that orphan then
+ * fails the `afterAll` of every later suite until it ages out. This file shipped
+ * exactly that regression once.
+ *
+ * So the scope is **ownership, read from the name** (see RUN_PREFIX above), with
+ * age as a fallback only for rows whose owner cannot be identified:
+ *
+ *   mine       `zz-test-r<thisRun>-…`      deleted unconditionally, at any age
+ *   other run  `zz-test-r<otherRun>-…`     only once older than SWEEP_MIN_AGE_MS
+ *   unmarked   `zz-test-…`, no marker      only once older than SWEEP_MIN_AGE_MS
+ *
+ * That satisfies both requirements at once. A suite's own untracked orphans —
+ * including rows the API created whose ids were never recorded, which is exactly
+ * the hole described above — carry this run's marker and go immediately, leaving
+ * nothing to poison the next suite. A concurrent run's rows carry a different
+ * marker and are unreachable while that run could still be using them, whatever
+ * their age.
+ *
+ * `vitest.config.ts` setting `fileParallelism: false` still keeps suites inside
+ * one process from overlapping. The ownership marker is what makes the sweep safe
+ * when that is not the only thing holding — a second process is a different run.
  */
+/**
+ * How old a row belonging to *another* run must be before it is reclaimed.
+ *
+ * Only ever applied to rows this run does not own. An hour is far longer than any
+ * suite takes, so a run still in progress is never reached; and because this
+ * run's own debris is deleted by marker rather than by age, waiting an hour costs
+ * nothing that matters.
+ */
+const SWEEP_MIN_AGE_MS = 60 * 60 * 1000;
+
 async function sweepTestOwnedRows(failures: unknown[]): Promise<void> {
-  const owned = { name: { startsWith: TEST_PREFIX } };
+  const staleBefore = new Date(Date.now() - SWEEP_MIN_AGE_MS);
+
+  /*
+    Test-owned AND (mine at any age OR somebody else's but demonstrably stale).
+
+    Applied to the *owner* row in every filter below rather than to each child: a
+    child is reached through its test-owned parent, so scoping the parent scopes
+    the whole graph. A fresh child of an old orphaned parent is still debris and
+    is still reached, because the parent qualifies.
+
+    The outer `name: { startsWith: TEST_PREFIX }` is redundant against the first
+    OR branch and essential to the second: it is what keeps real business data
+    unreachable from here by construction, whatever the age clause admits.
+  */
+  const owned = {
+    name: { startsWith: TEST_PREFIX },
+    OR: [
+      { name: { startsWith: `${RUN_PREFIX}-` } },
+      { createdAt: { lt: staleBefore } },
+    ],
+  };
   const ownedName = { startsWith: TEST_PREFIX };
 
   // Enquiries first: their products, vendor responses, events and delay records
@@ -517,14 +656,31 @@ async function sweepTestOwnedRows(failures: unknown[]): Promise<void> {
   // Vendor -> VendorResponse is Restrict, so any response still pointing at a
   // test vendor has to go before the vendor itself can.
   await step(failures, () => prisma.vendorResponse.deleteMany({ where: { vendor: owned } }));
-  // Items, change requests and allocations cascade from the order.
+  /*
+    Items, change requests and allocations cascade from the order.
+
+    The third branch is the loosest filter in this function and needs its own
+    scope. The first two reach an order through a test-owned customer or creator,
+    which `owned` already scopes by ownership. This one reaches an order because a
+    *line item* is named `zz-test…`, so it can match an order whose customer and
+    creator are both real business records — there is no owner row to inherit a
+    marker from.
+
+    So it gets the same two-branch rule applied to the line name itself: a line
+    this run named, at any age, or any test-named line on an order old enough that
+    no run can still be using it.
+  */
   await step(failures, () =>
     prisma.salesOrder.deleteMany({
       where: {
         OR: [
           { customer: owned },
           { createdBy: owned },
-          { items: { some: { productName: ownedName } } },
+          { items: { some: { productName: { startsWith: `${RUN_PREFIX}-` } } } },
+          {
+            items: { some: { productName: ownedName } },
+            createdAt: { lt: staleBefore },
+          },
         ],
       },
     }),
@@ -555,9 +711,49 @@ async function sweepTestOwnedRows(failures: unknown[]): Promise<void> {
   */
   await step(failures, () => prisma.lead.deleteMany({ where: { associate: owned } }));
   await step(failures, () => prisma.lead.deleteMany({ where: { allocatedBy: owned } }));
+  /*
+    The cross-cutting foundation tables, for the same reason the tracked teardown
+    removes them: ApprovalRequest and SecureDocument are Restrict on User, so an
+    orphaned row holds its user here too. HRSetting is SetNull and pins nobody,
+    but a stale row would collide on (module, key) with the next run's upsert.
+  */
+  await step(failures, () =>
+    prisma.approvalRequest.deleteMany({
+      where: { OR: [{ requestedBy: owned }, { decidedBy: owned }] },
+    }),
+  );
+  await step(failures, () =>
+    prisma.secureDocument.deleteMany({ where: { uploadedBy: owned } }),
+  );
+  await step(failures, () => prisma.hRSetting.deleteMany({ where: { updatedBy: owned } }));
   await step(failures, () => prisma.customer.deleteMany({ where: owned }));
   await step(failures, () => prisma.vendor.deleteMany({ where: owned }));
   await step(failures, () => prisma.user.deleteMany({ where: owned }));
+
+  /*
+    RS Products, which the sweep did not previously reach at all.
+
+    They were cleaned only by tracked id, while `residualTestRows()` counts them
+    globally by title — so an untracked one (a create whose response was lost, or
+    one the API made) had nothing to reclaim it and would fail every later suite's
+    residual check indefinitely. That is the same defect the run marker fixes
+    elsewhere, so it is fixed the same way here.
+
+    Scoped on `title` rather than `name` because that is the column RsProduct
+    uses, and `owned` is a name filter. Variants and images cascade from the
+    product.
+  */
+  await step(failures, () =>
+    prisma.rsProduct.deleteMany({
+      where: {
+        title: { startsWith: TEST_PREFIX },
+        OR: [
+          { title: { startsWith: `${RUN_PREFIX}-` } },
+          { createdAt: { lt: staleBefore } },
+        ],
+      },
+    }),
+  );
 }
 
 /**
@@ -652,6 +848,307 @@ export async function cleanup(): Promise<void> {
     );
     await step(failures, () =>
       prisma.userModulePermission.deleteMany({ where: { userId: { in: created.userIds } } }),
+    );
+    /*
+      The cross-cutting foundation tables. All three hold Restrict foreign keys to
+      User — deliberately, because a decision whose decider vanished is unreadable
+      evidence — which means every one of them pins a fixture user in place until
+      it goes. Without these three steps the user delete below fails on a
+      constraint and the whole teardown reports a failure that has nothing to do
+      with the test that ran.
+
+      ApprovalRequest is reachable through either side, so both are named: a run
+      that raised a request and a run that decided somebody else's leave both
+      leave a row pointing at their user.
+    */
+    await step(failures, () =>
+      prisma.approvalRequest.deleteMany({
+        where: {
+          OR: [
+            { requestedById: { in: created.userIds } },
+            { decidedById: { in: created.userIds } },
+          ],
+        },
+      }),
+    );
+    await step(failures, () =>
+      prisma.secureDocument.deleteMany({
+        where: {
+          OR: [
+            { uploadedById: { in: created.userIds } },
+            // A document filed against a fixture user, whoever uploaded it.
+            { ownerType: 'User', ownerId: { in: created.userIds } },
+          ],
+        },
+      }),
+    );
+    /*
+      HRSetting is SetNull on its user rather than Restrict, so it does not pin
+      anybody and a missed row cannot fail teardown. It is still removed, because
+      a setting is unique on (module, key): one left behind by a previous run makes
+      the next run's upsert of the same key update a stranger's row instead of
+      creating its own, and the test that asserts "this is newly created" fails
+      somewhere it cannot explain.
+    */
+    await step(failures, () =>
+      prisma.hRSetting.deleteMany({ where: { updatedById: { in: created.userIds } } }),
+    );
+    /*
+      HR Phase 1. EmployeeDocument.uploadedById is Restrict and EmployeeHistory
+      cascades from its employee, so an employee this run created pins its uploader
+      until both go. Employees are reached by their own tracked ids rather than by
+      name, because `Employee` has no single name column — firstName/lastName are
+      separate, so the run marker lives on `workEmail` instead.
+    */
+    /*
+      HR Phase 2 — attendance and leave. Deleted before EmployeeDocument so the
+      whole HR graph unwinds in foreign-key order, and before the employee itself
+      because every one of these cascades from it.
+
+      Ledger and balance go together: a balance with no ledger would be a number
+      nobody could explain, and a test that left one behind would make the next
+      run's allocation idempotency check fail for a reason it could not see.
+    */
+    await step(failures, () =>
+      prisma.attendanceBreak.deleteMany({
+        where: { attendanceRecord: { employee: { workEmail: { startsWith: RUN_PREFIX } } } },
+      }),
+    );
+    await step(failures, () =>
+      prisma.attendanceCorrectionRequest.deleteMany({
+        where: {
+          OR: [
+            { decidedById: { in: created.userIds } },
+            { employee: { workEmail: { startsWith: RUN_PREFIX } } },
+          ],
+        },
+      }),
+    );
+    await step(failures, () =>
+      prisma.attendanceRecord.deleteMany({
+        where: { employee: { workEmail: { startsWith: RUN_PREFIX } } },
+      }),
+    );
+    await step(failures, () =>
+      prisma.overtimeRecord.deleteMany({
+        where: {
+          OR: [
+            { decidedById: { in: created.userIds } },
+            { employee: { workEmail: { startsWith: RUN_PREFIX } } },
+          ],
+        },
+      }),
+    );
+    await step(failures, () =>
+      prisma.leaveLedgerEntry.deleteMany({
+        where: {
+          OR: [
+            { performedById: { in: created.userIds } },
+            { employee: { workEmail: { startsWith: RUN_PREFIX } } },
+          ],
+        },
+      }),
+    );
+    await step(failures, () =>
+      prisma.leaveRequest.deleteMany({
+        where: {
+          OR: [
+            { decidedById: { in: created.userIds } },
+            { employee: { workEmail: { startsWith: RUN_PREFIX } } },
+          ],
+        },
+      }),
+    );
+    await step(failures, () =>
+      prisma.leaveBalance.deleteMany({
+        where: { employee: { workEmail: { startsWith: RUN_PREFIX } } },
+      }),
+    );
+    /*
+      Configuration carries the run marker in its CODE rather than a name, because
+      Holiday has no code column — it is matched on its ZZT-prefixed name instead,
+      the same convention Phase 1's departments use.
+    */
+    await step(failures, () =>
+      prisma.leavePolicy.deleteMany({ where: { leaveType: { code: { startsWith: 'ZZT' } } } }),
+    );
+    await step(failures, () =>
+      prisma.leaveType.deleteMany({ where: { code: { startsWith: 'ZZT' } } }),
+    );
+    await step(failures, () =>
+      prisma.attendancePolicy.deleteMany({ where: { code: { startsWith: 'ZZT' } } }),
+    );
+    await step(failures, () =>
+      prisma.holiday.deleteMany({ where: { name: { startsWith: 'ZZT' } } }),
+    );
+    /*
+      HR Phase 3 — recruitment, onboarding and probation.
+
+      Deleted before the Employee rows below, because every one of these tables points
+      at Employee (as recruiter, hiring manager, interviewer, panel member, assignee,
+      reviewer or the employee on probation) and several of those links are Restrict
+      rather than SetNull.
+
+      Ownership is traced through the two run-marked columns Phase 3 creates:
+      `Candidate.email` and `JobRequisition.code`, both of which carry the run prefix
+      in the tests. Cascades do most of the work — an Application's interviews,
+      assessments, offers, checks and stage history all go with it — but each table is
+      named explicitly anyway, because relying on a cascade means a schema change that
+      loosens one silently starts leaving rows behind.
+
+      ProbationRecord is matched on the employee rather than on a candidate, because a
+      probation belongs to somebody already employed: by the time it exists the
+      candidate record is history and no longer the way to find it.
+    */
+    await step(failures, () =>
+      prisma.probationReview.deleteMany({
+        where: { probationRecord: { employee: { workEmail: { startsWith: RUN_PREFIX } } } },
+      }),
+    );
+    await step(failures, () =>
+      prisma.probationRecord.deleteMany({
+        where: { employee: { workEmail: { startsWith: RUN_PREFIX } } },
+      }),
+    );
+    await step(failures, () =>
+      prisma.onboardingTask.deleteMany({
+        where: {
+          onboardingRecord: {
+            application: { candidate: { email: { startsWith: RUN_PREFIX } } },
+          },
+        },
+      }),
+    );
+    await step(failures, () =>
+      prisma.onboardingRecord.deleteMany({
+        where: { application: { candidate: { email: { startsWith: RUN_PREFIX } } } },
+      }),
+    );
+    await step(failures, () =>
+      prisma.candidateDocument.deleteMany({
+        where: { candidate: { email: { startsWith: RUN_PREFIX } } },
+      }),
+    );
+    await step(failures, () =>
+      prisma.backgroundCheck.deleteMany({
+        where: { application: { candidate: { email: { startsWith: RUN_PREFIX } } } },
+      }),
+    );
+    await step(failures, () =>
+      prisma.offer.deleteMany({
+        where: { application: { candidate: { email: { startsWith: RUN_PREFIX } } } },
+      }),
+    );
+    await step(failures, () =>
+      prisma.assessment.deleteMany({
+        where: { application: { candidate: { email: { startsWith: RUN_PREFIX } } } },
+      }),
+    );
+    await step(failures, () =>
+      prisma.interviewFeedback.deleteMany({
+        where: {
+          interview: { application: { candidate: { email: { startsWith: RUN_PREFIX } } } },
+        },
+      }),
+    );
+    await step(failures, () =>
+      prisma.interviewParticipant.deleteMany({
+        where: {
+          interview: { application: { candidate: { email: { startsWith: RUN_PREFIX } } } },
+        },
+      }),
+    );
+    await step(failures, () =>
+      prisma.interview.deleteMany({
+        where: { application: { candidate: { email: { startsWith: RUN_PREFIX } } } },
+      }),
+    );
+    await step(failures, () =>
+      prisma.applicationStageHistory.deleteMany({
+        where: { application: { candidate: { email: { startsWith: RUN_PREFIX } } } },
+      }),
+    );
+    await step(failures, () =>
+      prisma.application.deleteMany({
+        where: { candidate: { email: { startsWith: RUN_PREFIX } } },
+      }),
+    );
+    await step(failures, () =>
+      prisma.candidate.deleteMany({ where: { email: { startsWith: RUN_PREFIX } } }),
+    );
+    /*
+      Requisitions last of the recruitment tables: applications cascade from them too,
+      but an application reached through a candidate may sit on a requisition this run
+      did not create, so the candidate side is cleared first.
+
+      Matched on `createdById`, NOT on a code prefix. This was a real leak: an earlier
+      version matched `code: startsWith 'ZZT'`, but the service allocates requisition
+      codes itself as `JOB-<year>-<n>` — the ZZT prefix is on the *department* code and
+      never reaches the requisition. So every test requisition survived teardown, and
+      142 of them had accumulated across runs before the live count caught it.
+
+      `created.userIds` is this run's own users, which is the same ownership trace the
+      rest of this function uses. It cannot sweep another run's rows, and it cannot
+      touch a real requisition — a real one was created by a real account.
+    */
+    await step(failures, () =>
+      prisma.jobRequisition.deleteMany({
+        where: { createdById: { in: created.userIds } },
+      }),
+    );
+    /*
+      The counters are keyed by series and period ("JOB-2026"), not by run — they are
+      shared infrastructure rather than fixtures, and a test run bumping one is the
+      intended behaviour. Deliberately NOT deleted: removing the row would reset the
+      sequence and let a later run reissue a reference an earlier one already used,
+      which is precisely what the counter exists to prevent.
+    */
+    await step(failures, () =>
+      prisma.employeeDocument.deleteMany({
+        where: {
+          OR: [
+            { uploadedById: { in: created.userIds } },
+            { verifiedById: { in: created.userIds } },
+            { employee: { workEmail: { startsWith: RUN_PREFIX } } },
+          ],
+        },
+      }),
+    );
+    await step(failures, () =>
+      prisma.employeeHistory.deleteMany({
+        where: {
+          OR: [
+            { performedById: { in: created.userIds } },
+            { employee: { workEmail: { startsWith: RUN_PREFIX } } },
+          ],
+        },
+      }),
+    );
+    /*
+      Managers before reports, and heads before departments: Employee.managerId and
+      Department.headId both point at Employee. Clearing the links first means the
+      deletes below cannot fail on a self-referencing row.
+    */
+    await step(failures, () =>
+      prisma.department.updateMany({
+        where: { head: { workEmail: { startsWith: RUN_PREFIX } } },
+        data: { headId: null },
+      }),
+    );
+    await step(failures, () =>
+      prisma.employee.updateMany({
+        where: { manager: { workEmail: { startsWith: RUN_PREFIX } } },
+        data: { managerId: null },
+      }),
+    );
+    await step(failures, () =>
+      prisma.employee.deleteMany({ where: { workEmail: { startsWith: RUN_PREFIX } } }),
+    );
+    await step(failures, () =>
+      prisma.designation.deleteMany({ where: { code: { startsWith: 'ZZT' } } }),
+    );
+    await step(failures, () =>
+      prisma.department.deleteMany({ where: { code: { startsWith: 'ZZT' } } }),
     );
   }
   // Purchase bills hold foreign keys to Vendor, Product and User, and their
@@ -751,7 +1248,28 @@ export async function cleanup(): Promise<void> {
   }
 }
 
-/** Guards against fixtures escaping — asserted at the end of each suite. */
+/**
+ * Guards against fixtures escaping — asserted at the end of each suite.
+ *
+ * ### Why this counts only this run's rows
+ *
+ * It used to count every `zz-test` row in the database. That made the check
+ * strictly stronger and, in practice, wrong: it holds each suite responsible for
+ * rows it never created. A single orphan the sweep could not reclaim therefore
+ * failed the `afterAll` of every suite that ran afterwards, so one stray
+ * customer became dozens of file failures with nothing wrong in any of them.
+ * The docblock on `step()` describes the same cascade from a transient Neon drop.
+ *
+ * Counting by run marker keeps the check doing its actual job — proving *this*
+ * suite tidied up after itself — while making it immune to debris it has no way
+ * to clean. Another run's leftovers are that run's business, and the sweep
+ * reclaims them on age once their owner has certainly ended.
+ *
+ * This is deliberately not a weakening. A fixture that escapes this run is still
+ * caught, at any age, including rows the API created whose ids were never
+ * tracked — those carry the marker too, which is precisely what makes counting
+ * by marker sufficient.
+ */
 export async function residualTestRows(): Promise<number> {
   /*
     Partial-dispatch notices are checked separately, and only against the ids
@@ -768,18 +1286,65 @@ export async function residualTestRows(): Promise<number> {
       })
     : 0;
 
-  const [users, customers, vendors, salesOrders, rsProducts] = await Promise.all([
-    prisma.user.count({ where: { name: { startsWith: TEST_PREFIX } } }),
-    prisma.customer.count({ where: { name: { startsWith: TEST_PREFIX } } }),
-    prisma.vendor.count({ where: { name: { startsWith: TEST_PREFIX } } }),
-    // The product name lives on the line now, so an escaped order is found
-    // through the lines it owns.
-    prisma.salesOrder.count({
-      where: { items: { some: { productName: { startsWith: TEST_PREFIX } } } },
-    }),
-    // The real catalogue holds hundreds of rows, so only the prefixed ones
-    // count — an escaped fixture must not be hidden among them.
-    prisma.rsProduct.count({ where: { title: { startsWith: TEST_PREFIX } } }),
-  ]);
-  return users + customers + vendors + salesOrders + rsProducts + strandedNotices;
+  /** This run's rows only — see the note above. */
+  const mine = { startsWith: `${RUN_PREFIX}-` };
+
+  const [
+    users,
+    customers,
+    vendors,
+    salesOrders,
+    rsProducts,
+    employees,
+    candidates,
+    requisitions,
+  ] = await Promise.all([
+      prisma.user.count({ where: { name: mine } }),
+      prisma.customer.count({ where: { name: mine } }),
+      prisma.vendor.count({ where: { name: mine } }),
+      // The product name lives on the line now, so an escaped order is found
+      // through the lines it owns.
+      prisma.salesOrder.count({ where: { items: { some: { productName: mine } } } }),
+      // The real catalogue holds hundreds of rows, so only this run's count — an
+      // escaped fixture must not be hidden among them.
+      prisma.rsProduct.count({ where: { title: mine } }),
+      /*
+        HR. Both are matched on their run-marked email rather than on a name, because
+        that is the column the HR suites put the marker in — an employee's `workEmail`
+        and a candidate's `email`.
+
+        Counted by marker and never by a broad prefix, for the reason the whole
+        ownership mechanism exists: an unmarked or another run's row must not fail this
+        suite. These two are the roots of the Phase 1–3 HR graph, so an escaped
+        employee or candidate is what would strand everything hanging off it.
+      */
+      prisma.employee.count({ where: { workEmail: mine } }),
+      prisma.candidate.count({ where: { email: mine } }),
+      /*
+        Requisitions, traced through the creating user rather than a name or code.
+
+        Added after a real leak: teardown matched a `ZZT` code prefix the service never
+        writes — it allocates `JOB-<year>-<n>` itself — so every test requisition
+        survived, and the only reason it was caught was a manual row count against the
+        live database. This closes that gap: had it been here, the first run would have
+        failed its own teardown assertion instead of quietly accumulating 142 rows.
+
+        `created.userIds` is this run's users only, so another run's rows cannot fail
+        this suite.
+      */
+      created.userIds.length
+        ? prisma.jobRequisition.count({ where: { createdById: { in: created.userIds } } })
+        : Promise.resolve(0),
+    ]);
+  return (
+    users +
+    customers +
+    vendors +
+    salesOrders +
+    rsProducts +
+    employees +
+    candidates +
+    requisitions +
+    strandedNotices
+  );
 }

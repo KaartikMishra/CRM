@@ -7,6 +7,7 @@
  */
 
 import type {
+  AppModule,
   DealStatus,
   LeadActivityKind,
   LeadSource,
@@ -178,7 +179,24 @@ export const APP_MODULE_LABELS = {
   VENDOR_INVOICE: 'Vendor Invoices',
   POST_SALES: 'Post Sales & Grievance',
   LEAD_DEAL: 'Create Lead / Deal',
-} as const satisfies Record<string, string>;
+  /*
+    HR carries a label even though it has no page yet, because the admin
+    permission grid renders APP_MODULE_LABELS[module] for every AppModule. The
+    type below is `Record<string, string>` rather than `Record<AppModule, …>`,
+    so a missing label is not a compile error — it is a checkbox labelled
+    "undefined". Hence these land with the enum values, not with the pages.
+  */
+  HR_EMPLOYEE: 'HR — Employees',
+  // HR_EMPLOYEE and HR_ADMIN now have pages (Phase 1); the rest stay
+  // registered-without-navigation until their own phase ships.
+  HR_ATTENDANCE: 'HR — Attendance',
+  HR_LEAVE: 'HR — Leave',
+  HR_PAYROLL: 'HR — Payroll',
+  HR_RECRUITMENT: 'HR — Recruitment',
+  HR_PERFORMANCE: 'HR — Performance',
+  HR_TRAINING: 'HR — Training',
+  HR_ADMIN: 'HR — Administration',
+} as const satisfies Record<AppModule, string>;
 
 // ---------------------------------------------------------------------------
 //  Create Lead / Deal

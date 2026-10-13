@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CustomerView, VendorView } from '@rs/shared';
 import { api, mintToken, startTestServer, stopTestServer } from './helpers/test-server.js';
 import {
+  RUN_PREFIX,
   TEST_PREFIX,
   cleanup,
   makeCustomer,
@@ -54,7 +55,7 @@ describe('customers', () => {
   it('searches by name', async () => {
     const res = await api<{ customers: CustomerView[] }>(
       'GET',
-      `/api/customers?q=${TEST_PREFIX}-customer`,
+      `/api/customers?q=${RUN_PREFIX}-customer`,
       { token },
     );
 
@@ -67,7 +68,7 @@ describe('customers', () => {
   it('filters by customer type', async () => {
     const res = await api<{ customers: CustomerView[] }>(
       'GET',
-      `/api/customers?q=${TEST_PREFIX}&type=CORPORATE_GIFTING`,
+      `/api/customers?q=${RUN_PREFIX}&type=CORPORATE_GIFTING`,
       { token },
     );
 
@@ -90,7 +91,7 @@ describe('customers', () => {
     const res = await api<{ customer: CustomerView }>('POST', '/api/customers', {
       token,
       body: {
-        name: `${TEST_PREFIX}-new-customer`,
+        name: `${RUN_PREFIX}-new-customer`,
         type: 'WEDDING_GIFTING',
         phone: '+91 98765 43210',
       },
@@ -105,13 +106,13 @@ describe('customers', () => {
   it('validates the create payload', async () => {
     const noType = await api('POST', '/api/customers', {
       token,
-      body: { name: `${TEST_PREFIX}-invalid` },
+      body: { name: `${RUN_PREFIX}-invalid` },
     });
     expect(noType.status).toBe(422);
 
     const badEmail = await api('POST', '/api/customers', {
       token,
-      body: { name: `${TEST_PREFIX}-invalid`, type: 'RETAIL', email: 'not-an-email' },
+      body: { name: `${RUN_PREFIX}-invalid`, type: 'RETAIL', email: 'not-an-email' },
     });
     expect(badEmail.status).toBe(422);
   });
@@ -130,7 +131,7 @@ describe('customers', () => {
     it('persists and returns both', async () => {
       const res = await create({
         ...base,
-        name: `${TEST_PREFIX}-state-gst`,
+        name: `${RUN_PREFIX}-state-gst`,
         state: 'Maharashtra',
         gstNumber: '27AAPFU0939F1ZV',
       });
@@ -144,7 +145,7 @@ describe('customers', () => {
       // Read back through the search endpoint: what was stored, not what was echoed.
       const found = await api<{ customers: CustomerView[] }>(
         'GET',
-        `/api/customers?q=${TEST_PREFIX}-state-gst`,
+        `/api/customers?q=${RUN_PREFIX}-state-gst`,
         { token },
       );
       const row = found.body.data!.customers.find((c) => c.id === customer.id);
@@ -155,7 +156,7 @@ describe('customers', () => {
     it('accepts a state with no GST number', async () => {
       const res = await create({
         ...base,
-        name: `${TEST_PREFIX}-state-only`,
+        name: `${RUN_PREFIX}-state-only`,
         state: 'Maharashtra',
       });
 
@@ -167,7 +168,7 @@ describe('customers', () => {
     });
 
     it('accepts neither', async () => {
-      const res = await create({ ...base, name: `${TEST_PREFIX}-no-state-gst` });
+      const res = await create({ ...base, name: `${RUN_PREFIX}-no-state-gst` });
 
       expect(res.status).toBe(201);
       created.customers.push(res.body.data!.customer.id);
@@ -178,7 +179,7 @@ describe('customers', () => {
     it('stores a GST number typed in lower case in upper case', async () => {
       const res = await create({
         ...base,
-        name: `${TEST_PREFIX}-gst-lower`,
+        name: `${RUN_PREFIX}-gst-lower`,
         gstNumber: '27aapfu0939f1zv',
       });
 
@@ -191,7 +192,7 @@ describe('customers', () => {
       // Delhi used to be this suite's example of a real place deliberately off
       // the list. It is on it now: a GSTIN is issued against a Union Territory
       // exactly as against a State, so a customer there has to be recordable.
-      const ut = await create({ ...base, name: `${TEST_PREFIX}-ut`, state: 'Delhi' });
+      const ut = await create({ ...base, name: `${RUN_PREFIX}-ut`, state: 'Delhi' });
       expect(ut.status).toBe(201);
       created.customers.push(ut.body.data!.customer.id);
       expect(ut.body.data!.customer.state).toBe('Delhi');
@@ -206,14 +207,14 @@ describe('customers', () => {
       */
       const old = await create({
         ...base,
-        name: `${TEST_PREFIX}-bad-state`,
+        name: `${RUN_PREFIX}-bad-state`,
         state: 'Pondicherry',
       });
       expect(old.status).toBe(422);
 
       const casing = await create({
         ...base,
-        name: `${TEST_PREFIX}-bad-state`,
+        name: `${RUN_PREFIX}-bad-state`,
         state: 'maharashtra',
       });
       expect(casing.status).toBe(422);
@@ -222,7 +223,7 @@ describe('customers', () => {
       // a near-miss and a name that was never a place at all.
       const invented = await create({
         ...base,
-        name: `${TEST_PREFIX}-bad-state`,
+        name: `${RUN_PREFIX}-bad-state`,
         state: 'NotARealState',
       });
       expect(invented.status).toBe(422);
@@ -231,7 +232,7 @@ describe('customers', () => {
     it('rejects a malformed GST number', async () => {
       const short = await create({
         ...base,
-        name: `${TEST_PREFIX}-bad-gst`,
+        name: `${RUN_PREFIX}-bad-gst`,
         gstNumber: 'ABC123',
       });
       expect(short.status).toBe(422);
@@ -239,7 +240,7 @@ describe('customers', () => {
       // Structurally wrong in one character: the fixed 'Z' is missing.
       const wrongShape = await create({
         ...base,
-        name: `${TEST_PREFIX}-bad-gst`,
+        name: `${RUN_PREFIX}-bad-gst`,
         gstNumber: '27AAPFU0939F1XV',
       });
       expect(wrongShape.status).toBe(422);
@@ -279,7 +280,7 @@ describe('vendors', () => {
 
     const res = await api<{ vendors: VendorView[] }>(
       'GET',
-      `/api/vendors?q=${TEST_PREFIX}-vendor`,
+      `/api/vendors?q=${RUN_PREFIX}-vendor`,
       { token },
     );
 
@@ -292,7 +293,7 @@ describe('vendors', () => {
     const res = await api<{ vendor: VendorView }>('POST', '/api/vendors', {
       token,
       body: {
-        name: `${TEST_PREFIX}-new-vendor-${Date.now()}`,
+        name: `${RUN_PREFIX}-new-vendor-${Date.now()}`,
         contactPerson: 'Rakesh Sharma',
         city: 'Moradabad',
       },
@@ -305,7 +306,7 @@ describe('vendors', () => {
   });
 
   it('refuses a duplicate vendor name through the standard envelope', async () => {
-    const name = `${TEST_PREFIX}-dup-vendor-${Date.now()}`;
+    const name = `${RUN_PREFIX}-dup-vendor-${Date.now()}`;
 
     const first = await api<{ vendor: VendorView }>('POST', '/api/vendors', {
       token,

@@ -8,9 +8,15 @@ import { cn } from '@/lib/utils';
 /**
  * The module checkboxes — §3 and §5.
  *
- * Zero through seven are all valid, so there is deliberately no "at least one"
- * rule: an account with no modules is a real thing an administrator may want,
- * and the seven boxes are simply independent.
+ * Any number of them is valid, so there is deliberately no "at least one" rule:
+ * an account with no modules is a real thing an administrator may want, and the
+ * boxes are simply independent.
+ *
+ * The grid is driven entirely by APP_MODULES and APP_MODULE_LABELS, so a new
+ * permission namespace appears here with no change to this file. That is why the
+ * seven HR namespaces are grantable from the day their enum values exist, before
+ * any HR page does — a grant is a permission decision, and it does not depend on
+ * there being a screen to use it on yet.
  */
 export function ModuleAccessField({
   selected,

@@ -36,9 +36,9 @@ import { updateUserAction } from '@/app/(app)/users/actions';
  * `modules` key at all: an empty array means "revoke everything", so the two
  * must stay distinguishable.
  *
- * Administrators are shown read-only. Their access is all seven modules by role
- * and cannot be edited (§13), and the role itself is not editable anywhere in
- * the product.
+ * Administrators are shown read-only. Their access is every module by role and
+ * cannot be edited (§13), and the role itself is not editable anywhere in the
+ * product.
  */
 export function EditUserDialog({
   user,

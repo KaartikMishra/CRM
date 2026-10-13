@@ -24,6 +24,7 @@ import { readFileSync } from 'node:fs';
 import { prisma } from '../../../config/database.js';
 import { api, mintToken, startTestServer, stopTestServer } from '../../../__tests__/helpers/test-server.js';
 import {
+  RUN_PREFIX,
   TEST_PREFIX,
   cleanup,
   mapOrderLineToRsProduct,
@@ -95,7 +96,7 @@ async function makeBill(
   // themselves so the two keys can be varied independently.
   if (!overrides.items) {
     payload.items = [
-      { productName: `${TEST_PREFIX}-bill-line`, orderedQty: 10, receivedQty: 10, rate: '100.00' },
+      { productName: `${RUN_PREFIX}-bill-line`, orderedQty: 10, receivedQty: 10, rate: '100.00' },
     ];
   }
   const res = await api('POST', '/api/procurement/bills', { token: adminToken, body: payload });
@@ -136,7 +137,7 @@ describe('mapping a purchase line to an RS Product', () => {
     expect(row.rsProductId).toBe(rs.id);
     // The vendor's wording is the record of their document and is never
     // rewritten to match the catalogue.
-    expect(row.productName).toBe(`${TEST_PREFIX}-bill-line`);
+    expect(row.productName).toBe(`${RUN_PREFIX}-bill-line`);
   });
 
   it('accepts the mapping at bill entry', async () => {
@@ -144,7 +145,7 @@ describe('mapping a purchase line to an RS Product', () => {
     const bill = await makeBill({
       items: [
         {
-          productName: `${TEST_PREFIX}-bill-line`,
+          productName: `${RUN_PREFIX}-bill-line`,
           rsProductId: rs.id,
           orderedQty: 5,
           receivedQty: 5,
@@ -186,7 +187,7 @@ describe('mapping a purchase line to an RS Product', () => {
       body: purchaseBillPayload(vendor.id, '', {
         items: [
           {
-            productName: `${TEST_PREFIX}-bill-line`,
+            productName: `${RUN_PREFIX}-bill-line`,
             rsProductId: rs.variantId,
             orderedQty: 1,
             receivedQty: 0,
@@ -264,7 +265,7 @@ describe('SKU is a search and display attribute, never identity', () => {
   });
 
   it('does not map a line whose wording exactly matches an RS title', async () => {
-    const title = `${TEST_PREFIX}-exact-${Date.now()}`;
+    const title = `${RUN_PREFIX}-exact-${Date.now()}`;
     await makeRsProduct({ title });
     const bill = await makeBill({
       items: [{ productName: title, orderedQty: 1, receivedQty: 0, rate: '1.00' }],
@@ -294,7 +295,7 @@ describe('allocation on RS Product identity', () => {
       body: salesOrderPayload(customer.id, {
         items: [
           {
-            productName: `${TEST_PREFIX}-order-line`,
+            productName: `${RUN_PREFIX}-order-line`,
             ...(rsProductId ? { rsProductId } : {}),
             quantity,
             price: '100.00',
@@ -413,7 +414,7 @@ describe('allocation on RS Product identity', () => {
 /** A line that has received nothing, so it contributes no stock of its own. */
 const emptyLine = {
   items: [
-    { productName: `${TEST_PREFIX}-bill-line`, orderedQty: 10, receivedQty: 0, rate: '100.00' },
+    { productName: `${RUN_PREFIX}-bill-line`, orderedQty: 10, receivedQty: 0, rate: '100.00' },
   ],
 };
 
@@ -476,7 +477,7 @@ describe('Procurement reads the RS Products CRM figure', () => {
     const bill = await makeBill({
       items: [
         {
-          productName: `${TEST_PREFIX}-bill-line`,
+          productName: `${RUN_PREFIX}-bill-line`,
           rsProductId: rs.id,
           orderedQty: 10,
           receivedQty: 0,
@@ -528,7 +529,7 @@ describe('Procurement reads the RS Products CRM figure', () => {
 describe('the legacy Product architecture is gone from Procurement', () => {
   const routes: [string, string, Record<string, unknown>][] = [
     ['GET', '/api/procurement/products?limit=5', {}],
-    ['POST', '/api/procurement/products', { name: `${TEST_PREFIX}-should-not-exist`, onHand: 5 }],
+    ['POST', '/api/procurement/products', { name: `${RUN_PREFIX}-should-not-exist`, onHand: 5 }],
     ['PATCH', '/api/procurement/products/ckd0000000000000000000001', { isActive: false }],
     ['POST', '/api/procurement/products/ckd0000000000000000000001/inventory', { delta: 5, reason: 'x' }],
     ['POST', '/api/procurement/order-lines/put-in-catalogue', { salesOrderItemId: 'ckd0000000000000000000001' }],

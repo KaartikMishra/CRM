@@ -36,7 +36,7 @@ import {
   makeUser,
   makeVendor,
   residualTestRows,
-  TEST_PREFIX,
+  RUN_PREFIX,
   trackEnquiry,
   vendorResponsePayload,
   type TestUser,
@@ -81,8 +81,8 @@ beforeAll(async () => {
   const created = await api<UserBody>('POST', '/api/users', {
     token: adminToken,
     body: {
-      name: `${TEST_PREFIX}-subject`,
-      email: `${TEST_PREFIX}-${suffix}@test.invalid`,
+      name: `${RUN_PREFIX}-subject`,
+      email: `${RUN_PREFIX}-${suffix}@test.invalid`,
       password: PASSWORD,
       confirmPassword: PASSWORD,
       modules: ['PRODUCT_ENQUIRY'],
@@ -333,7 +333,7 @@ describe('as an Answerer only', () => {
   it('keeps the edit rights answering needs', async () => {
     const res = await api('PATCH', `/api/product-enquiries/${enquiryId}`, {
       token: subjectToken,
-      body: { sourceDetail: `${TEST_PREFIX} answered` },
+      body: { sourceDetail: `${RUN_PREFIX} answered` },
     });
 
     expect(res.status, JSON.stringify(res.body)).toBe(200);

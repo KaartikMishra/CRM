@@ -10,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { prisma } from '../../../config/database.js';
 import { api, mintToken, startTestServer, stopTestServer } from '../../../__tests__/helpers/test-server.js';
 import {
-  TEST_PREFIX,
+  RUN_PREFIX,
   cleanup,
   makeCustomer,
   makeUser,
@@ -86,7 +86,7 @@ describe('a new sales order tells procurement', () => {
     const res = await api('POST', '/api/sales', {
       token: adminToken,
       body: salesOrderPayload(customer.id, {
-        items: [{ productName: `${TEST_PREFIX} cooker`, quantity: 3, price: '100.00' }],
+        items: [{ productName: `${RUN_PREFIX} cooker`, quantity: 3, price: '100.00' }],
       }),
     });
     expect(res.status).toBe(201);
@@ -114,8 +114,8 @@ describe('a new sales order tells procurement', () => {
       token: adminToken,
       body: salesOrderPayload(customer.id, {
         items: [
-          { productName: `${TEST_PREFIX} kadai`, quantity: 7, price: '100.00' },
-          { productName: `${TEST_PREFIX} thali`, quantity: 2, price: '50.00' },
+          { productName: `${RUN_PREFIX} kadai`, quantity: 7, price: '100.00' },
+          { productName: `${RUN_PREFIX} thali`, quantity: 2, price: '50.00' },
         ],
       }),
     });
@@ -133,7 +133,7 @@ describe('a new sales order tells procurement', () => {
     const before = await prisma.notification.count();
     // Duplicate order id — refused before anything is written.
     const payload = salesOrderPayload(customer.id, {
-      items: [{ productName: `${TEST_PREFIX} dup`, quantity: 1, price: '10.00' }],
+      items: [{ productName: `${RUN_PREFIX} dup`, quantity: 1, price: '10.00' }],
     });
     const first = await api('POST', '/api/sales', { token: adminToken, body: payload });
     trackSalesOrder((first.body.data as { order: { id: string } }).order.id);

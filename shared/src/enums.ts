@@ -19,8 +19,113 @@ export const APP_MODULES = [
   'VENDOR_INVOICE',
   'POST_SALES',
   'LEAD_DEAL',
+  // --- HR & Workforce Management -------------------------------------------
+  //
+  // Seven namespaces rather than one HR module, because HR is the first area
+  // where the people who may do one thing must not be able to do another: the
+  // manager who approves leave has no business reading salaries, and the
+  // recruiter has no business reading appraisals. A single HR grant would make
+  // every one of those the same grant.
+  //
+  // Registered here before any HR page exists. That is deliberate and is now an
+  // asserted property rather than an accident — see HR_MODULES below and the
+  // navigation test: an AppModule is a permission namespace, and a namespace
+  // may exist before the screen that uses it. Phase 0.5 ships the vocabulary so
+  // Phase 1 can be built against a permission model that is already real.
+  'HR_EMPLOYEE',
+  'HR_ATTENDANCE',
+  'HR_LEAVE',
+  'HR_PAYROLL',
+  'HR_RECRUITMENT',
+  'HR_PERFORMANCE',
+  'HR_ADMIN',
+  /*
+    Training & Learning Management, Phase 4.
+
+    A namespace of its own rather than a reuse of HR_PERFORMANCE, and that is the
+    access model rather than tidiness: a trainer who builds a course and signs off a
+    practical has no business reading appraisals, and an appraiser has no reason to
+    edit the catalogue. Folding them together would recreate exactly the conflation
+    these namespaces exist to prevent — and could not be undone later without
+    re-granting every user.
+  */
+  'HR_TRAINING',
 ] as const;
 export type AppModule = (typeof APP_MODULES)[number];
+
+/**
+ * The HR namespaces, named as a set so code and tests can speak about them.
+ *
+ * Every member is an AppModule — `satisfies` proves it, so a typo here is a
+ * compile error rather than a module that silently gates nothing.
+ */
+export const HR_MODULES = [
+  'HR_EMPLOYEE',
+  'HR_ATTENDANCE',
+  'HR_LEAVE',
+  'HR_PAYROLL',
+  'HR_RECRUITMENT',
+  'HR_PERFORMANCE',
+  'HR_ADMIN',
+  'HR_TRAINING',
+] as const satisfies readonly AppModule[];
+export type HrModule = (typeof HR_MODULES)[number];
+
+/**
+ * Modules deliberately registered without navigation, and why.
+ *
+ * The navigation test asserts this list exactly, so a module cannot sit here
+ * unnoticed: either it gets a page and leaves this list, or its absence is a
+ * recorded decision. Without it, "no nav item" and "forgot the nav item" would
+ * be indistinguishable.
+ */
+export const MODULES_WITHOUT_NAVIGATION = [
+  /*
+    HR_EMPLOYEE left this list in Phase 1, which is the point of the list existing:
+    it now has pages — the employee directory and profile — so a namespace with no
+    screen remains only ever a deliberate entry here.
+
+    HR_ADMIN stays, and that is a real decision rather than an oversight. It governs
+    the department and designation masters, which do have pages, but no *sidebar
+    row*: they are reached from the HR overview, because the navigation table's own
+    invariant requires every child to share its parent's module and HR_ADMIN is a
+    different grant from HR_EMPLOYEE. Giving the masters a top-level row would put
+    structural administration beside the directory and imply one grant covers both.
+
+    HR_ATTENDANCE and HR_LEAVE stayed through Phase 2, and HR_RECRUITMENT stays
+    through Phase 3, despite all three now having working pages. That is not an
+    oversight: this list tracks **top-level** navigation, and all of those are
+    *children* of the HR row. The same is true of HR_ADMIN's masters.
+
+    So "no navigation" here means "no sidebar row of its own", which is the thing
+    worth asserting — a module with no top-level row is reachable only through its
+    parent, and that should be a recorded decision rather than something somebody
+    notices later.
+
+    HR_TRAINING joins them in Phase 4, with the same justification: Training is a
+    child row under HR & Workforce, not a top-level entry.
+
+    HR_PERFORMANCE joined them in Phase 5 on the same child-row basis. As of Phase 5
+    every member of this list has working pages: the list now records only "reachable
+    through its parent, not from a top-level row", which is its durable meaning.
+    Registrations are kept regardless so an administrator's grant matrix stays stable
+    across phases rather than growing a column each time a module ships.
+  */
+  'HR_ADMIN',
+  'HR_ATTENDANCE',
+  'HR_LEAVE',
+  'HR_PAYROLL',
+  'HR_RECRUITMENT',
+  'HR_PERFORMANCE',
+  /*
+    HR_TRAINING joins this list in Phase 4 *despite* having pages, for the same
+    reason HR_ATTENDANCE and HR_RECRUITMENT are here: Training is a child row under
+    HR & Workforce, and this list tracks top-level navigation. A namespace reachable
+    only through its parent should be a recorded decision rather than something
+    somebody notices later.
+  */
+  'HR_TRAINING',
+] as const satisfies readonly AppModule[];
 
 /**
  * Where a lead reached us from.
@@ -84,8 +189,229 @@ export type LeadActivityKind = (typeof LEAD_ACTIVITY_KINDS)[number];
 export const PRODUCT_MATCH_KINDS = ['EXACT', 'SIMILAR'] as const;
 export type ProductMatchKind = (typeof PRODUCT_MATCH_KINDS)[number];
 
-export const PERMISSION_ACTIONS = ['VIEW', 'CREATE', 'EDIT', 'DELETE', 'ASSIGN'] as const;
+/**
+ * What somebody may do to a module.
+ *
+ * The first five are the original vocabulary and their meaning is unchanged.
+ * The last three arrive with HR, and arrive **denied**: no existing module
+ * grants any of them to anybody, by role default or by the grant UI, so the
+ * nine shipped modules keep exactly the effective permissions they had before
+ * these values existed. They are granted only where something explicitly needs
+ * them.
+ *
+ *   APPROVE  deciding somebody else's request — the thing requiresApproval()
+ *            could previously only answer with "are you an administrator".
+ *   EXPORT   taking data out of the system. Separate from VIEW because reading
+ *            one payslip on screen and downloading the payroll register are
+ *            different risks, and only the second leaves the building.
+ *   SELF     acting on one's own record only. The narrowest action there is:
+ *            an employee applying for their own leave holds SELF on HR_LEAVE
+ *            and nothing else, so the same endpoint serves them and their
+ *            manager without a second route or a second table.
+ */
+export const PERMISSION_ACTIONS = [
+  'VIEW',
+  'CREATE',
+  'EDIT',
+  'DELETE',
+  'ASSIGN',
+  'APPROVE',
+  'EXPORT',
+  'SELF',
+] as const;
 export type PermissionAction = (typeof PERMISSION_ACTIONS)[number];
+
+/**
+ * The original five, kept nameable.
+ *
+ * `ActionSet` is a Partial, so adding the three above compiled without touching
+ * one existing entry — which is precisely the danger: a set literally named ALL
+ * would have gone on claiming to be all while silently excluding them. This is
+ * what that constant is now called instead, and the name is the documentation.
+ */
+export const CRUD_ASSIGN_ACTIONS = [
+  'VIEW',
+  'CREATE',
+  'EDIT',
+  'DELETE',
+  'ASSIGN',
+] as const satisfies readonly PermissionAction[];
+
+// ---------------------------------------------------------------------------
+//  Cross-cutting foundation — approvals, settings, secure documents
+// ---------------------------------------------------------------------------
+
+/**
+ * Where one approval request stands. PENDING is the only state that can change.
+ *
+ * CANCELLED exists so a requester can withdraw. Deleting the row would destroy
+ * the evidence that the request was ever made, and a withdrawn request is a
+ * historical fact like any other decision — it is grouped with PENDING by the
+ * database's consistency CHECK, because withdrawing is not deciding and so
+ * carries no decider.
+ */
+export const APPROVAL_STATUSES = ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED'] as const;
+export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number];
+
+/** The two states an approver can put a request into. */
+export const APPROVAL_DECISIONS = ['APPROVED', 'REJECTED'] as const;
+export type ApprovalDecision = (typeof APPROVAL_DECISIONS)[number];
+
+/**
+ * What a secure document is, so access can be decided by kind.
+ *
+ * Every member is something that must not be publicly fetchable — which is the
+ * whole reason SecureDocument exists beside MediaAsset rather than inside it.
+ * Deliberately short and HR-shaped; this is not a general file taxonomy.
+ */
+export const SECURE_DOCUMENT_KINDS = [
+  'IDENTITY_PROOF',
+  'ADDRESS_PROOF',
+  'EDUCATION_CERTIFICATE',
+  'EXPERIENCE_LETTER',
+  'OFFER_LETTER',
+  'APPOINTMENT_LETTER',
+  'CONTRACT',
+  'PAYSLIP',
+  'TAX_DOCUMENT',
+  'BANK_DETAIL',
+  'MEDICAL_RECORD',
+  'DISCIPLINARY_RECORD',
+  'APPRAISAL',
+  'RESUME',
+  'OTHER',
+] as const;
+export type SecureDocumentKind = (typeof SECURE_DOCUMENT_KINDS)[number];
+
+/**
+ * Cloudinary's two non-public delivery types.
+ *
+ * Paired with the secure_document_delivery_type CHECK. 'upload' — Cloudinary's
+ * public default, and what every MediaAsset uses — is deliberately absent: a
+ * SecureDocument delivered publicly is the one failure this table exists to
+ * prevent, so the value that would cause it is not expressible.
+ */
+export const SECURE_DELIVERY_TYPES = ['authenticated', 'private'] as const;
+export type SecureDeliveryType = (typeof SECURE_DELIVERY_TYPES)[number];
+
+/**
+ * Whose a secure document is.
+ *
+ * Polymorphic until Employee exists in Phase 1, which is why this is a named set
+ * rather than a free string: 'User' is the only pair Phase 0.5 can write, and
+ * 'Employee' is added here the moment that model is real. A free string would let
+ * a typo file a payslip under an owner type nothing will ever query.
+ *
+ * 'Candidate' is Phase 3, added through the same extension point and for the same
+ * reason the other two exist. It is a *third* owner type rather than a reuse of
+ * 'Employee' because a candidate is not an employee: their résumé must not be
+ * reachable by an employee-document query, and their files have a different
+ * retention story — somebody who was never hired should not be carried in the
+ * employee record forever.
+ */
+export const SECURE_DOCUMENT_OWNER_TYPES = ['User', 'Employee', 'Candidate'] as const;
+export type SecureDocumentOwnerType = (typeof SECURE_DOCUMENT_OWNER_TYPES)[number];
+
+// ---------------------------------------------------------------------------
+//  HR & Workforce — Phase 1: Employee & Organization
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether an organizational record is still in use.
+ *
+ * Shared by Department and Designation rather than one enum each: they are the
+ * same question about the same kind of record. Neither is ever deleted once
+ * employees reference it — ARCHIVED stops it being offered to new employees while
+ * its history stays readable.
+ */
+export const ORG_UNIT_STATUSES = ['ACTIVE', 'ARCHIVED'] as const;
+export type OrgUnitStatus = (typeof ORG_UNIT_STATUSES)[number];
+
+/**
+ * Where an employee stands in their employment.
+ *
+ * Deliberately short: the full offboarding lifecycle is Phase 7. ON_NOTICE is its
+ * own state rather than a flag because somebody serving notice is still employed
+ * and still assignable, but not for work that outlives their leaving date.
+ *
+ * EXITED does not record *why*. Resignation, termination and redundancy carry
+ * different process and different confidentiality, and one enum value pretending
+ * to capture all three would be less honest than naming only the fact of leaving.
+ */
+export const EMPLOYEE_STATUSES = [
+  'PROBATION',
+  'ACTIVE',
+  'ON_NOTICE',
+  'EXITED',
+  'INACTIVE',
+] as const;
+export type EmployeeStatus = (typeof EMPLOYEE_STATUSES)[number];
+
+/** Statuses that count as currently employed, for headcount and filtering. */
+export const EMPLOYED_STATUSES = [
+  'PROBATION',
+  'ACTIVE',
+  'ON_NOTICE',
+] as const satisfies readonly EmployeeStatus[];
+
+export const EMPLOYMENT_TYPES = [
+  'FULL_TIME',
+  'PART_TIME',
+  'CONTRACT',
+  'INTERN',
+  'CONSULTANT',
+] as const;
+export type EmploymentType = (typeof EMPLOYMENT_TYPES)[number];
+
+export const WORK_MODES = ['ON_SITE', 'REMOTE', 'HYBRID'] as const;
+export type WorkMode = (typeof WORK_MODES)[number];
+
+/**
+ * What one EmployeeHistory row records.
+ *
+ * A fixed vocabulary rather than free text, so the timeline can be filtered and a
+ * reader can tell a transfer from a promotion without parsing prose. There is
+ * deliberately no generic PROFILE_UPDATED: a changed phone number is not an event
+ * in somebody's employment, and recording it as one would bury the ones that are.
+ */
+export const EMPLOYEE_EVENT_TYPES = [
+  'JOINED',
+  'DEPARTMENT_CHANGED',
+  'DESIGNATION_CHANGED',
+  'MANAGER_CHANGED',
+  'STATUS_CHANGED',
+  'EMPLOYMENT_TYPE_CHANGED',
+  'WORK_MODE_CHANGED',
+  'USER_LINKED',
+  'USER_UNLINKED',
+] as const;
+export type EmployeeEventType = (typeof EMPLOYEE_EVENT_TYPES)[number];
+
+/**
+ * What an employee document is.
+ *
+ * Narrower than SECURE_DOCUMENT_KINDS, which covers every confidential file the
+ * CRM might hold: these are the ones an employee record carries. The split keeps
+ * an HR document picker from offering a payslip category Phase 1 does not produce.
+ */
+export const EMPLOYEE_DOCUMENT_TYPES = [
+  'IDENTITY_PROOF',
+  'ADDRESS_PROOF',
+  'EDUCATION_CERTIFICATE',
+  'EXPERIENCE_LETTER',
+  'OFFER_LETTER',
+  'APPOINTMENT_LETTER',
+  'CONTRACT',
+  'RESUME',
+  'OTHER',
+] as const;
+export type EmployeeDocumentType = (typeof EMPLOYEE_DOCUMENT_TYPES)[number];
+
+export const DOCUMENT_VERIFICATION_STATUSES = ['PENDING', 'VERIFIED', 'REJECTED'] as const;
+export type DocumentVerificationStatus = (typeof DOCUMENT_VERIFICATION_STATUSES)[number];
+
+/** The employee-id prefix, matching the existing RS001 convention on User. */
+export const EMPLOYEE_ID_PREFIX = 'RS';
 
 /** §15 — customer type sits on the customer, not the enquiry line (Q1). */
 export const CUSTOMER_TYPES = ['RETAIL', 'BULK', 'WEDDING_GIFTING', 'CORPORATE_GIFTING'] as const;
@@ -330,6 +656,84 @@ export const NOTIFICATION_TYPES = [
   'POST_SALES_CASE_ASSIGNED',
   'POST_SALES_CASE_CRITICAL',
   'POST_SALES_CASE_REOPENED',
+  /**
+   * HR Phase 1 — three events, and deliberately only three.
+   *
+   * Each one tells somebody something they must act on or could not otherwise
+   * know: a manager gains a report, a person's CRM account is now tied to their
+   * HR record, or somebody they manage is leaving. Creating an employee raises
+   * nothing by itself — the HR team already knows, having just done it, and a
+   * notice nobody needs is how a bell stops being read.
+   */
+  'HR_EMPLOYEE_ASSIGNED_TO_MANAGER',
+  'HR_EMPLOYEE_ACCOUNT_LINKED',
+  'HR_EMPLOYEE_STATUS_CHANGED',
+  /**
+   * HR Phase 3 — recruitment, onboarding and probation. Five, on the same test
+   * the Phase 1 three had to pass: does this tell somebody something they must
+   * act on and could not otherwise know?
+   *
+   * Each one has a named recipient with a deadline attached. An interviewer is
+   * expected somewhere at a time; a hiring manager is being asked to decide; an
+   * onboarding task is owed by a date; a probation review falls due; a probation
+   * period is ending and somebody must confirm, extend or terminate before it
+   * does.
+   *
+   * What is deliberately absent is the larger half of the pipeline. Creating a
+   * requisition, receiving an application, moving a candidate from SCREENING to
+   * SHORTLISTED, sending an offer — the recruiter doing it already knows, and the
+   * ATS board is where that state is read. A notification per stage change would
+   * put twelve notices behind every hire and teach everybody to ignore the bell,
+   * which costs the five above their whole value.
+   */
+  'HR_INTERVIEW_SCHEDULED',
+  'HR_APPLICATION_DECISION_REQUIRED',
+  'HR_ONBOARDING_TASK_ASSIGNED',
+  'HR_PROBATION_REVIEW_DUE',
+  'HR_PROBATION_ENDING',
+  /**
+   * HR Phase 4 — training. Five, on the same test as every notice before them:
+   * does this tell somebody something they must act on and could not otherwise
+   * know?
+   *
+   * A learner is given mandatory work with a deadline; a deadline passes; a
+   * reviewer owes a decision on a practical; a mentor owes a sign-off; somebody has
+   * been cleared for live work.
+   *
+   * What is deliberately absent is the bulk of the module. Completing a lesson,
+   * starting an attempt, passing one test of thirteen — the learner did it and can
+   * see it on their own page. A notice per module would put a dozen behind every
+   * induction and teach everybody to ignore the bell, which costs these five their
+   * entire value.
+   *
+   * Failing an assessment raises nothing either, and that is a deliberate kindness:
+   * the learner already knows, and a row in a notification table saying so is a
+   * record of their failure sitting where a colleague might glance at it.
+   */
+  'HR_TRAINING_ASSIGNED',
+  'HR_TRAINING_OVERDUE',
+  'HR_TRAINING_PRACTICAL_REVIEW_DUE',
+  'HR_TRAINING_SHADOWING_SIGNOFF_DUE',
+  'HR_TRAINING_QUALIFIED',
+  /*
+    HR Phase 5 — performance. Five events, on the same test: does this tell
+    somebody something they must act on and could not otherwise know?
+
+    HR_REVIEW_FINALIZED is the one worth defending. An employee is told their
+    appraisal is locked precisely because they can no longer influence it — a
+    decision made about somebody that they learn about by chance is worse than one
+    they are told about plainly.
+
+    Deliberately absent: saving a draft assessment, submitting one, rating a
+    competency, recording KPI progress. Each is an author acting on their own work,
+    so the person already knows, and a notice nobody needs is how a bell stops
+    being read.
+  */
+  'HR_REVIEW_CYCLE_OPENED',
+  'HR_SELF_ASSESSMENT_DUE',
+  'HR_MANAGER_REVIEW_DUE',
+  'HR_REVIEW_FINALIZED',
+  'HR_IMPROVEMENT_PLAN_OPENED',
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 
@@ -567,3 +971,882 @@ export const POST_SALES_ATTACHMENT_KINDS = [
   'OTHER',
 ] as const;
 export type PostSalesAttachmentKind = (typeof POST_SALES_ATTACHMENT_KINDS)[number];
+
+// ---------------------------------------------------------------------------
+//  HR Phase 2 — Attendance & Leave
+// ---------------------------------------------------------------------------
+
+/**
+ * What an employee's day was.
+ *
+ * Deliberately separate from ATTENDANCE_WORK_MODES below: "present" and "worked
+ * from home" are different questions, and one enum carrying both would make
+ * "present in the office" and "present at home" different statuses — so every
+ * query about presence would have to enumerate work modes.
+ */
+export const ATTENDANCE_STATUSES = [
+  'PRESENT',
+  'ABSENT',
+  'HALF_DAY',
+  /** Covered by an approved leave. Set by resolution, never by a clock-in. */
+  'LEAVE',
+  'HOLIDAY',
+  'WEEK_OFF',
+] as const;
+export type AttendanceStatus = (typeof ATTENDANCE_STATUSES)[number];
+
+/** Statuses that count as the employee having worked, for summaries. */
+export const WORKED_ATTENDANCE_STATUSES = [
+  'PRESENT',
+  'HALF_DAY',
+] as const satisfies readonly AttendanceStatus[];
+
+/**
+ * Where the work actually happened on one day.
+ *
+ * NOT the Phase 1 `WorkMode` (ON_SITE / REMOTE / HYBRID), which is the
+ * employee's contractual arrangement. A HYBRID employee works some days in the
+ * office and some at home, so a HYBRID value on an attendance row would say
+ * nothing about that day.
+ */
+export const ATTENDANCE_WORK_MODES = ['OFFICE', 'WFH', 'REMOTE'] as const;
+export type AttendanceWorkMode = (typeof ATTENDANCE_WORK_MODES)[number];
+
+/**
+ * Where an attendance record is in its day.
+ *
+ * The session state machine. Distinct from the status, which is the verdict on
+ * the day: this is about whether somebody is currently clocked in, on a break, or
+ * finished. A database CHECK pairs each state with the timestamps it implies, so
+ * "clocked in twice" is unrepresentable rather than merely rejected.
+ */
+export const ATTENDANCE_SESSION_STATES = ['OPEN', 'ON_BREAK', 'CLOSED', 'NONE'] as const;
+export type AttendanceSessionState = (typeof ATTENDANCE_SESSION_STATES)[number];
+
+/**
+ * Why an attendance record says what it says.
+ *
+ * An auto-resolved ABSENT and a manually corrected one are very different
+ * claims, and a future Payroll phase must be able to tell them apart.
+ */
+export const ATTENDANCE_SOURCES = ['SELF', 'SYSTEM', 'MANUAL', 'CORRECTION'] as const;
+export type AttendanceSource = (typeof ATTENDANCE_SOURCES)[number];
+
+export const ATTENDANCE_CORRECTION_STATUSES = [
+  'PENDING',
+  'APPROVED',
+  'REJECTED',
+  'CANCELLED',
+] as const;
+export type AttendanceCorrectionStatus = (typeof ATTENDANCE_CORRECTION_STATUSES)[number];
+
+export const OVERTIME_STATUSES = ['PENDING', 'APPROVED', 'REJECTED'] as const;
+export type OvertimeStatus = (typeof OVERTIME_STATUSES)[number];
+
+export const LEAVE_REQUEST_STATUSES = ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED'] as const;
+export type LeaveRequestStatus = (typeof LEAVE_REQUEST_STATUSES)[number];
+
+/** Requests still awaiting a decision — what an approver's queue shows. */
+export const OPEN_LEAVE_STATUSES = ['PENDING'] as const satisfies readonly LeaveRequestStatus[];
+
+/**
+ * Which half a half-day leave covers.
+ *
+ * Required whenever a request is a half day, enforced by a CHECK: "half a day
+ * off" without saying which half cannot be rostered against.
+ */
+export const HALF_DAY_PERIODS = ['FIRST_HALF', 'SECOND_HALF'] as const;
+export type HalfDayPeriod = (typeof HALF_DAY_PERIODS)[number];
+
+/**
+ * What moved a leave balance.
+ *
+ * Every balance change is one of these, so a balance is always explainable by
+ * replaying its ledger rather than being a number somebody edited.
+ */
+export const LEAVE_LEDGER_REASONS = [
+  'ALLOCATION',
+  'ACCRUAL',
+  'CARRY_FORWARD',
+  'RESERVATION',
+  'RESERVATION_RELEASE',
+  'CONSUMPTION',
+  'CONSUMPTION_REVERSAL',
+  'ADJUSTMENT',
+  'LAPSE',
+] as const;
+export type LeaveLedgerReason = (typeof LEAVE_LEDGER_REASONS)[number];
+
+// ---------------------------------------------------------------------------
+//  HR & Workforce — Phase 3: Recruitment / ATS, Onboarding & Probation
+// ---------------------------------------------------------------------------
+//
+// Mirrors the Prisma enums one-for-one. Order matters in two of these —
+// APPLICATION_STAGES and ONBOARDING_STAGES — because "forward" is defined as
+// later in the array, and the transition maps are built from that.
+
+export const JOB_REQUISITION_STATUSES = [
+  'DRAFT',
+  'PENDING_APPROVAL',
+  'APPROVED',
+  'PUBLISHED',
+  'PAUSED',
+  'CLOSED',
+  'CANCELLED',
+] as const;
+export type JobRequisitionStatus = (typeof JOB_REQUISITION_STATUSES)[number];
+
+/** A requisition accepting applications. Exactly one status, deliberately. */
+export const OPEN_JOB_STATUSES = ['PUBLISHED'] as const satisfies readonly JobRequisitionStatus[];
+
+export const JOB_PRIORITIES = ['LOW', 'NORMAL', 'HIGH', 'URGENT'] as const;
+export type JobPriority = (typeof JOB_PRIORITIES)[number];
+
+export const CANDIDATE_SOURCES = [
+  'DIRECT',
+  'REFERRAL',
+  'JOB_PORTAL',
+  'WALK_IN',
+  'CAMPUS',
+  'AGENCY',
+  'SOCIAL_MEDIA',
+  'OTHER',
+] as const;
+export type CandidateSource = (typeof CANDIDATE_SOURCES)[number];
+
+/**
+ * The ATS pipeline, in order.
+ *
+ * The order is load-bearing: `nextStages` and `isForwardStage` in
+ * `utils/ats-pipeline.ts` read index positions out of this array, so reordering it
+ * silently changes which transitions are legal. Add to the end, or fix the map.
+ */
+export const APPLICATION_STAGES = [
+  'APPLICATION',
+  'SCREENING',
+  'SHORTLISTED',
+  'HR_INTERVIEW',
+  'DEPARTMENT_INTERVIEW',
+  'ASSESSMENT',
+  'FINAL_INTERVIEW',
+  'SELECTED',
+  'OFFER',
+  'OFFER_ACCEPTED',
+  'BACKGROUND_VERIFICATION',
+  'ONBOARDING',
+  'JOINED',
+] as const;
+export type ApplicationStage = (typeof APPLICATION_STAGES)[number];
+
+/**
+ * Stages at or beyond selection.
+ *
+ * Paired with the application_selected_stage_has_decision CHECK — everything here
+ * is downstream of somebody deciding to hire, so none of them can lack that
+ * decision.
+ */
+export const POST_SELECTION_STAGES = [
+  'SELECTED',
+  'OFFER',
+  'OFFER_ACCEPTED',
+  'BACKGROUND_VERIFICATION',
+  'ONBOARDING',
+  'JOINED',
+] as const satisfies readonly ApplicationStage[];
+
+export const APPLICATION_STATUSES = [
+  'ACTIVE',
+  'REJECTED',
+  'WITHDRAWN',
+  'HIRED',
+  'DECLINED',
+] as const;
+export type ApplicationStatus = (typeof APPLICATION_STATUSES)[number];
+
+/**
+ * Applications still in play.
+ *
+ * The filter a recruiter's board defaults to, and the set a new application for
+ * the same role is checked against.
+ */
+export const OPEN_APPLICATION_STATUSES = [
+  'ACTIVE',
+] as const satisfies readonly ApplicationStatus[];
+
+export const INTERVIEW_TYPES = ['HR', 'DEPARTMENT', 'TECHNICAL', 'FINAL', 'OTHER'] as const;
+export type InterviewType = (typeof INTERVIEW_TYPES)[number];
+
+export const INTERVIEW_STATUSES = ['SCHEDULED', 'COMPLETED', 'CANCELLED', 'NO_SHOW'] as const;
+export type InterviewStatus = (typeof INTERVIEW_STATUSES)[number];
+
+/**
+ * What an interviewer concluded.
+ *
+ * Five points rather than three. A three-point scale collects everybody's
+ * uncertainty in the middle and tells a hiring manager nothing; splitting the ends
+ * makes a strong signal visible.
+ */
+export const INTERVIEW_RECOMMENDATIONS = [
+  'STRONG_YES',
+  'YES',
+  'MAYBE',
+  'NO',
+  'STRONG_NO',
+] as const;
+export type InterviewRecommendation = (typeof INTERVIEW_RECOMMENDATIONS)[number];
+
+export const ASSESSMENT_STATUSES = [
+  'PENDING',
+  'IN_PROGRESS',
+  'COMPLETED',
+  'PASSED',
+  'FAILED',
+] as const;
+export type AssessmentStatus = (typeof ASSESSMENT_STATUSES)[number];
+
+/** Assessments with a result recorded — paired with the review-complete CHECK. */
+export const CONCLUDED_ASSESSMENT_STATUSES = [
+  'COMPLETED',
+  'PASSED',
+  'FAILED',
+] as const satisfies readonly AssessmentStatus[];
+
+export const OFFER_STATUSES = [
+  'DRAFT',
+  'SENT',
+  'ACCEPTED',
+  'REJECTED',
+  'EXPIRED',
+  'WITHDRAWN',
+] as const;
+export type OfferStatus = (typeof OFFER_STATUSES)[number];
+
+/**
+ * Offers somebody has answered.
+ *
+ * Paired with the offer_response_stamp CHECK: each of these must carry a
+ * respondedAt, because "when did they accept" is a question that gets asked.
+ * EXPIRED is absent — lapsing is the absence of an answer, not an answer.
+ */
+export const ANSWERED_OFFER_STATUSES = [
+  'ACCEPTED',
+  'REJECTED',
+  'WITHDRAWN',
+] as const satisfies readonly OfferStatus[];
+
+export const BACKGROUND_CHECK_TYPES = [
+  'IDENTITY',
+  'EDUCATION',
+  'EMPLOYMENT',
+  'CRIMINAL',
+  'REFERENCE',
+  'ADDRESS',
+  'OTHER',
+] as const;
+export type BackgroundCheckType = (typeof BACKGROUND_CHECK_TYPES)[number];
+
+export const BACKGROUND_CHECK_STATUSES = [
+  'PENDING',
+  'IN_PROGRESS',
+  'CLEAR',
+  'FLAGGED',
+  'FAILED',
+  'WAIVED',
+] as const;
+export type BackgroundCheckStatus = (typeof BACKGROUND_CHECK_STATUSES)[number];
+
+/** Checks that have concluded, one way or another. */
+export const CONCLUDED_BACKGROUND_CHECK_STATUSES = [
+  'CLEAR',
+  'FLAGGED',
+  'FAILED',
+  'WAIVED',
+] as const satisfies readonly BackgroundCheckStatus[];
+
+/**
+ * Checks whose result counts against somebody.
+ *
+ * Named because it governs two things: the adverse-result CHECK requiring an
+ * explanation, and the rule that a flagged verification blocks onboarding until a
+ * person decides to proceed anyway. An automatic rejection on a FLAGGED check
+ * would let a database row end somebody's employment without a human deciding.
+ */
+export const ADVERSE_BACKGROUND_CHECK_STATUSES = [
+  'FLAGGED',
+  'FAILED',
+] as const satisfies readonly BackgroundCheckStatus[];
+
+/**
+ * The onboarding checklist, in order.
+ *
+ * Order is load-bearing, like APPLICATION_STAGES. EMPLOYEE_CREATED is the hinge:
+ * the three stages before it run without an employment record, every stage after
+ * it has one, and the onboarding_employee_after_creation CHECK pair enforces
+ * exactly that boundary.
+ */
+export const ONBOARDING_STAGES = [
+  'OFFER_ACCEPTED',
+  'DOCUMENTS',
+  'VERIFICATION',
+  'EMPLOYEE_CREATED',
+  'ACCOUNT',
+  'ASSETS',
+  'POLICIES',
+  'TRAINING',
+  'DEPARTMENT_INTRODUCTION',
+  'MANAGER_ASSIGNED',
+  'FIRST_WEEK',
+  'DAY_30',
+  'DAY_60',
+  'DAY_90',
+  'PROBATION_DECISION',
+  'COMPLETED',
+] as const;
+export type OnboardingStage = (typeof ONBOARDING_STAGES)[number];
+
+/**
+ * The stages that run before an employment record exists.
+ *
+ * Mirrors the CHECK pair. Kept as a named constant so the service and the test
+ * assert against the same list the database does, rather than three copies of
+ * three strings drifting apart.
+ */
+export const PRE_EMPLOYEE_ONBOARDING_STAGES = [
+  'OFFER_ACCEPTED',
+  'DOCUMENTS',
+  'VERIFICATION',
+] as const satisfies readonly OnboardingStage[];
+
+export const ONBOARDING_TASK_STATUSES = [
+  'PENDING',
+  'IN_PROGRESS',
+  'COMPLETED',
+  'SKIPPED',
+  'BLOCKED',
+] as const;
+export type OnboardingTaskStatus = (typeof ONBOARDING_TASK_STATUSES)[number];
+
+/**
+ * Tasks nobody needs to do any more.
+ *
+ * SKIPPED counts as settled: deciding not to do something is a decision, and the
+ * completion CHECK requires it to be attributable like any other.
+ */
+export const SETTLED_ONBOARDING_TASK_STATUSES = [
+  'COMPLETED',
+  'SKIPPED',
+] as const satisfies readonly OnboardingTaskStatus[];
+
+/**
+ * Who owns an onboarding task.
+ *
+ * Generic on purpose. ASSETS, TRAINING and POLICY are foundations in this phase:
+ * the category is how a future Asset or Training module finds its work, without
+ * this phase inventing an asset register or a course catalogue it would then have
+ * to maintain.
+ */
+export const ONBOARDING_TASK_CATEGORIES = [
+  'DOCUMENTS',
+  'IT',
+  'HR',
+  'MANAGER',
+  'TRAINING',
+  'POLICY',
+  'DEPARTMENT',
+] as const;
+export type OnboardingTaskCategory = (typeof ONBOARDING_TASK_CATEGORIES)[number];
+
+export const PROBATION_STATUSES = [
+  'NOT_STARTED',
+  'ACTIVE',
+  'EXTENDED',
+  'CONFIRMED',
+  'TERMINATED',
+] as const;
+export type ProbationStatus = (typeof PROBATION_STATUSES)[number];
+
+/** Probations still running — the set a review or a decision may act on. */
+export const OPEN_PROBATION_STATUSES = [
+  'ACTIVE',
+  'EXTENDED',
+] as const satisfies readonly ProbationStatus[];
+
+export const PROBATION_REVIEW_TYPES = ['FIRST_WEEK', 'DAY_30', 'DAY_60', 'DAY_90'] as const;
+export type ProbationReviewType = (typeof PROBATION_REVIEW_TYPES)[number];
+
+export const PROBATION_REVIEW_STATUSES = ['SCHEDULED', 'COMPLETED', 'MISSED'] as const;
+export type ProbationReviewStatus = (typeof PROBATION_REVIEW_STATUSES)[number];
+
+export const PROBATION_DECISIONS = ['CONFIRM', 'EXTEND', 'TERMINATE'] as const;
+export type ProbationDecision = (typeof PROBATION_DECISIONS)[number];
+
+/**
+ * How many days after joining each probation review falls due.
+ *
+ * Kept here rather than in the service because the frontend shows the schedule
+ * too, and two copies of "60" would eventually disagree. FIRST_WEEK is 7 rather
+ * than 5: a working-week offset would need the holiday calendar, and a review due
+ * date is not worth a dependency on it — the reviewer picks the actual day.
+ */
+export const PROBATION_REVIEW_OFFSET_DAYS = {
+  FIRST_WEEK: 7,
+  DAY_30: 30,
+  DAY_60: 60,
+  DAY_90: 90,
+} as const satisfies Record<ProbationReviewType, number>;
+
+// ---------------------------------------------------------------------------
+//  HR & Workforce — Phase 4: Training & Learning Management
+// ---------------------------------------------------------------------------
+//
+// Mirrors the Prisma enums one-for-one. Order matters in TRAINING_MODULE_KINDS
+// only in that the completion rule follows the kind — not as a sequence.
+//
+// The learning journey itself is deliberately NOT an enum here. It is ordered
+// TrainingModule rows inside a program, because a compiled-in sequence would mean
+// every department that trains differently needs a code change. See
+// REQUIRED_JOURNEY_TEMPLATE below, which is a *starting point* a program can be
+// seeded from and nothing the services branch on.
+
+export const TRAINING_PROGRAM_STATUSES = ['DRAFT', 'ACTIVE', 'ARCHIVED'] as const;
+export type TrainingProgramStatus = (typeof TRAINING_PROGRAM_STATUSES)[number];
+
+/** Programs that accept new assignments. Exactly one status, deliberately. */
+export const ASSIGNABLE_PROGRAM_STATUSES = [
+  'ACTIVE',
+] as const satisfies readonly TrainingProgramStatus[];
+
+/**
+ * What kind of step a module is, which decides how it is completed.
+ *
+ * The distinction is load-bearing rather than descriptive:
+ *
+ *   LESSON      the learner marks it read
+ *   ASSESSMENT  the learner passes its test
+ *   PRACTICAL   somebody else approves their submission
+ *   SHADOWING   a mentor signs it off
+ *
+ * That is what lets one ordered list express the whole journey — company
+ * introduction through to final test — without a service knowing the sequence.
+ */
+export const TRAINING_MODULE_KINDS = [
+  'LESSON',
+  'ASSESSMENT',
+  'PRACTICAL',
+  'SHADOWING',
+] as const;
+export type TrainingModuleKind = (typeof TRAINING_MODULE_KINDS)[number];
+
+/** Modules completed by somebody other than the learner. */
+export const REVIEWED_MODULE_KINDS = [
+  'PRACTICAL',
+  'SHADOWING',
+] as const satisfies readonly TrainingModuleKind[];
+
+export const TRAINING_ENROLLMENT_STATUSES = [
+  'NOT_STARTED',
+  'IN_PROGRESS',
+  'COMPLETED',
+  'EXEMPTED',
+  'CANCELLED',
+] as const;
+export type TrainingEnrollmentStatus = (typeof TRAINING_ENROLLMENT_STATUSES)[number];
+
+/**
+ * Enrollments still in play.
+ *
+ * Paired with the `training_enrollment_one_live_per_program` partial unique index:
+ * exactly these two statuses block a second assignment, so a retake years later is
+ * allowed while two concurrent assignments cannot both land.
+ */
+export const LIVE_ENROLLMENT_STATUSES = [
+  'NOT_STARTED',
+  'IN_PROGRESS',
+] as const satisfies readonly TrainingEnrollmentStatus[];
+
+/** Enrollments nobody needs to work on any more. */
+export const SETTLED_ENROLLMENT_STATUSES = [
+  'COMPLETED',
+  'EXEMPTED',
+  'CANCELLED',
+] as const satisfies readonly TrainingEnrollmentStatus[];
+
+export const TRAINING_OBLIGATIONS = ['MANDATORY', 'OPTIONAL'] as const;
+export type TrainingObligation = (typeof TRAINING_OBLIGATIONS)[number];
+
+/**
+ * How an assignment came about.
+ *
+ * Paired with the `training_enrollment_assigned_via` CHECK. A named set rather than
+ * free text because the point of recording it is to answer "why is this person
+ * enrolled" months later, and three spellings of "department" make that
+ * unanswerable.
+ *
+ * Stored on the enrollment rather than re-derived, deliberately: a department-wide
+ * assignment must not change meaning when the employee later moves department.
+ */
+export const TRAINING_ASSIGNMENT_SOURCES = [
+  'INDIVIDUAL',
+  'DEPARTMENT',
+  'DESIGNATION',
+  'ONBOARDING',
+] as const;
+export type TrainingAssignmentSource = (typeof TRAINING_ASSIGNMENT_SOURCES)[number];
+
+export const ASSESSMENT_QUESTION_KINDS = [
+  'SINGLE_CHOICE',
+  'MULTIPLE_CHOICE',
+  'TRUE_FALSE',
+] as const;
+export type AssessmentQuestionKind = (typeof ASSESSMENT_QUESTION_KINDS)[number];
+
+export const TRAINING_ATTEMPT_STATUSES = [
+  'IN_PROGRESS',
+  'PASSED',
+  'FAILED',
+  'EXPIRED',
+] as const;
+export type TrainingAttemptStatus = (typeof TRAINING_ATTEMPT_STATUSES)[number];
+
+/**
+ * Attempts that are over.
+ *
+ * EXPIRED counts here, which is the point: abandoning an attempt must not be a free
+ * retry, so a lapsed one consumes its slot against the limit exactly as a failure
+ * does.
+ */
+export const SETTLED_ATTEMPT_STATUSES = [
+  'PASSED',
+  'FAILED',
+  'EXPIRED',
+] as const satisfies readonly TrainingAttemptStatus[];
+
+export const PRACTICAL_SUBMISSION_STATUSES = [
+  'NOT_STARTED',
+  'SUBMITTED',
+  'APPROVED',
+  'REJECTED',
+] as const;
+export type PracticalSubmissionStatus = (typeof PRACTICAL_SUBMISSION_STATUSES)[number];
+
+export const SHADOWING_STATUSES = [
+  'SCHEDULED',
+  'IN_PROGRESS',
+  'COMPLETED',
+  'CANCELLED',
+] as const;
+export type ShadowingStatus = (typeof SHADOWING_STATUSES)[number];
+
+/**
+ * The business's default pass mark, out of 100.
+ *
+ * A default, not a rule. It is the column default on `TrainingProgram.passingScore`
+ * and every program may set its own — nothing in the services compares against this
+ * constant, and a CHECK keeps any stated value inside 0 < score <= 100.
+ *
+ * Named here so the frontend can show "80%" as the suggested value on a new-program
+ * form without hard-coding the number in a component.
+ */
+export const DEFAULT_PASSING_SCORE = 80;
+
+/** The default retake allowance, for the same reason. */
+export const DEFAULT_MAX_ATTEMPTS = 3;
+
+/**
+ * The required learning journey, as a seed template.
+ *
+ * This is the sequence the business asked for: company introduction through to
+ * live-work readiness. It exists so a new program can be created pre-populated
+ * rather than built a module at a time in the UI.
+ *
+ * **Nothing branches on it.** No service checks "is this the company introduction
+ * module"; completion is decided by module kind, the program's requirement flags and
+ * the learner's actual progress. Reordering, removing or adding steps is editing a
+ * program's modules, not changing code — which is the whole reason the journey is
+ * data.
+ *
+ * `kind` drives how each step completes, so the knowledge test and department test
+ * are ASSESSMENT, the practical is PRACTICAL, and shadowing is SHADOWING. The final
+ * test is an ASSESSMENT flagged `isFinal` when the program is seeded.
+ */
+export const REQUIRED_JOURNEY_TEMPLATE = [
+  { title: 'Company introduction', kind: 'LESSON' },
+  { title: 'Product training', kind: 'LESSON' },
+  { title: 'Customer psychology', kind: 'LESSON' },
+  { title: 'Communication', kind: 'LESSON' },
+  { title: 'Customer experience', kind: 'LESSON' },
+  { title: 'Productivity tools', kind: 'LESSON' },
+  { title: 'Company policies', kind: 'LESSON' },
+  { title: 'Knowledge test', kind: 'ASSESSMENT' },
+  { title: 'Department-specific training', kind: 'LESSON' },
+  { title: 'Department test', kind: 'ASSESSMENT' },
+  { title: 'Practical exercise', kind: 'PRACTICAL' },
+  { title: 'Shadowing', kind: 'SHADOWING' },
+  { title: 'Final assessment', kind: 'ASSESSMENT' },
+] as const satisfies readonly { title: string; kind: TrainingModuleKind }[];
+
+// ---------------------------------------------------------------------------
+//  HR Phase 5 — Performance Management
+// ---------------------------------------------------------------------------
+//
+// ### What a "review" is here, and why it is not ProbationReview
+//
+// Phase 3 already has `ProbationReview`: four fixed checkpoints, one rating,
+// cascade-bound to a single ProbationRecord and keyed unique per type. That is a
+// one-off hiring gate — it answers "should this person stay past probation".
+//
+// Phase 5 answers a different question, repeatedly: how did somebody do over a
+// period, against goals they agreed and competencies the business names. It needs
+// cycles, goals with measurable targets, a self-assessment, a manager review, named
+// competency ratings and a finalisation step that locks the record. Widening
+// ProbationReview to carry all that would make every probation row carry columns it
+// never uses, and would tie an annual appraisal's lifecycle to a probation's cascade
+// — delete the probation and the appraisal history goes with it.
+//
+// So these are separate tables, and `ProbationReview` is left exactly as it is.
+
+/**
+ * The life of a review cycle.
+ *
+ * DRAFT is where a cycle is configured — dates, competencies, who is in scope —
+ * and nothing is visible to the people being reviewed. ACTIVE opens it: reviews
+ * exist and self-assessments can be written. CLOSED stops new submissions while
+ * leaving everything readable, which is what a cycle looks like after the
+ * conversations have happened. ARCHIVED is history.
+ *
+ * Opening and closing are their own endpoints rather than a PATCH on this field,
+ * the same decision Phase 4 made about publishing a program: each carries a
+ * timestamp and a record of who did it, and a cycle that became ACTIVE with nothing
+ * saying how is a cycle nobody can audit.
+ */
+export const REVIEW_CYCLE_STATUSES = ['DRAFT', 'ACTIVE', 'CLOSED', 'ARCHIVED'] as const;
+export type ReviewCycleStatus = (typeof REVIEW_CYCLE_STATUSES)[number];
+
+/** Cycles that accept new work. Reads better than listing the negation. */
+export const OPEN_REVIEW_CYCLE_STATUSES = ['ACTIVE'] as const satisfies readonly ReviewCycleStatus[];
+
+/**
+ * How often a cycle recurs.
+ *
+ * Descriptive, not a scheduler. Nothing in Phase 5 creates the next cycle
+ * automatically — somebody does, and this records the intended rhythm so a report
+ * can say "quarterly" without inferring it from two dates. A cron that generated
+ * cycles would need an answer for "what happens to the one still open", and nobody
+ * has asked for that.
+ */
+export const REVIEW_CYCLE_CADENCES = [
+  'MONTHLY',
+  'QUARTERLY',
+  'HALF_YEARLY',
+  'ANNUAL',
+  'AD_HOC',
+] as const;
+export type ReviewCycleCadence = (typeof REVIEW_CYCLE_CADENCES)[number];
+
+/**
+ * Where one person's review stands.
+ *
+ * This is the state machine the whole phase turns on, and the order is the
+ * progression:
+ *
+ *   NOT_STARTED        the review exists; nobody has written anything
+ *   SELF_ASSESSMENT    the employee is writing theirs
+ *   PENDING_MANAGER    submitted; waiting on the manager
+ *   MANAGER_REVIEW     the manager is writing theirs
+ *   PENDING_APPROVAL   the manager submitted; waiting on HR or a second approver
+ *   FINALIZED          locked. Nobody edits a finalized review.
+ *   CANCELLED          withdrawn, with a reason
+ *
+ * The employee drives the first transition and the manager the second. Neither can
+ * reach FINALIZED: that needs HR_PERFORMANCE:APPROVE, and the service refuses a
+ * self-approval regardless of what grants somebody holds — see
+ * `performance-access.ts`.
+ */
+export const PERFORMANCE_REVIEW_STATUSES = [
+  'NOT_STARTED',
+  'SELF_ASSESSMENT',
+  'PENDING_MANAGER',
+  'MANAGER_REVIEW',
+  'PENDING_APPROVAL',
+  'FINALIZED',
+  'CANCELLED',
+] as const;
+export type PerformanceReviewStatus = (typeof PERFORMANCE_REVIEW_STATUSES)[number];
+
+/**
+ * Reviews that are over.
+ *
+ * The predicate every "may this be edited" check is written against. FINALIZED is
+ * here because a finalized review is the record of a conversation that happened —
+ * editing it afterwards rewrites history, and the requirement is explicit that
+ * employees must not edit finalized reviews.
+ */
+export const SETTLED_REVIEW_STATUSES = [
+  'FINALIZED',
+  'CANCELLED',
+] as const satisfies readonly PerformanceReviewStatus[];
+
+/**
+ * Who a goal belongs to.
+ *
+ * EMPLOYEE and DEPARTMENT rather than one polymorphic owner column, because the two
+ * are read by different people and scoped differently: an employee goal is personal
+ * and visible to them, their manager and HR; a department goal is the unit's and
+ * visible to everybody in it. A single nullable pair of foreign keys with a CHECK
+ * keeps that honest — exactly one is set.
+ */
+export const GOAL_SCOPES = ['EMPLOYEE', 'DEPARTMENT'] as const;
+export type GoalScope = (typeof GOAL_SCOPES)[number];
+
+/**
+ * A goal's life.
+ *
+ * DRAFT is being written. ACTIVE is agreed and being worked. ACHIEVED, MISSED and
+ * PARTIALLY_MET are the three honest outcomes — two would force somebody to call a
+ * 70%-of-target result either a success or a failure, and the resulting number
+ * would be worth nothing. CANCELLED is a goal that stopped being relevant, with a
+ * reason recorded.
+ */
+export const GOAL_STATUSES = [
+  'DRAFT',
+  'ACTIVE',
+  'ACHIEVED',
+  'PARTIALLY_MET',
+  'MISSED',
+  'CANCELLED',
+] as const;
+export type GoalStatus = (typeof GOAL_STATUSES)[number];
+
+/** Goals that are closed. No progress is recorded against these. */
+export const SETTLED_GOAL_STATUSES = [
+  'ACHIEVED',
+  'PARTIALLY_MET',
+  'MISSED',
+  'CANCELLED',
+] as const satisfies readonly GoalStatus[];
+
+/**
+ * How a KPI's target is measured, and therefore how progress is computed.
+ *
+ * This is what makes a KPI *measurable* rather than a sentence somebody rates out
+ * of five. Each member decides the arithmetic in `performance.calc.ts`:
+ *
+ *   NUMBER       raw count against a target. 40 calls out of 50.
+ *   PERCENTAGE   a rate. The target and the value are both percentages.
+ *   CURRENCY     money. Stored as Decimal, never a float — see the schema note.
+ *   DURATION     minutes. The unit is fixed so two KPIs cannot disagree about it.
+ *   BOOLEAN      done or not. Target is 1, value is 0 or 1.
+ *
+ * `direction` below decides whether higher is better, which BOOLEAN and the rest
+ * all need: a KPI for "average handling time" is met by going *down*.
+ */
+export const KPI_METRIC_KINDS = [
+  'NUMBER',
+  'PERCENTAGE',
+  'CURRENCY',
+  'DURATION',
+  'BOOLEAN',
+] as const;
+export type KpiMetricKind = (typeof KPI_METRIC_KINDS)[number];
+
+/**
+ * Which way is good.
+ *
+ * HIGHER_IS_BETTER for sales made; LOWER_IS_BETTER for complaints received or
+ * handling time. Without this a KPI's attainment cannot be computed at all — and
+ * defaulting to "higher" silently scores a team as failing for reducing exactly
+ * what they were asked to reduce.
+ */
+export const KPI_DIRECTIONS = ['HIGHER_IS_BETTER', 'LOWER_IS_BETTER'] as const;
+export type KpiDirection = (typeof KPI_DIRECTIONS)[number];
+
+/**
+ * The company's competency rating scale, 1–5.
+ *
+ * Named rather than bare integers so a stored 3 cannot be read as "3 out of 10" by
+ * a later screen, and so the labels live in one place. Phase 3's interview feedback
+ * and probation reviews already use a 1–5 integer with a CHECK; this matches that
+ * deliberately — two HR scales that differ by one point would make the two
+ * incomparable for no benefit.
+ */
+export const COMPETENCY_RATINGS = [1, 2, 3, 4, 5] as const;
+export type CompetencyRating = (typeof COMPETENCY_RATINGS)[number];
+
+/** The lowest and highest a rating may be. Mirrored by a database CHECK. */
+export const MIN_COMPETENCY_RATING = 1;
+export const MAX_COMPETENCY_RATING = 5;
+
+/**
+ * What a competency is about.
+ *
+ * Used to group a rating sheet so a reviewer is not handed twenty unsorted
+ * attributes. Not a permission and not a gate — purely how the form is organised.
+ */
+export const COMPETENCY_CATEGORIES = [
+  'CORE',
+  'FUNCTIONAL',
+  'LEADERSHIP',
+  'BEHAVIOURAL',
+] as const;
+export type CompetencyCategory = (typeof COMPETENCY_CATEGORIES)[number];
+
+/**
+ * Who gave a rating.
+ *
+ * The same competency is rated twice — once by the employee, once by their manager
+ * — and keeping both is the point: the gap between them is what the appraisal
+ * conversation is actually about. One column with two rows per competency rather
+ * than `selfRating`/`managerRating` columns, because a third rater (a peer, a
+ * skip-level) is a plausible later requirement and would otherwise be a migration
+ * plus every query rewritten.
+ */
+export const RATING_SOURCES = ['SELF', 'MANAGER', 'HR'] as const;
+export type RatingSource = (typeof RATING_SOURCES)[number];
+
+/**
+ * A development plan's life.
+ *
+ * OPEN is being worked. COMPLETED is finished. ABANDONED is honest about the plan
+ * that stopped mattering — better than leaving it OPEN forever or deleting it, since
+ * a plan that was set and dropped is itself worth knowing.
+ */
+export const DEVELOPMENT_PLAN_STATUSES = ['OPEN', 'COMPLETED', 'ABANDONED'] as const;
+export type DevelopmentPlanStatus = (typeof DEVELOPMENT_PLAN_STATUSES)[number];
+
+/**
+ * What a development plan is for.
+ *
+ * IMPROVEMENT is the formal performance-improvement case — a plan written because
+ * somebody is underperforming, with a review date. GROWTH is the opposite: somebody
+ * doing well who wants a next step. They are deliberately distinguished, because a
+ * screen that showed them identically would put a promotion track beside a formal
+ * warning and call both "development".
+ */
+export const DEVELOPMENT_PLAN_KINDS = ['IMPROVEMENT', 'GROWTH'] as const;
+export type DevelopmentPlanKind = (typeof DEVELOPMENT_PLAN_KINDS)[number];
+
+/**
+ * The default weight a KPI carries inside a goal, as a percentage.
+ *
+ * A default, not a rule — the same decision as Phase 4's passing score. A goal's
+ * KPIs may weight however the business wants; this is what an unspecified one gets
+ * so a single-KPI goal works without anybody thinking about weighting.
+ */
+export const DEFAULT_KPI_WEIGHT = 100;
+
+/**
+ * The attainment at or above which a goal counts as achieved, as a percentage.
+ *
+ * Configurable per cycle, exactly like the training pass mark: this is the column
+ * default and nothing in the services compares against this constant. Stated here so
+ * the business default lives in one place.
+ */
+export const DEFAULT_GOAL_ACHIEVEMENT_THRESHOLD = 100;
+
+/**
+ * The attainment below which a goal counts as missed rather than partially met.
+ *
+ * Between this and the achievement threshold is PARTIALLY_MET. Also a per-cycle
+ * default.
+ */
+export const DEFAULT_GOAL_PARTIAL_THRESHOLD = 50;
