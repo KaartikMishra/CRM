@@ -183,6 +183,101 @@ training settles the checklist task unattended.
 `performance-review.test.ts` and `performance-calc.test.ts` were re-run together after
 the late `viewerIsSubject` change: 141 passed, exit 0.
 
+### Phase 6 — Payroll & Compensation
+
+| Suite | Result |
+|---|---|
+| `__tests__/payroll-calc.test.ts` (unit, pure) | 70 passed, exit 0 (3.7 s) |
+| `services/__tests__/…` n/a — payroll has no separate service suite | — |
+| `__tests__/payroll.test.ts` (HTTP, real Neon) | see the caveat below |
+| `frontend/__tests__/payroll.test.ts` | 56 passed, exit 0 (0.4 s) |
+| `frontend/__tests__/navigation.test.ts` | 42 passed, exit 0 (3 updated for the new Payroll row) |
+
+The 70 unit tests are where the arithmetic guarantees live: proration under all
+three divisor bases (which disagree — 15,000 / 15,500 / 17,884.62 on the same
+salary and day count), unpaid-leave proration, all three rounding modes at the
+half-paisa boundary, single-rounding proration (`prorate(10000, 15, 31)` is
+4838.71, where `dailyRate × 15` gives 4838.70), overtime valued only when both
+policy inputs are configured, deductions counted exactly once, employer
+contributions excluded from net pay, negative net detected rather than clamped,
+zero-value and empty component sets, eligibility in all six cases, and FINALIZED
+terminal in every direction.
+
+### The payroll HTTP suite is latency-sensitive, and that is documented not hidden
+
+`payroll.test.ts` drives 50 tests over real HTTP against remote Neon. Four
+consecutive runs of **identical application code** gave four different results:
+
+| Run | Result | Duration | Failure kind |
+|---|---|---|---|
+| 4 | 48 passed / 2 failed | 820 s | 2 timeouts (fixture bugs, since fixed) |
+| 5 | 46 passed / 4 failed | 2926 s | **4 timeouts, 0 assertions** |
+| 6 | 36 passed / 0 failed / **14 skipped** | 1206 s | Neon closed the connection in a `beforeAll` |
+| 7+8 | the 14 skipped, run alone: **14 passed** | 238 s | — |
+
+**Across all runs, every one of the 50 tests has passed, and no failure has ever
+been an assertion about payroll behaviour.**
+
+Run 5's four failures were all `Error: Test timed out in 60000ms` with zero
+AssertionErrors; three failed at exactly 60,010 ms — the timeout, not the
+assertion — and all four had passed in run 4.
+
+Run 6 produced no assertion failures at all. Its single reported failure was a
+`beforeAll` hitting **"Server has closed the connection"** — four such errors in
+that run, located in `middleware/requireAuth.ts`,
+`services/permission.service.ts` and the fixture cleanup, and **none in payroll
+code**. That cascaded into 14 skips across two `describe` blocks. Re-run on their
+own against a warm database, those 14 passed (runs 7 and 8), including the two
+that matter most for confidentiality: "returns 404 — not 403 — for another
+employee's payslip" and "refuses a reader who holds VIEW but whose EXPORT is
+revoked".
+
+Run 5 also produced the module's only P2028:
+
+> Transaction already closed … The timeout for this transaction was 15000 ms,
+> however 15127 ms passed since the start of the transaction.
+
+on `POST /payroll/periods`, which is **two statements** — allocate a code, insert
+a row. Nothing was doing too much work; each round trip had taken seconds.
+
+**What was changed as a result:** `TX_OPTIONS_CRITICAL` (45 s) now covers period
+creation and finalisation, the two transactions where failing is worse than being
+slow. It is deliberately *not* applied to the per-employee calculation loop,
+where a tight budget is what stops one pathological row stalling a whole run. A
+transaction that commits in 200 ms is unaffected by its ceiling.
+
+**What this does and does not establish.** It establishes that every assertion in
+the suite holds — each has been observed passing against the real database. It
+does **not** establish that the suite passes 50/50 in a single run; that has not
+yet been observed, and the obstacle each time has been Neon's responsiveness
+rather than the code.
+
+Anybody reading a result here should check the duration first: around 820 s is a
+healthy run, and anything near 3000 s is not — its failures should be re-examined
+as latency before being believed as defects. A `beforeAll` failure skipping a
+whole block is the signature of a dropped connection, not of broken logic.
+
+An end-to-end walkthrough (`PAYROLL-SCOPE.md`, deployment section) additionally
+exercises the whole lifecycle against the live API with three separate
+authenticated sessions — components through finalisation, payslip self-service,
+cross-employee denial and export authorisation — and passed 26/26 on a warm
+database.
+
+### Phase 6 fixture note
+
+`PayrollPeriod` is uniquely keyed on `(year, month)` — the duplicate-run
+guarantee the suite exists to test. That makes a fixed test year self-defeating:
+the second execution finds the first's periods and every `openPeriod` returns
+409. Periods also carry no name for `RUN_PREFIX` to match, so the sweep cannot
+reach them by ownership.
+
+The suite therefore takes a **per-run base year** derived from the process id and
+bounded into 2100-2199, and `fixtures.ts` was extended to sweep payroll rows:
+items and adjustments by the employee's `RUN_PREFIX` work email, assignments
+after them, then emptied periods within that year band, then unused structures
+and components. The order matters because payroll uses `Restrict` on the two
+links that explain a historical figure.
+
 ### What the UI workflow suite needs, and what it does not prove
 
 `performance-ui-workflow.test.ts` requires **both servers running from current
@@ -231,8 +326,9 @@ correct work; both are now partition and by-name assertions instead.
 
 Specifically still unverified:
 
-- the other 59 backend test files, which no run in this work has executed. The
-  targeted run covered 15 of 74.
+- the other backend test files, which no run in this work has executed. The
+  Phase 5 targeted run covered 15 of 74; Phase 6 added two files and did not
+  re-run the rest.
 - `recruitment.test.ts` in a single complete run. See the open caveat above: both
   complete runs were 67 passed / 1 timed out, and the Phase 5 reruns covered only
   the one failing test.

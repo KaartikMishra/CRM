@@ -1073,27 +1073,86 @@ export async function cleanup(): Promise<void> {
         where: { candidate: { email: { startsWith: RUN_PREFIX } } },
       }),
     );
+    /*
+      Recruitment rows belonging to a *stale* run, not just this one.
+
+      The two deletes below used to be scoped to this run alone — candidates by
+      `RUN_PREFIX` email, requisitions by `created.userIds`. That paired a
+      run-scoped delete with a user delete that is **stale-scoped**
+      (`sweepTestOwnedRows` removes any `zz-test` user older than
+      SWEEP_MIN_AGE_MS), so every run left recruitment rows pinning a previous
+      run's users. Those users could then never be reclaimed:
+      `JobRequisition.createdById`, `Candidate.createdById`, `Interview`,
+      `Offer` and `OnboardingRecord.createdById` are all **Restrict**, and the
+      sweep failed on `JobRequisition_createdById_fkey` — which `step()`
+      re-throws, so a green suite still exited 1.
+
+      Verified against pg_constraint before widening anything:
+
+        - every FK *below* these tables is CASCADE — 5 of 5 with Candidate,
+          Interview, Offer or OnboardingRecord as parent, 0 Restrict. So an
+          owned candidate takes its applications, documents, interviews,
+          feedback, participants, offers, onboarding records and tasks with it.
+        - 5 Restrict FKs on User actually held rows: Candidate (24),
+          JobRequisition (13), Interview (5), Offer (4), OnboardingRecord (1).
+          Candidate is the biggest and is **not** reachable by cascading a
+          requisition — it is Application's parent, not its child — which is why
+          it needs its own ownership test and must go first.
+
+      Ownership is the same two-branch rule the rest of this function uses:
+      **mine at any age, another run's only once older than SWEEP_MIN_AGE_MS.**
+      On top of that, a stale row is only reachable through a creator that is
+      *both* named `zz-test…` *and* on `@test.invalid` — two independent gates a
+      real account satisfies neither of. `@test.invalid` is reserved by RFC 2606
+      and can never belong to a real candidate.
+    */
+    const recruitmentOwnedCreator = {
+      AND: [
+        { name: { startsWith: TEST_PREFIX } },
+        { email: { endsWith: '@test.invalid' } },
+      ],
+      OR: [
+        { name: { startsWith: RUN_PREFIX } },
+        { createdAt: { lt: new Date(Date.now() - SWEEP_MIN_AGE_MS) } },
+      ],
+    };
+
+    /*
+      Candidates before requisitions, and now on their own ownership test.
+
+      The outer `email endsWith '@test.invalid'` is what keeps real data
+      unreachable whatever the OR admits: a real candidate cannot hold a reserved
+      address. Within that, either this run's own email prefix, or a row whose
+      creator is a reclaimable test user.
+    */
     await step(failures, () =>
-      prisma.candidate.deleteMany({ where: { email: { startsWith: RUN_PREFIX } } }),
+      prisma.candidate.deleteMany({
+        where: {
+          email: { endsWith: '@test.invalid' },
+          OR: [
+            { email: { startsWith: RUN_PREFIX } },
+            { createdBy: recruitmentOwnedCreator },
+          ],
+        },
+      }),
     );
     /*
-      Requisitions last of the recruitment tables: applications cascade from them too,
-      but an application reached through a candidate may sit on a requisition this run
-      did not create, so the candidate side is cleared first.
+      Requisitions after the candidate side, because an application reached
+      through a candidate may sit on a requisition this run did not create.
 
-      Matched on `createdById`, NOT on a code prefix. This was a real leak: an earlier
-      version matched `code: startsWith 'ZZT'`, but the service allocates requisition
-      codes itself as `JOB-<year>-<n>` — the ZZT prefix is on the *department* code and
-      never reaches the requisition. So every test requisition survived teardown, and
-      142 of them had accumulated across runs before the live count caught it.
+      Matched on the creator, NOT on a code prefix. That was a real leak: an
+      earlier version matched `code: startsWith 'ZZT'`, but the service allocates
+      requisition codes itself as `JOB-<year>-<n>` — the ZZT prefix is on the
+      *department* code and never reaches the requisition. Every test requisition
+      survived teardown, and 142 had accumulated before a live count caught it.
 
-      `created.userIds` is this run's own users, which is the same ownership trace the
-      rest of this function uses. It cannot sweep another run's rows, and it cannot
-      touch a real requisition — a real one was created by a real account.
+      `createdBy` carries both identity gates and the staleness bound, so this
+      cannot sweep a concurrent run's rows and cannot touch a real requisition —
+      a real one was created by a real account.
     */
     await step(failures, () =>
       prisma.jobRequisition.deleteMany({
-        where: { createdById: { in: created.userIds } },
+        where: { createdBy: recruitmentOwnedCreator },
       }),
     );
     /*
@@ -1124,6 +1183,111 @@ export async function cleanup(): Promise<void> {
         },
       }),
     );
+    /*
+      Phase 6 — payroll, before the employees it points at.
+
+      Order matters here more than elsewhere in this function, because payroll
+      deliberately uses `Restrict` on the two links that explain a historical
+      figure: `PayrollItem.salaryAssignmentId` and `EmployeeSalary.structureId`.
+      A salary that explains a payslip must not be deletable from under it, so
+      the sweep unwinds the reverse of that dependency order — items, then
+      assignments, then structures and components.
+
+      `PayrollPeriod` rows are reached through their items rather than by name: a
+      period carries no `zz-test` marker because its identity is `(year, month)`.
+      The payroll suite instead takes a per-run base year far in the future, so a
+      period it created cannot collide with a real one or with another run's, and
+      emptied periods are removed here by that same year bound.
+    */
+    /*
+      Ownership, applied to payroll exactly as the broad sweep applies it
+      elsewhere in this file: **mine at any age, another run's only once stale.**
+
+      The first version of this block scoped the item and adjustment deletes to
+      `RUN_PREFIX` but scoped the *period* delete to the year band alone. That
+      combination is what broke teardown:
+
+        - items belonging to earlier runs were (correctly) not matched, so their
+          periods never became empty;
+        - the period delete nonetheless targeted those other runs' periods,
+          because a year band is not an ownership test;
+        - `prisma.user.deleteMany` then SetNull'd their `calculatedById` while
+          `calculatedAt` stayed set, and
+          `payroll_period_calculation_stamp_consistency` —
+          `(calculatedAt IS NULL) = (calculatedById IS NULL)` — correctly
+          rejected the row.
+
+      The CHECK was right; the sweep was wrong. Observed concretely: 336 items
+      across two earlier run markers survived while 56 periods in the band could
+      not be removed.
+
+      So every payroll delete below now carries the same two-branch ownership
+      clause the rest of this function uses. A concurrent run's rows stay
+      unreachable until they are older than SWEEP_MIN_AGE_MS, and this run's own
+      debris still goes immediately.
+    */
+    const payrollOwnedEmployee = {
+      workEmail: { startsWith: TEST_PREFIX },
+      OR: [
+        { workEmail: { startsWith: RUN_PREFIX } },
+        { createdAt: { lt: new Date(Date.now() - SWEEP_MIN_AGE_MS) } },
+      ],
+    };
+
+    await step(failures, () =>
+      prisma.payrollItem.deleteMany({ where: { employee: payrollOwnedEmployee } }),
+    );
+    await step(failures, () =>
+      prisma.payrollAdjustment.deleteMany({ where: { employee: payrollOwnedEmployee } }),
+    );
+    await step(failures, () =>
+      prisma.employeeSalary.deleteMany({ where: { employee: payrollOwnedEmployee } }),
+    );
+    /*
+      Periods last, and only ones that are **both** empty and owned.
+
+      `items: { none: {} }` keeps a period belonging to a live concurrent run
+      safe even if the year band overlaps, and `createdBy` carries the ownership
+      test — a period created by this run's user, or by any test user old enough
+      to be reclaimable. The year band stays as an outer bound so nothing outside
+      the far-future test range is reachable from here at all.
+    */
+    await step(failures, () =>
+      prisma.payrollPeriod.deleteMany({
+        where: {
+          year: { gte: 2100, lte: 2199 },
+          items: { none: {} },
+          OR: [
+            { createdBy: { name: { startsWith: TEST_PREFIX } } },
+            { createdById: null },
+          ],
+        },
+      }),
+    );
+    await step(failures, () =>
+      prisma.salaryStructure.deleteMany({
+        where: { code: { startsWith: 'STD_' }, assignments: { none: {} } },
+      }),
+    );
+    await step(failures, () =>
+      prisma.salaryComponent.deleteMany({
+        where: {
+          OR: [
+            { code: { startsWith: 'BASIC_' } },
+            { code: { startsWith: 'HRA_' } },
+            { code: { startsWith: 'SPECIAL_' } },
+            { code: { startsWith: 'PF_EMP_' } },
+            { code: { startsWith: 'PF_ER_' } },
+            { code: { startsWith: 'BADPCT' } },
+            { code: { startsWith: 'BADBASE' } },
+            { code: { startsWith: 'BADRATE' } },
+          ],
+          structureComponents: { none: {} },
+          salaryOverrides: { none: {} },
+        },
+      }),
+    );
+
     /*
       Managers before reports, and heads before departments: Employee.managerId and
       Department.headId both point at Employee. Clearing the links first means the

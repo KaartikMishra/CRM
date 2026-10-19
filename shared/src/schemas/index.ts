@@ -24,3 +24,4 @@ export * from './recruitment.js';
 export * from './onboarding.js';
 export * from './training.js';
 export * from './performance.js';
+export * from './payroll.js';

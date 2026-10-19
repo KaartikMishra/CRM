@@ -18,6 +18,7 @@ import {
   Search,
   GraduationCap,
   Gauge,
+  Wallet,
   UserRound,
   Users,
   type LucideIcon,
@@ -65,6 +66,10 @@ const ICONS: Record<NavIconKey, LucideIcon> = {
   /* Phase 5. A gauge — measurement rather than learning, so it reads as distinct
      from the mortarboard beside it. */
   performance: Gauge,
+  /* Phase 6. A wallet — money, which nothing else in the sidebar represents, and
+     deliberately not a banknote or currency glyph: this module computes pay, it
+     does not move it. */
+  payroll: Wallet,
   users: Users,
 };
 

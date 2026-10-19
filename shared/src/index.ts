@@ -36,3 +36,5 @@ export * from './utils/sales-total.js';
 export * from './utils/product-name.js';
 export * from './utils/phone.js';
 export * from './utils/post-sales-status.js';
+export * from './types/payroll.js';
+export * from './utils/payroll-money.js';

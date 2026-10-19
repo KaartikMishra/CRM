@@ -734,6 +734,36 @@ export const NOTIFICATION_TYPES = [
   'HR_MANAGER_REVIEW_DUE',
   'HR_REVIEW_FINALIZED',
   'HR_IMPROVEMENT_PLAN_OPENED',
+  /*
+    HR Phase 6 — payroll. Four, and the restraint here matters more than in any
+    earlier phase, because salary is the most sensitive data in the system and a
+    notification is the one part of it that arrives unasked.
+
+    **No notification in this module ever carries an amount.** Not a gross, not a
+    net, not a deduction. A notice lands in a bell that a colleague may glance at
+    over a shoulder, is often mirrored to email, and is retained in a table that
+    more people can read than can read a payslip. "Your payslip for March is
+    available" tells the employee exactly what they need; "Your net pay is
+    42,318.50" tells the room. `payroll.notify.ts` enforces this and the tests
+    assert it.
+
+    HR_PAYROLL_APPROVAL_REQUIRED goes to the approvers: a run is costed and
+    waiting, and nobody is paid until somebody decides.
+    HR_PAYSLIP_AVAILABLE goes to the employee, naming the period only.
+    HR_PAYROLL_FINALIZED goes to the HR team that ran it — the period is locked
+    and no longer theirs to change.
+    HR_PAYROLL_ADJUSTMENT_RECORDED goes to the affected employee, because an
+    arrear or a recovery against a closed period changes what they are about to
+    be paid and they would otherwise discover it from the figure alone.
+
+    Deliberately absent: a notice per calculation, per recalculation, per
+    employee line. The HR user running the payroll is watching the screen that
+    reports it.
+  */
+  'HR_PAYROLL_APPROVAL_REQUIRED',
+  'HR_PAYSLIP_AVAILABLE',
+  'HR_PAYROLL_FINALIZED',
+  'HR_PAYROLL_ADJUSTMENT_RECORDED',
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 
@@ -1850,3 +1880,202 @@ export const DEFAULT_GOAL_ACHIEVEMENT_THRESHOLD = 100;
  * default.
  */
 export const DEFAULT_GOAL_PARTIAL_THRESHOLD = 50;
+
+// ---------------------------------------------------------------------------
+//  HR Phase 6 — Payroll & Compensation
+// ---------------------------------------------------------------------------
+//
+// One rule governs every value below: **this module computes what it is
+// configured to compute, and nothing is a statutory rule.**
+//
+// No PF rate, ESI threshold, TDS slab, overtime multiplier or rounding policy
+// appears anywhere in this codebase as a constant. Each is either a configured
+// SalaryComponent row or an HRSetting, because a number like "12%" written into
+// a shipped binary is a legal claim the code cannot substantiate and cannot be
+// corrected without a deploy. See `backend/src/modules/hr/PAYROLL-SCOPE.md` for
+// what that means for compliance.
+
+/**
+ * Whether a salary component adds to pay or subtracts from it.
+ *
+ * Two values rather than a signed amount, because the sign is a property of the
+ * component's *kind* and not of any particular figure. A deduction stored as a
+ * negative earning would make every sum in the module read correctly and every
+ * payslip read wrongly — "Earnings: -1,800" is not a line anybody can explain.
+ *
+ * EMPLOYER_CONTRIBUTION is deliberately separate from DEDUCTION. Both are costs,
+ * but only a deduction reduces net pay: an employer's share of a retirement fund
+ * is company expenditure that never passes through the employee's hands, and
+ * netting it off their payslip would understate what they were paid.
+ */
+export const SALARY_COMPONENT_KINDS = [
+  'EARNING',
+  'DEDUCTION',
+  'EMPLOYER_CONTRIBUTION',
+] as const;
+export type SalaryComponentKind = (typeof SALARY_COMPONENT_KINDS)[number];
+
+/**
+ * How a component's amount is arrived at.
+ *
+ * FIXED            a stated amount per month.
+ * PERCENT_OF_BASE  a percentage of the structure's base component.
+ * PERCENT_OF_GROSS a percentage of total gross earnings for the period.
+ * FORMULA_BALANCE  whatever is left of a target gross once every other earning
+ *                  is assigned — the "special allowance" shape, where a figure
+ *                  exists to make a total come out right.
+ *
+ * PERCENT_OF_GROSS is evaluated strictly after every FIXED and PERCENT_OF_BASE
+ * earning, and a PERCENT_OF_GROSS component may not itself be an input to
+ * another one. That restriction is what makes a payroll run terminate: a
+ * percentage of a total that includes itself is a fixed-point problem, not a
+ * payroll line, and the service refuses the configuration rather than iterating
+ * to a number nobody can reproduce by hand.
+ */
+export const SALARY_CALCULATION_KINDS = [
+  'FIXED',
+  'PERCENT_OF_BASE',
+  'PERCENT_OF_GROSS',
+  'FORMULA_BALANCE',
+] as const;
+export type SalaryCalculationKind = (typeof SALARY_CALCULATION_KINDS)[number];
+
+/**
+ * Which per-day divisor converts a monthly figure into a daily one.
+ *
+ * Needed for exactly two things: prorating a joiner or leaver who was present
+ * for part of the month, and valuing a day of unpaid leave.
+ *
+ * **Configured, never assumed.** All three are in use in real businesses and
+ * they disagree by up to 10% on the same salary, so the module stores the basis
+ * it used on every period it processes rather than deriving it at read time. A
+ * period finalised under one basis keeps its own arithmetic forever, which is
+ * the only way a payslip from March still reconciles after the policy changes in
+ * April.
+ *
+ * CALENDAR_DAYS  the actual length of the month: 28, 29, 30 or 31.
+ * WORKING_DAYS   days the business expected work, from holidays and week-offs.
+ * FIXED_THIRTY   always 30, whatever the month contains.
+ */
+export const DAILY_RATE_BASES = ['CALENDAR_DAYS', 'WORKING_DAYS', 'FIXED_THIRTY'] as const;
+export type DailyRateBasis = (typeof DAILY_RATE_BASES)[number];
+
+/**
+ * Where a payroll period stands.
+ *
+ * DRAFT       created, nothing computed. Employees and components may change.
+ * CALCULATED  every eligible employee has a computed, reviewable payslip line.
+ *             Recalculation is allowed and replaces the previous figures.
+ * PENDING_APPROVAL an ApprovalRequest is open against the period.
+ * APPROVED    a decider with HR_PAYROLL:APPROVE has agreed the figures.
+ * FINALIZED   locked. The figures are the record, snapshots are immutable, and
+ *             payslips may be issued.
+ * CANCELLED   abandoned before finalisation. Kept rather than deleted, because a
+ *             period that was opened and dropped is a fact somebody may need to
+ *             account for.
+ *
+ * The shape mirrors PERFORMANCE_REVIEW_STATUSES on purpose — the same
+ * draft/submit/approve/lock arc, the same refusal to offer a path out of the
+ * locked state. There is no transition from FINALIZED. Correcting a finalised
+ * period means a separately authorised adjustment in a later period, never an
+ * edit to a figure somebody has already been paid against.
+ *
+ * FINALIZED is also deliberately **not** called PAID. Nothing in this module
+ * moves money. Marking a row PAID when no bank instruction has been issued would
+ * make the system assert something untrue about an employee's livelihood.
+ */
+export const PAYROLL_PERIOD_STATUSES = [
+  'DRAFT',
+  'CALCULATED',
+  'PENDING_APPROVAL',
+  'APPROVED',
+  'FINALIZED',
+  'CANCELLED',
+] as const;
+export type PayrollPeriodStatus = (typeof PAYROLL_PERIOD_STATUSES)[number];
+
+/**
+ * The period statuses that can no longer be recalculated or re-costed.
+ *
+ * Read by the access policy before it considers who is asking, so that a
+ * finalised period is immutable to everybody rather than to everybody without a
+ * sufficiently broad grant.
+ */
+export const SETTLED_PAYROLL_PERIOD_STATUSES = ['FINALIZED', 'CANCELLED'] as const;
+export type SettledPayrollPeriodStatus = (typeof SETTLED_PAYROLL_PERIOD_STATUSES)[number];
+
+/**
+ * Where one employee's line within a period stands.
+ *
+ * Separate from the period's own status because one employee can be excluded or
+ * held back without stopping the run: somebody whose bank details are missing, or
+ * whose attendance is still under correction, should not block ninety colleagues
+ * from being paid.
+ *
+ * EXCLUDED is the state that earns its place. A zero-value payslip and a
+ * deliberate exclusion look identical in a total and mean entirely different
+ * things to the person not being paid.
+ */
+export const PAYROLL_ITEM_STATUSES = ['PENDING', 'CALCULATED', 'EXCLUDED', 'FINALIZED'] as const;
+export type PayrollItemStatus = (typeof PAYROLL_ITEM_STATUSES)[number];
+
+/**
+ * Why an employee's line was held out of a run.
+ *
+ * Recorded rather than inferred, because "why was I not paid" is the single
+ * question this module must always be able to answer. NOT_ELIGIBLE covers the
+ * documented eligibility rules; the others are specific enough to act on.
+ */
+export const PAYROLL_EXCLUSION_REASONS = [
+  'NOT_ELIGIBLE',
+  'NO_SALARY_ASSIGNMENT',
+  'JOINED_AFTER_PERIOD',
+  'EXITED_BEFORE_PERIOD',
+  'MANUALLY_EXCLUDED',
+] as const;
+export type PayrollExclusionReason = (typeof PAYROLL_EXCLUSION_REASONS)[number];
+
+/**
+ * What a payroll adjustment does to a later period.
+ *
+ * This is the correction mechanism, and it exists because a finalised period
+ * cannot be edited. An arrear, a recovery or a one-off bonus attaches to the next
+ * open period and carries a reference to what it corrects, so the trail reads
+ * forwards: period N was wrong, period N+1 says so and by how much.
+ */
+export const PAYROLL_ADJUSTMENT_KINDS = ['ARREAR', 'RECOVERY', 'BONUS', 'REIMBURSEMENT'] as const;
+export type PayrollAdjustmentKind = (typeof PAYROLL_ADJUSTMENT_KINDS)[number];
+
+/**
+ * How a monetary result is rounded to two decimal places.
+ *
+ * Configured per period and stored on it, for the same reason the daily-rate
+ * basis is: rounding policy is a business decision that moves real money in
+ * aggregate, and a finalised period must keep the policy it was computed under.
+ *
+ * HALF_UP    0.005 becomes 0.01. The common commercial convention.
+ * HALF_EVEN  banker's rounding; 0.005 goes to the nearest even cent.
+ * DOWN       always truncate toward zero.
+ */
+export const MONETARY_ROUNDING_MODES = ['HALF_UP', 'HALF_EVEN', 'DOWN'] as const;
+export type MonetaryRoundingMode = (typeof MONETARY_ROUNDING_MODES)[number];
+
+/**
+ * The scale every monetary column in this module uses.
+ *
+ * Two decimal places, matching `Decimal(12, 2)` throughout the existing schema.
+ * Stated as a constant so the rounding helpers and the Zod schemas agree with the
+ * database rather than each asserting it separately.
+ */
+export const MONEY_SCALE = 2;
+
+/**
+ * The currency a payroll period is denominated in, where none is configured.
+ *
+ * A column default and an HRSetting fallback, never a hard-coded assumption at a
+ * call site: the period stores its own currency so a historical payslip cannot be
+ * reinterpreted by a later configuration change. Multi-currency payroll is out of
+ * scope for this phase and the single stored code is what makes adding it later a
+ * migration rather than a rewrite.
+ */
+export const DEFAULT_PAYROLL_CURRENCY = 'INR';

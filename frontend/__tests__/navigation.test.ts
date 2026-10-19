@@ -247,6 +247,8 @@ describe('the navigation table itself is unchanged', () => {
       'HR_TRAINING',
       // Phase 5 joins them: Performance is a child row under HR & Workforce.
       'HR_PERFORMANCE',
+      // Phase 6 joins them: Payroll is a child row on the same basis.
+      'HR_PAYROLL',
     ] as const) {
       expect(MODULES_WITHOUT_NAVIGATION, module).toContain(module);
       expect(topLevel, `${module} must not have a top-level row`).not.toContain(module);
@@ -255,25 +257,27 @@ describe('the navigation table itself is unchanged', () => {
   });
 
   /*
-    HR_PERFORMANCE is the one entry that genuinely has nothing, and saying so
-    separates "registered before its phase" from "has a child row" — the two reasons
-    a module sits on that list, which the list itself cannot distinguish.
-  */
-  /*
-    HR_PAYROLL is now the only entry with nothing at either level, and saying so
-    separates the two reasons a module sits on that list — "registered before its
-    phase" from "has a child row". The list itself cannot distinguish them.
+    HR_ADMIN is now the only entry with nothing at either level, and saying so
+    separates the two reasons a module sits on that list — "has pages but no row
+    of its own" from "has a child row". The list itself cannot distinguish them.
 
-    HR_PERFORMANCE left this case in Phase 5: it gained a child row under HR &
-    Workforce, exactly as HR_ATTENDANCE, HR_LEAVE, HR_RECRUITMENT and HR_TRAINING
-    did before it, and is covered by the top-level-only test above.
+    HR_PAYROLL left this case in Phase 6: it gained a child row under HR &
+    Workforce, exactly as HR_ATTENDANCE, HR_LEAVE, HR_RECRUITMENT, HR_TRAINING and
+    HR_PERFORMANCE did before it, and is covered by the child-row test above.
+
+    HR_ADMIN stays here deliberately and permanently. It governs the department
+    and designation masters, which *do* have pages — reached from the HR overview
+    — but no sidebar row, because the navigation table requires every child to
+    share its parent's module and HR_ADMIN is a different grant from HR_EMPLOYEE.
+    Giving the masters a top-level row would put structural administration beside
+    the directory and imply one grant covers both.
   */
-  it('keeps HR_PAYROLL with no row at either level, top or child', () => {
+  it('keeps HR_ADMIN with no row at either level, top or child', () => {
     const topLevel = NAV_ITEMS.filter((i) => i.module).map((i) => i.module);
     const children = NAV_ITEMS.flatMap((i) => i.children ?? []).map((child) => child.module);
 
-    expect(topLevel).not.toContain('HR_PAYROLL');
-    expect(children).not.toContain('HR_PAYROLL');
+    expect(topLevel).not.toContain('HR_ADMIN');
+    expect(children).not.toContain('HR_ADMIN');
   });
 });
 
@@ -450,6 +454,11 @@ describe('Purchase & Procurement is a parent, and Procurement Clock sits under i
       '/hr/attendance',
       '/hr/leave',
       '/hr/onboarding',
+      // Phase 6. HR_PAYROLL — its own namespace, and the sharpest divergence in
+      // this table: reading salaries is not HR_EMPLOYEE's directory access, and a
+      // reporting line is a reason to read somebody's attendance but never their
+      // pay. Pay confidentiality runs across the hierarchy rather than down it.
+      '/hr/payroll',
       // Phase 5. HR_PERFORMANCE — the namespace registered in Phase 0.5 and built
       // here. An appraiser reads reviews and ratings; that is not HR_EMPLOYEE's
       // directory access, so the divergence is the access model rather than tidiness.
@@ -564,6 +573,8 @@ describe('Purchase & Procurement is a parent, and Procurement Clock sits under i
       '/hr/probation',
       '/hr/training',
       '/hr/performance',
+      // Phase 6. Last in the row, matching its position in the table.
+      '/hr/payroll',
     ]);
   });
 

@@ -77,6 +77,7 @@ import { attendanceRoutes } from './attendance.routes.js';
 import { recruitmentRoutes } from './recruitment.routes.js';
 import { trainingRoutes } from './training.routes.js';
 import { performanceRoutes } from './performance.routes.js';
+import { payrollRoutes } from './payroll.routes.js';
 
 export const hrRoutes = Router();
 
@@ -131,6 +132,19 @@ hrRoutes.use(trainingRoutes);
   of Phase 1's `/employees/:id`. `requireAuth` above applies to all of them.
 */
 hrRoutes.use(performanceRoutes);
+
+/*
+  HR Phase 6 — Payroll & Compensation, mounted on the same basis as Phases 2-5: a
+  separate Router, ahead of Phase 1's `/employees/:id`, so the
+  literal-before-parameterised rule stays true without anybody checking which
+  segments collide.
+
+  Its paths all start `/payroll`, which overlaps nothing in the earlier phases.
+  `requireAuth` above applies to all of them, and every route carries its own
+  HR_PAYROLL permission — three self-service routes sit on a VIEW floor that the
+  service then narrows to the reader's own record. See payroll.routes.ts.
+*/
+hrRoutes.use(payrollRoutes);
 
 // --- overview ---------------------------------------------------------------
 

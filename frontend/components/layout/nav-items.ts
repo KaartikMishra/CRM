@@ -34,6 +34,7 @@ export type NavIconKey =
   | 'probation'
   | 'training'
   | 'performance'
+  | 'payroll'
   | 'users';
 
 export type NavItem = {
@@ -337,6 +338,28 @@ export const NAV_ITEMS: NavItem[] = [
         icon: 'performance',
         available: true,
         module: 'HR_PERFORMANCE',
+      },
+      /*
+        Phase 6. Payroll sits on HR_PAYROLL, the namespace registered in Phase 0.5
+        alongside the others and left unbuilt until now.
+
+        The row is gated on HR_PAYROLL:VIEW, which is deliberately narrower than the
+        pages behind it. Everybody is paid, so three self-service surfaces — the
+        dashboard, My Payslips and one payslip — run on an employee floor of
+        HR_PAYROLL:VIEW or HR_EMPLOYEE:VIEW, mirroring the backend's own route
+        guard. Gating the sidebar row that widely would put an administrative
+        Payroll heading in front of every employee in the company; their own
+        payslips are reachable from the HR overview and from My Payslips instead.
+
+        This is the sharpest case of that pattern in the system, because what the
+        row leads to is every salary in the business.
+      */
+      {
+        label: 'Payroll',
+        href: '/hr/payroll',
+        icon: 'payroll',
+        available: true,
+        module: 'HR_PAYROLL',
       },
     ],
   },

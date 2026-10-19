@@ -164,6 +164,39 @@ export async function hrActor(user: AuthenticatedUser): Promise<HrActor> {
     ['HR_PERFORMANCE', 'EDIT'],
     ['HR_PERFORMANCE', 'ASSIGN'],
     ['HR_PERFORMANCE', 'APPROVE'],
+    /*
+      Phase 6 widens it a final time, and **EXPORT is the pair that makes this
+      block worth re-reading rather than skimming.** Phase 4 shipped with a
+      missing pair and the symptom was a route table that admitted the request
+      and a service that then 403'd, with typechecks and unit tests all green,
+      because only an HTTP request surfaces it. Payroll adds the same hazard
+      with a new twist: EXPORT has never appeared in this list before, so it is
+      the one pair with no precedent to copy.
+
+      Six pairs, and every one of them does different work:
+
+        VIEW     read other people's pay. An employee reads their OWN payslip
+                 with no payroll grant at all — everybody is paid, so requiring
+                 one would mean granting the module to the whole company.
+        CREATE   define components and structures, open a period.
+        EDIT     cost a run, recalculate it, exclude somebody, submit it.
+        ASSIGN   put a salary figure against a named person. Deliberately not
+                 EDIT: configuring the catalogue of possible figures and deciding
+                 what one person earns are different privileges.
+        APPROVE  decide a submitted run, finalise an approved one, record an
+                 adjustment against a closed one. The service additionally
+                 refuses anybody whose own salary is inside the run, whatever
+                 grants they hold.
+        EXPORT   download the register. Separate from VIEW because reading one
+                 payslip on screen and taking every salary in the company out of
+                 the building are different risks, and only the second leaves.
+    */
+    ['HR_PAYROLL', 'VIEW'],
+    ['HR_PAYROLL', 'CREATE'],
+    ['HR_PAYROLL', 'EDIT'],
+    ['HR_PAYROLL', 'ASSIGN'],
+    ['HR_PAYROLL', 'APPROVE'],
+    ['HR_PAYROLL', 'EXPORT'],
   ];
 
   const resolved = await Promise.all(

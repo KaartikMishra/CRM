@@ -225,6 +225,19 @@ model User {
   closedDevelopmentPlans      DevelopmentPlan[]     @relation("DevelopmentPlanClosedBy")
   completedDevelopmentActions DevelopmentAction[]   @relation("DevelopmentActionCompletedBy")
 
+  /// Phase 6 — payroll. Four separate actor relations on PayrollPeriod because
+  /// who costed a run, who approved it and who locked it are different facts that
+  /// an audit has to be able to distinguish — and because the separation-of-duties
+  /// rule is checked against them.
+  createdSalaryComponents SalaryComponent[]   @relation("SalaryComponentCreatedBy")
+  createdSalaryStructures SalaryStructure[]   @relation("SalaryStructureCreatedBy")
+  createdSalaryAssignments EmployeeSalary[]   @relation("EmployeeSalaryCreatedBy")
+  createdPayrollPeriods   PayrollPeriod[]     @relation("PayrollCreatedBy")
+  calculatedPayrollPeriods PayrollPeriod[]    @relation("PayrollCalculatedBy")
+  approvedPayrollPeriods  PayrollPeriod[]     @relation("PayrollApprovedBy")
+  finalizedPayrollPeriods PayrollPeriod[]     @relation("PayrollFinalizedBy")
+  createdPayrollAdjustments PayrollAdjustment[] @relation("PayrollAdjustmentCreatedBy")
+
   @@index([role, isActive])
 }
 
@@ -1778,6 +1791,22 @@ enum NotificationType {
   HR_MANAGER_REVIEW_DUE
   HR_REVIEW_FINALIZED
   HR_IMPROVEMENT_PLAN_OPENED
+
+  /// HR Phase 6 — payroll. Four events, and the restraint matters more here than
+  /// in any earlier phase: salary is the most sensitive data in the system and a
+  /// notification is the one part of it that arrives unasked.
+  ///
+  /// **None of these ever carries an amount.** A notice lands in a bell a
+  /// colleague may glance at, is often mirrored to email, and is retained in a
+  /// table more people can read than can read a payslip. `payroll.notify.ts`
+  /// enforces this with `assertNoAmount` and throws rather than sending.
+  ///
+  /// Deliberately absent: a notice per calculation or per employee line. The HR
+  /// user running the payroll is watching the screen that reports it.
+  HR_PAYROLL_APPROVAL_REQUIRED
+  HR_PAYSLIP_AVAILABLE
+  HR_PAYROLL_FINALIZED
+  HR_PAYROLL_ADJUSTMENT_RECORDED
 }
 
 /// One thing somebody should know about, addressed to one person.
@@ -3457,6 +3486,13 @@ model Employee {
   reviewsToWrite         PerformanceReview[]    @relation("PerformanceReviewReviewer")
   performanceGoals       PerformanceGoal[]      @relation("GoalEmployee")
   developmentPlans       DevelopmentPlan[]      @relation("DevelopmentPlanEmployee")
+
+  /// Phase 6 — payroll. Salary assignments are append-only, so this relation is a
+  /// history rather than a current value; `payrollItems` is every run this person
+  /// has appeared in.
+  salaryAssignments  EmployeeSalary[]     @relation("EmployeeSalaryEmployee")
+  payrollItems       PayrollItem[]        @relation("PayrollItemEmployee")
+  payrollAdjustments PayrollAdjustment[]  @relation("PayrollAdjustmentEmployee")
 
   /// The directory's default ordering and its commonest filters.
   @@index([status, lastName, firstName])
@@ -6379,6 +6415,540 @@ model DevelopmentAction {
 /// `scope` holds a kind-and-period string — "PRF-2026" for cycles, "GOL-2026" for
 /// goals. A second series is a second row rather than a migration.
 model PerformanceCodeCounter {
+  scope     String   @id
+  lastValue Int      @default(0)
+  updatedAt DateTime @updatedAt
+}
+
+// ===========================================================================
+//  HR Phase 6 — Payroll & Compensation
+// ===========================================================================
+//
+// One rule governs this whole block: **nothing here encodes a statutory rule.**
+//
+// No provident-fund rate, no insurance threshold, no tax slab, no overtime
+// multiplier and no rounding policy appears as a default, a constant or a CHECK.
+// Each is a configured `SalaryComponent` row or an `HRSetting`. A rate written
+// into a shipped schema is a legal claim this codebase cannot substantiate and
+// cannot correct without a migration, and payroll errors are recovered from
+// people's livelihoods. See `backend/src/modules/hr/PAYROLL-SCOPE.md`.
+//
+// Three structural decisions worth stating before the models:
+//
+//   1. **Salary assignments are append-only.** Changing somebody's pay inserts a
+//      row with a later `effectiveFrom`; nothing updates one in place. A payslip
+//      from eight months ago must stay explicable from the assignment that
+//      produced it.
+//   2. **A finalised period stores a snapshot per employee.** Every input can
+//      legitimately change afterwards — the rate, the structure, the assignment,
+//      the attendance policy — so the computation is frozen as JSON rather than
+//      recomputed. A payslip that recomputed itself would silently restate what
+//      somebody was paid.
+//   3. **The period carries its own arithmetic policy.** `dailyRateBasis`,
+//      `roundingMode` and `payableDaysDivisor` live on the row. If the business
+//      switches basis in April, March still reconciles.
+
+/// Whether a component adds to pay, subtracts from it, or is an employer cost.
+///
+/// EMPLOYER_CONTRIBUTION is separate from DEDUCTION deliberately: both are costs,
+/// but only a deduction reduces net pay. An employer's share of a retirement fund
+/// never passes through the employee's hands, and netting it off their payslip
+/// would understate what they were paid.
+enum SalaryComponentKind {
+  EARNING
+  DEDUCTION
+  EMPLOYER_CONTRIBUTION
+}
+
+/// How a component's amount is arrived at.
+///
+/// PERCENT_OF_GROSS is evaluated after every FIXED and PERCENT_OF_BASE earning,
+/// and may not be an input to another PERCENT_OF_GROSS. A percentage of a total
+/// that includes itself is a fixed-point problem rather than a payroll line, and
+/// the service refuses the configuration instead of iterating to a figure nobody
+/// can reproduce by hand.
+enum SalaryCalculationKind {
+  FIXED
+  PERCENT_OF_BASE
+  PERCENT_OF_GROSS
+  FORMULA_BALANCE
+}
+
+/// Which divisor turns a monthly figure into a daily one.
+///
+/// All three are in real use and they disagree by up to 10% on the same salary,
+/// which is exactly why the choice is stored per period rather than derived.
+enum DailyRateBasis {
+  CALENDAR_DAYS
+  WORKING_DAYS
+  FIXED_THIRTY
+}
+
+/// How a monetary result is rounded to paise. Stored per period, for the same
+/// reason the divisor basis is.
+enum MonetaryRoundingMode {
+  HALF_UP
+  HALF_EVEN
+  DOWN
+}
+
+/// Where a payroll run stands.
+///
+/// There is no transition out of FINALIZED, and no FINALIZED → PAID either.
+/// Nothing in this module moves money: marking a row PAID when no bank
+/// instruction has been issued would make the system assert something untrue
+/// about an employee's livelihood. Correcting a finalised run means a
+/// `PayrollAdjustment` in a later period, never an edit to a figure somebody has
+/// already been paid against.
+enum PayrollPeriodStatus {
+  DRAFT
+  CALCULATED
+  PENDING_APPROVAL
+  APPROVED
+  FINALIZED
+  CANCELLED
+}
+
+/// Where one employee's line within a run stands.
+///
+/// Separate from the period's status so one employee can be held back without
+/// stopping ninety colleagues from being paid. EXCLUDED earns its place: a
+/// zero-value payslip and a deliberate exclusion look identical in a total and
+/// mean entirely different things to the person not being paid.
+enum PayrollItemStatus {
+  PENDING
+  CALCULATED
+  EXCLUDED
+  FINALIZED
+}
+
+/// Why an employee was held out of a run.
+///
+/// Recorded rather than inferred, because "why was I not paid" is the one
+/// question this module must always be able to answer.
+enum PayrollExclusionReason {
+  NOT_ELIGIBLE
+  NO_SALARY_ASSIGNMENT
+  JOINED_AFTER_PERIOD
+  EXITED_BEFORE_PERIOD
+  MANUALLY_EXCLUDED
+}
+
+/// What an adjustment does to a later period. The correction mechanism, since a
+/// finalised period cannot be edited.
+enum PayrollAdjustmentKind {
+  ARREAR
+  RECOVERY
+  BONUS
+  REIMBURSEMENT
+}
+
+/// One configurable line that can appear on a payslip.
+///
+/// `calculation` and `rate` together are where every statutory figure in this
+/// system lives. A provident-fund deduction is a DEDUCTION with PERCENT_OF_BASE
+/// and whatever rate the business configured; the schema holds no opinion on
+/// what that rate should be.
+model SalaryComponent {
+  id String @id @default(cuid())
+
+  /// Stable, upper snake case. Appears in immutable snapshots that must stay
+  /// readable years later, which is why it is unique and never reused.
+  code String @unique
+  name String
+  description String?
+
+  kind        SalaryComponentKind
+  calculation SalaryCalculationKind
+
+  /// A percentage, for the two PERCENT_* kinds. Null otherwise — the
+  /// salary_component_rate_presence CHECK enforces that pairing, so a percentage
+  /// component with no rate cannot exist to compute nothing.
+  rate Decimal? @db.Decimal(6, 2)
+
+  /// An upper bound on the computed amount, where policy caps it. This is how a
+  /// capped statutory contribution is configured without the cap being code.
+  capAmount Decimal? @db.Decimal(12, 2)
+
+  /// Below this gross the component does not apply. How an eligibility threshold
+  /// is configured, again without the threshold being code.
+  floorAmount Decimal? @db.Decimal(12, 2)
+
+  /// The single earning that PERCENT_OF_BASE components are taken of. At most one
+  /// per structure; the service enforces that, since it is a property of a set.
+  isBase Boolean @default(false)
+
+  /// Whether unpaid-leave proration reduces this component. A fixed reimbursement
+  /// typically does not; a basic salary does.
+  prorates Boolean @default(true)
+
+  /// For reporting only. **No tax is computed anywhere in this module.**
+  isTaxable Boolean @default(true)
+
+  isActive     Boolean @default(true)
+  displayOrder Int     @default(100)
+
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy User? @relation("SalaryComponentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  structureComponents SalaryStructureComponent[]
+  salaryOverrides     EmployeeSalaryComponent[]
+
+  @@index([kind, isActive, displayOrder])
+  @@index([isActive, displayOrder])
+}
+
+/// A named set of components, assignable to employees.
+model SalaryStructure {
+  id String @id @default(cuid())
+
+  code String @unique
+  name String
+  description String?
+
+  /// Stored rather than global, so adding a second currency later is a migration
+  /// of defaults rather than a rewrite of every read path.
+  currency String @default("INR")
+
+  isActive Boolean @default(true)
+
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy User? @relation("SalaryStructureCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  components  SalaryStructureComponent[]
+  assignments EmployeeSalary[]
+
+  @@index([isActive, name])
+}
+
+/// One component's place and value within a structure.
+model SalaryStructureComponent {
+  id String @id @default(cuid())
+
+  structureId String
+  componentId String
+
+  /// The monthly amount, for FIXED components. Null for rate-based ones, whose
+  /// figure is computed from the rate at calculation time.
+  amount Decimal? @db.Decimal(12, 2)
+
+  /// Overrides the component's own rate for this structure only.
+  rateOverride Decimal? @db.Decimal(6, 2)
+
+  displayOrder Int @default(100)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Cascade from the structure: a deleted structure's rows describe nothing. The
+  /// service refuses deleting a structure that has assignments, so this cascade
+  /// only ever reaches an unused draft.
+  structure SalaryStructure @relation(fields: [structureId], references: [id], onDelete: Cascade)
+  /// Restrict from the component: a component in use must not vanish from under
+  /// a structure. Deactivate it instead.
+  component SalaryComponent @relation(fields: [componentId], references: [id], onDelete: Restrict)
+
+  /// One row per component per structure. A component appearing twice would be
+  /// counted twice in the gross with nothing saying which row was meant.
+  @@unique([structureId, componentId])
+  @@index([structureId, displayOrder])
+  @@index([componentId])
+}
+
+/// One employee's salary, effective from a date.
+///
+/// **Append-only.** Changing pay inserts a new row with a later `effectiveFrom`
+/// and sets `effectiveTo` on the previous one; nothing is ever updated in place.
+/// That is what keeps a historical payslip explicable, and it is why there is no
+/// update endpoint for this model.
+model EmployeeSalary {
+  id String @id @default(cuid())
+
+  employeeId  String
+  structureId String?
+
+  /// The agreed monthly gross this assignment is built around. FORMULA_BALANCE
+  /// components resolve against it.
+  monthlyGross Decimal @db.Decimal(12, 2)
+  currency     String  @default("INR")
+
+  effectiveFrom DateTime @db.Date
+  /// Null while in force; set when a later assignment supersedes it. Not derived
+  /// at read time, so "what was in force in March" is an index lookup rather than
+  /// a window function over every row.
+  effectiveTo DateTime? @db.Date
+
+  notes String?
+
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  employee  Employee         @relation("EmployeeSalaryEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+  structure SalaryStructure? @relation(fields: [structureId], references: [id], onDelete: Restrict)
+  createdBy User?            @relation("EmployeeSalaryCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  overrides   EmployeeSalaryComponent[]
+  payrollItems PayrollItem[]
+
+  /// One assignment per employee per start date. Two salaries beginning the same
+  /// day is a data-entry error with no correct resolution, so it is impossible.
+  @@unique([employeeId, effectiveFrom])
+  @@index([employeeId, effectiveFrom])
+  @@index([structureId])
+}
+
+/// A per-employee amount or rate that differs from the structure's default.
+model EmployeeSalaryComponent {
+  id String @id @default(cuid())
+
+  salaryId    String
+  componentId String
+
+  amount       Decimal? @db.Decimal(12, 2)
+  rateOverride Decimal? @db.Decimal(6, 2)
+
+  createdAt DateTime @default(now())
+
+  /// Cascade from the assignment: an override with no assignment describes
+  /// nothing. Safe because assignments are never deleted in normal operation.
+  salary    EmployeeSalary  @relation(fields: [salaryId], references: [id], onDelete: Cascade)
+  component SalaryComponent @relation(fields: [componentId], references: [id], onDelete: Restrict)
+
+  @@unique([salaryId, componentId])
+  @@index([salaryId])
+  @@index([componentId])
+}
+
+/// A monthly payroll run.
+model PayrollPeriod {
+  id String @id @default(cuid())
+
+  /// Human reference, allocated from PayrollCodeCounter: "PAY-2026-03".
+  code String @unique
+  name String
+
+  periodStart DateTime @db.Date
+  periodEnd   DateTime @db.Date
+
+  /// The month this run is *for*. Separate from the dates because the dates are
+  /// derived from these, and because the unique constraint below is what makes a
+  /// duplicate run impossible rather than merely unlikely.
+  year  Int
+  month Int
+
+  status   PayrollPeriodStatus @default(DRAFT)
+  currency String              @default("INR")
+
+  /// The arithmetic policy, frozen onto the row at creation and used at
+  /// calculation. A finalised period keeps its own arithmetic forever.
+  dailyRateBasis DailyRateBasis       @default(CALENDAR_DAYS)
+  roundingMode   MonetaryRoundingMode @default(HALF_UP)
+  calendarDays   Int
+  workingDays    Int                  @default(0)
+  /// The divisor actually used, resolved from the basis when the run was costed.
+  /// Zero until calculated, which the payroll_period_divisor_when_costed CHECK
+  /// ties to the status.
+  payableDaysDivisor Int @default(0)
+
+  /// Server-computed totals, written at calculation. Null before that.
+  grossEarnings         Decimal? @db.Decimal(14, 2)
+  totalDeductions       Decimal? @db.Decimal(14, 2)
+  employerContributions Decimal? @db.Decimal(14, 2)
+  netPay                Decimal? @db.Decimal(14, 2)
+
+  employeeCount Int @default(0)
+
+  calculatedAt   DateTime?
+  calculatedById String?
+
+  /// The open ApprovalRequest, reusing the existing approval engine rather than
+  /// a second one. Unenforced by a FK for the same reason Notification and
+  /// AuditLog are: the approval table is polymorphic by design.
+  approvalRequestId String?
+
+  approvedAt   DateTime?
+  approvedById String?
+  finalizedAt  DateTime?
+  finalizedById String?
+
+  notes String?
+  cancellationReason String?
+
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  calculatedBy User? @relation("PayrollCalculatedBy", fields: [calculatedById], references: [id], onDelete: SetNull)
+  approvedBy   User? @relation("PayrollApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  finalizedBy  User? @relation("PayrollFinalizedBy", fields: [finalizedById], references: [id], onDelete: SetNull)
+  createdBy    User? @relation("PayrollCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  items       PayrollItem[]
+  adjustments PayrollAdjustment[] @relation("AdjustmentPaidInPeriod")
+  corrections PayrollAdjustment[] @relation("AdjustmentCorrectsPeriod")
+
+  /// **The constraint that makes duplicate payroll impossible.** One run per
+  /// calendar month, enforced by the database rather than by a service check that
+  /// two concurrent requests could both pass.
+  @@unique([year, month])
+  @@index([status, year, month])
+  @@index([periodStart, periodEnd])
+}
+
+/// One employee's line within a run.
+model PayrollItem {
+  id String @id @default(cuid())
+
+  periodId   String
+  employeeId String
+
+  status          PayrollItemStatus       @default(PENDING)
+  exclusionReason PayrollExclusionReason?
+  exclusionNote   String?
+
+  currency String @default("INR")
+
+  /// The assignment this line was computed from. Restrict, so the salary that
+  /// explains a payslip cannot be deleted from under it.
+  salaryAssignmentId String?
+  monthlyGross       Decimal? @db.Decimal(12, 2)
+
+  /// Attendance-derived inputs, all server-computed and stored so the figure can
+  /// be explained without re-reading attendance that may since have been
+  /// corrected.
+  presentDays     Decimal? @db.Decimal(5, 2)
+  paidLeaveDays   Decimal? @db.Decimal(5, 2)
+  unpaidLeaveDays Decimal? @db.Decimal(5, 2)
+  holidayDays     Decimal? @db.Decimal(5, 2)
+  weekOffDays     Decimal? @db.Decimal(5, 2)
+  payableDays     Decimal? @db.Decimal(5, 2)
+  overtimeMinutes Int?
+
+  grossEarnings         Decimal? @db.Decimal(12, 2)
+  totalDeductions       Decimal? @db.Decimal(12, 2)
+  employerContributions Decimal? @db.Decimal(12, 2)
+  netPay                Decimal? @db.Decimal(12, 2)
+
+  /// The immutable computation, written at finalisation. Json because the shape
+  /// is evidence to display rather than data to query, and because every input
+  /// can legitimately change afterwards.
+  snapshot Json?
+
+  /// The generated payslip, where one exists. A SecureDocument rather than a URL,
+  /// so access is resolved by the same permission service as everything else and
+  /// the stored link is never publicly fetchable.
+  payslipDocumentId String? @unique
+
+  calculatedAt DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  period   PayrollPeriod   @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  employee Employee        @relation("PayrollItemEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+  salaryAssignment EmployeeSalary? @relation(fields: [salaryAssignmentId], references: [id], onDelete: Restrict)
+
+  lines PayrollItemLine[]
+
+  /// One line per employee per run. The second half of the duplicate-payroll
+  /// guarantee: even if two calculations raced, neither could create a second
+  /// line for the same person.
+  @@unique([periodId, employeeId])
+  @@index([periodId, status])
+  @@index([employeeId, createdAt])
+  @@index([salaryAssignmentId])
+}
+
+/// One component as it landed on one employee's line.
+///
+/// Written per calculation and replaced on recalculation. The finalised record of
+/// these lives in `PayrollItem.snapshot`, which is why deleting and rewriting
+/// them during recalculation loses nothing.
+model PayrollItemLine {
+  id String @id @default(cuid())
+
+  itemId String
+
+  /// Denormalised from the component deliberately. A payslip line must still read
+  /// correctly after the component is renamed or deactivated, and joining to a
+  /// mutable row would let a historical figure acquire a new label.
+  componentCode String
+  componentName String
+  kind          SalaryComponentKind
+  calculation   SalaryCalculationKind
+
+  rate Decimal? @db.Decimal(6, 2)
+
+  /// Before proration, and after. Both stored so a reduced figure can be
+  /// explained rather than merely asserted.
+  fullAmount Decimal @db.Decimal(12, 2)
+  amount     Decimal @db.Decimal(12, 2)
+
+  prorationNote String?
+  displayOrder  Int @default(100)
+
+  createdAt DateTime @default(now())
+
+  item PayrollItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([itemId, componentCode])
+  @@index([itemId, displayOrder])
+}
+
+/// A correction attaching to a later period.
+///
+/// The only way a finalised figure is corrected. The amount is always positive
+/// and `kind` decides its direction, for the same reason a deduction is not a
+/// negative earning.
+model PayrollAdjustment {
+  id String @id @default(cuid())
+
+  employeeId String
+  /// The period this is paid in. Null while unassigned, set when a run picks it
+  /// up. SetNull rather than Cascade so cancelling a run returns its adjustments
+  /// to the queue instead of destroying them.
+  periodId String?
+
+  kind     PayrollAdjustmentKind
+  amount   Decimal @db.Decimal(12, 2)
+  currency String  @default("INR")
+
+  reason String
+
+  /// The finalised period being corrected, where it corrects one. This is what
+  /// makes the trail read forwards: period N was wrong, N+1 says so and by how
+  /// much.
+  correctsPeriodId String?
+  reference        String?
+
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  employee       Employee       @relation("PayrollAdjustmentEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+  period         PayrollPeriod? @relation("AdjustmentPaidInPeriod", fields: [periodId], references: [id], onDelete: SetNull)
+  correctsPeriod PayrollPeriod? @relation("AdjustmentCorrectsPeriod", fields: [correctsPeriodId], references: [id], onDelete: SetNull)
+  createdBy      User?          @relation("PayrollAdjustmentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([employeeId, createdAt])
+  @@index([periodId])
+  @@index([correctsPeriodId])
+}
+
+/// Sequential payroll references, allocated atomically.
+///
+/// The same mechanism as `PerformanceCodeCounter`, `RecruitmentCodeCounter` and
+/// `EmployeeIdCounter`, present for the same reason: `SELECT max(...) + 1` read
+/// by two concurrent creates hands both the same number.
+///
+/// `scope` holds a year string — "PAY-2026".
+model PayrollCodeCounter {
   scope     String   @id
   lastValue Int      @default(0)
   updatedAt DateTime @updatedAt
