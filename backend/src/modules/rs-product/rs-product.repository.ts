@@ -11,7 +11,7 @@
  */
 
 import type { Prisma } from '@prisma/client';
-import type { RsProductListQuery, RsProductListRow } from '@rs/shared';
+import type { RsProductListQuery, RsProductListRow, ShopifyProductStatus } from '@rs/shared';
 import { prisma } from '../../config/database.js';
 import type { MappedImage, MappedProduct, MappedVariant } from './rs-product.mapper.js';
 
@@ -257,14 +257,31 @@ export async function upsertShopifyProduct(
         select: { id: true },
       });
 
-      // Children are upserted by their own Shopify ids, so a re-run updates in
-      // place. Rows absent from this payload are removed, but only within this
-      // product — never a global delete.
+      /*
+        Children are upserted by their own Shopify ids, so a re-run updates in
+        place. Rows absent from this payload are removed, but only within this
+        product — never a global delete.
+
+        `costPrice` is deliberately absent from the update branch.
+
+        It is the one column on this table that Shopify supplies AND the CRM
+        maintains: Shopify exposes a unit cost on the inventory item, and a buyer
+        also enters one by hand, because the store records a cost for none of the
+        570 synced variants. Spreading the mapped variant over an existing row
+        would therefore overwrite every manually entered cost with null on the
+        next sync — destroying the figures stock valuation is computed from.
+
+        So Shopify's cost may *seed* a variant the CRM has not seen before, and
+        never overwrites one it already holds. `crmStockQty` needs no such care:
+        it is absent from MappedVariant entirely, so no sync can reach it.
+      */
       for (const variant of variants) {
+        const { costPrice, ...shopifyOwned } = variant;
+
         await tx.shopifyVariant.upsert({
           where: { shopifyVariantId: variant.shopifyVariantId },
-          create: { ...variant, rsProductId: row.id },
-          update: { ...variant, rsProductId: row.id },
+          create: { ...shopifyOwned, costPrice, rsProductId: row.id },
+          update: { ...shopifyOwned, rsProductId: row.id },
         });
       }
 
@@ -294,4 +311,44 @@ export async function upsertShopifyProduct(
     },
     { timeout: 15_000, maxWait: 10_000 },
   );
+}
+
+/**
+ * Every variant that could hold value, with its product's status.
+ *
+ * One query, not one per product. Valuation needs `costPrice` and
+ * `crmStockQty` per variant plus the owning product's id and status — nothing
+ * else — so only those four columns are selected. 570 variants of four narrow
+ * columns is a few tens of kilobytes; selecting the rows whole would drag
+ * descriptions and 2,231 image URLs through for no use.
+ *
+ * Variants holding neither cost nor stock are filtered out in SQL rather than
+ * in memory: a variant with no cost price AND no stock contributes nothing to
+ * any figure, and the live catalogue is almost entirely that case — 565 of 570
+ * today. Excluding them in the database is what keeps this from growing into a
+ * full-table load as the catalogue does.
+ *
+ * Ordered by product so the service can group without a second pass or a map
+ * keyed on every product in the catalogue.
+ */
+export function findValuableVariants(): Promise<
+  {
+    rsProductId: string;
+    costPrice: Prisma.Decimal | null;
+    crmStockQty: number;
+    rsProduct: { status: ShopifyProductStatus };
+  }[]
+> {
+  return prisma.shopifyVariant.findMany({
+    where: {
+      OR: [{ costPrice: { not: null } }, { crmStockQty: { not: 0 } }],
+    },
+    select: {
+      rsProductId: true,
+      costPrice: true,
+      crmStockQty: true,
+      rsProduct: { select: { status: true } },
+    },
+    orderBy: { rsProductId: 'asc' },
+  });
 }

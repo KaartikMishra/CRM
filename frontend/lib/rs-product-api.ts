@@ -1,4 +1,4 @@
-import type { RsProductDetail, RsProductListRow } from '@rs/shared';
+import type { RsProductDetail, RsProductListRow, StockValuationView } from '@rs/shared';
 import { apiFetch, type ApiResult } from './api-server';
 
 /**
@@ -37,4 +37,16 @@ export async function fetchRsProduct(
   id: string,
 ): Promise<ApiResult<{ product: RsProductDetail }>> {
   return apiFetch<{ product: RsProductDetail }>(`/api/rs-products/${id}`);
+}
+
+/**
+ * The catalogue's stock valuation — the dashboard card's figures.
+ *
+ * Reads the same endpoint the product pages reconcile against, so the dashboard
+ * total and the per-product totals come from one computation rather than two.
+ */
+export async function fetchStockValuation(): Promise<
+  ApiResult<{ valuation: StockValuationView }>
+> {
+  return apiFetch<{ valuation: StockValuationView }>('/api/rs-products/valuation');
 }

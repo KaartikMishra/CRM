@@ -10,6 +10,8 @@ import { EmptyState } from '@/components/common/empty-state';
 import { getCurrentUser } from '@/lib/current-user';
 import { hasModule } from '@/lib/module-access';
 import { fetchEnquiries } from '@/lib/enquiry-api';
+import { fetchStockValuation } from '@/lib/rs-product-api';
+import { StockValuationCard } from '@/components/rs-products/stock-valuation-card';
 
 export const metadata: Metadata = { title: 'Dashboard' };
 
@@ -29,10 +31,15 @@ export default async function DashboardPage() {
 
   const canEnquiry = hasModule(user, 'PRODUCT_ENQUIRY');
   const canSales = hasModule(user, 'SALES');
+  // Same rule as every other section: someone without RS Products access is not
+  // shown stock value, and the API is not asked for it — the request would be
+  // refused, and a row of dashes is a worse answer than not asking.
+  const canProducts = hasModule(user, 'RS_PRODUCTS');
 
-  const [open, mine] = await Promise.all([
+  const [open, mine, valuation] = await Promise.all([
     canEnquiry ? fetchEnquiries({ status: 'OPEN', limit: '25' }) : null,
     canEnquiry ? fetchEnquiries({ assignedToId: user.id, status: 'OPEN', limit: '25' }) : null,
+    canProducts ? fetchStockValuation() : null,
   ]);
 
   const openCount = open?.result.success ? open.result.data.enquiries.length : null;
@@ -98,6 +105,33 @@ export default async function DashboardPage() {
               </CardContent>
             </Card>
           ))}
+        </div>
+      )}
+
+      {/*
+        Stock valuation: how much money is invested in the stock the CRM holds.
+
+        The card is rendered whenever the viewer may see it, whether or not the
+        request succeeded. An earlier version hid it on failure, and that is how
+        a stale backend build — serving no /valuation route — looked exactly
+        like "the feature was never built". A visible error says which of the
+        two it is; an absent card cannot.
+
+        A failed figure is never rendered as zero: zero would understate the
+        money held in stock, which is worse than saying nothing is known.
+      */}
+      {canProducts && (
+        <div className="grid gap-4 lg:max-w-md">
+          {valuation?.success ? (
+            <StockValuationCard valuation={valuation.data.valuation} />
+          ) : (
+            <StockValuationCard
+              // The backend's own message is deliberately not passed through:
+              // it can carry internal detail, and a dashboard is the wrong
+              // place for it. The request id is the way to trace the cause.
+              unavailable
+            />
+          )}
         </div>
       )}
 

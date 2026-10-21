@@ -48,3 +48,13 @@ export async function shopifyConnection(_req: Request, res: Response): Promise<v
 export async function shopifySync(_req: Request, res: Response): Promise<void> {
   sendSuccess(res, { sync: await service.runShopifySync() });
 }
+
+/**
+ * The catalogue's stock valuation.
+ *
+ * A literal path, so it is declared before `/:id` in the router — otherwise
+ * "valuation" would be parsed as a product id and answer 404.
+ */
+export async function stockValuation(_req: Request, res: Response): Promise<void> {
+  sendSuccess(res, { valuation: await service.getStockValuation() });
+}

@@ -18,8 +18,14 @@ import type {
   RsProductDetail,
   RsProductListQuery,
   RsProductListRow,
+  StockValuationView,
   UpdateRsProductInput,
+  ValuableProduct,
+  ValuableVariant,
 } from '@rs/shared';
+// The one valuation implementation, shared with the dashboard so the two
+// figures cannot drift.
+import { countNegativeStock, valueCatalogue } from '@rs/shared';
 import type { Prisma } from '@prisma/client';
 import { AppError } from '../../utils/AppError.js';
 import * as repository from './rs-product.repository.js';
@@ -319,4 +325,58 @@ export function shopifyConnectionStatus(): Promise<ShopifyConnectionStatus> {
  */
 export function runShopifySync(): Promise<SyncReport> {
   return syncShopifyCatalogue();
+}
+
+/**
+ * Stock valuation, for both the dashboard and the product pages.
+ *
+ * One implementation, deliberately. The dashboard's total has to equal the sum
+ * of what the product pages show, and the only way to guarantee that is for
+ * there to be nothing to reconcile: both read `@rs/shared`'s valuation
+ * functions, and this adds only the catalogue-wide grouping around them.
+ *
+ * ARCHIVED products are valued separately rather than dropped. Archived is how
+ * a deleted Shopify product is recorded, so its stock is not money invested in
+ * sellable stock — but silently excluding it would make the total unexplainable
+ * to anyone who counted the catalogue by hand. It is reported beside the
+ * primary figure instead.
+ */
+export async function getStockValuation(): Promise<StockValuationView> {
+  const rows = await repository.findValuableVariants();
+
+  /*
+    Grouped by product so `productsMissingCost` counts products rather than
+    rows, and split by status so the archived figure is computed by exactly the
+    same rules as the primary one.
+  */
+  const primaryByProduct = new Map<string, ValuableVariant[]>();
+  const archivedByProduct = new Map<string, ValuableVariant[]>();
+
+  for (const row of rows) {
+    const bucket = row.rsProduct.status === 'ARCHIVED' ? archivedByProduct : primaryByProduct;
+    const variant: ValuableVariant = {
+      // Decimal → string, because valuation arithmetic is exact paise and never
+      // a float. Null stays null: an absent cost is unknown, not zero.
+      costPrice: row.costPrice === null ? null : row.costPrice.toString(),
+      crmStockQty: row.crmStockQty,
+    };
+
+    const existing = bucket.get(row.rsProductId);
+    if (existing) existing.push(variant);
+    else bucket.set(row.rsProductId, [variant]);
+  }
+
+  const toProducts = (grouped: Map<string, ValuableVariant[]>): ValuableProduct[] =>
+    [...grouped.values()].map((variants) => ({ variants }));
+
+  const primaryProducts = toProducts(primaryByProduct);
+  const archivedProducts = toProducts(archivedByProduct);
+
+  return {
+    primary: valueCatalogue(primaryProducts),
+    archived: valueCatalogue(archivedProducts),
+    // Across both buckets: an anomaly is worth reporting wherever it sits.
+    negativeStockVariants:
+      countNegativeStock(primaryProducts) + countNegativeStock(archivedProducts),
+  };
 }

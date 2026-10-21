@@ -181,3 +181,57 @@ export type ShopifyConnectionView = {
   /** Stable code when not connected: NOT_CONFIGURED, SHOPIFY_AUTH_FAILED, … */
   reason: string | null;
 };
+
+/**
+ * Stock valuation — how much money is tied up in the stock the CRM holds.
+ *
+ * Every amount is a decimal string in rupees, never a number: valuation is
+ * money, and a float would lose paise on the way through JSON. The counts are
+ * integers because they count things.
+ *
+ * The figures a reader must be able to trust separately are kept separate. A
+ * variant with no cost price is NOT valued at zero — that would read as
+ * "this stock is worthless" when it means "nobody has entered its cost" — so
+ * it is excluded from `knownValue` and counted in `variantsMissingCost`, with
+ * its units in `unitsWithUnknownCost`. A total is only ever the stock whose
+ * cost is actually known.
+ */
+export type StockValuationTotals = {
+  /** Value of stock whose cost price is known. Excludes every unknown cost. */
+  knownValue: string;
+  /** CRM units counted across every eligible variant, costed or not. */
+  totalUnits: number;
+  /** Units held by variants with no cost price — value unknown, not zero. */
+  unitsWithUnknownCost: number;
+  /** Variants holding stock whose cost price is absent. */
+  variantsMissingCost: number;
+  /** Products with at least one such variant. */
+  productsMissingCost: number;
+  /** Variants that carry both a cost price and stock, so are fully valued. */
+  variantsValued: number;
+  /** True when any eligible stock could not be valued. */
+  incomplete: boolean;
+};
+
+/**
+ * The dashboard's view: the primary total, plus what it deliberately leaves out.
+ *
+ * ARCHIVED products are excluded from `primary` — archived is how a deleted
+ * Shopify product is recorded, and stock of a product no longer sold is not
+ * money invested in sellable stock. It is reported in `archived` rather than
+ * dropped, so the exclusion is visible instead of silent.
+ */
+export type StockValuationView = {
+  primary: StockValuationTotals;
+  /** ARCHIVED products, valued by the same rules and reported separately. */
+  archived: StockValuationTotals;
+  /**
+   * Variants whose CRM stock is negative.
+   *
+   * `crmStockSchema` forbids a negative figure, so this should always be zero
+   * and is surfaced rather than clamped: a non-zero count means stock moved
+   * through a path that bypassed validation, which is a defect to see, not a
+   * number to quietly absorb into a total.
+   */
+  negativeStockVariants: number;
+};

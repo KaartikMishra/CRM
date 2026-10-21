@@ -118,6 +118,22 @@ rsProductRoutes.post(
 );
 
 /**
+ * How much money is held in CRM stock.
+ *
+ * VIEW rather than EDIT: this is a reading of the catalogue, and the Admin
+ * Dashboard shows it to anyone who may already see the products it sums. It
+ * exposes no cost a reader could not reach through the product pages.
+ *
+ * Literal path, so it is declared before `/:id` — otherwise "valuation" would
+ * be parsed as a product id.
+ */
+rsProductRoutes.get(
+  '/valuation',
+  requirePermission('RS_PRODUCTS', 'VIEW'),
+  controller.stockValuation,
+);
+
+/**
  * Parameterised routes last, so the literal paths above are never read as ids.
  */
 rsProductRoutes.get(

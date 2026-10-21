@@ -13,7 +13,7 @@ import {
 import { ErrorMessage } from '@/components/common/error-message';
 import { NoModuleAccess } from '@/components/common/no-module-access';
 import { ProductSourceBadge, ProductStatusBadge } from '@/components/rs-products/product-badges';
-import { VariantTable } from '@/components/rs-products/variant-table';
+import { ProductStockValue, VariantTable } from '@/components/rs-products/variant-table';
 import { EMPTY } from '@/components/rs-products/product-format';
 import { fetchRsProduct } from '@/lib/rs-product-api';
 import { can } from '@/lib/current-user';
@@ -145,9 +145,16 @@ export default async function RsProductDetailPage({
                 {product.variants.length > 1 ? 'Variants' : 'Pricing and stock'}
               </h2>
               <p className="mt-1 text-xs text-muted">
-                Shopify quantity is the store&rsquo;s sellable figure. CRM stock is counted here and
-                is never written by a sync.
+                Cost price and CRM stock are maintained here and are never written back to Shopify.
+                Shopify&rsquo;s selling price and quantity are shown beside them and are rewritten by
+                each sync.
               </p>
+
+              {/* The product's own valuation, by the same shared rules the
+                  dashboard total uses. */}
+              <div className="mt-4 border-b border-line pb-4">
+                <ProductStockValue variants={product.variants} />
+              </div>
 
               <div className="mt-4">
                 <VariantTable variants={product.variants} />

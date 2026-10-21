@@ -1,4 +1,5 @@
 import type { ShopifyVariantView } from '@rs/shared';
+import { formatINR, valueProduct, variantStockValue } from '@rs/shared';
 import {
   Table,
   TableBody,
@@ -51,6 +52,34 @@ export function formatVariantTitle(title: string | null): string {
   return title === 'Default Title' ? EMPTY : title;
 }
 
+/**
+ * Money, including a negative figure.
+ *
+ * `formatINR` accepts only non-negative amounts — it is shared with Sales and
+ * GST, where a negative total means an upstream invariant broke, so it throws
+ * rather than rendering one. It is deliberately not weakened here.
+ *
+ * A negative value can still reach valuation: `crmStockSchema` forbids a
+ * negative quantity, but the calculator does not clamp one if it somehow
+ * exists, and `addAmount` propagates the sign into an aggregate. So the sign is
+ * handled here and the magnitude formatted, keeping the anomaly visible.
+ */
+export function formatStockMoney(amount: string): string {
+  return amount.startsWith('-') ? `-${formatINR(amount.slice(1))}` : formatINR(amount);
+}
+
+/**
+ * One variant's stock value, or an explicit "unknown" when its cost is absent.
+ *
+ * The distinction is the point. An uncosted variant is NOT worth zero — zero
+ * would read as "this stock is worthless" when the truth is "nobody has entered
+ * its cost" — so the shared calculator returns null and this renders a dash.
+ */
+export function formatVariantStockValue(variant: ShopifyVariantView): string {
+  const value = variantStockValue(variant);
+  return value === null ? EMPTY : formatStockMoney(value);
+}
+
 /** Whether a quantity represents a real oversell, matching the catalogue rule. */
 export const isNegativeVariantStock = (variant: Pick<ShopifyVariantView, 'inventoryQty'>): boolean =>
   variant.inventoryQty < 0;
@@ -73,9 +102,14 @@ export function VariantTable({ variants }: { variants: ShopifyVariantView[] }) {
           <TableHead className="w-12 text-right">#</TableHead>
           <TableHead className="min-w-[140px]">SKU</TableHead>
           <TableHead className="min-w-[140px]">Variant</TableHead>
-          <TableHead className="text-right">Price</TableHead>
+          {/* Shopify's selling price, then the CRM's own cost — deliberately
+              adjacent and separately labelled, because confusing the two would
+              misstate every valuation on the page. */}
+          <TableHead className="text-right">Shopify price</TableHead>
+          <TableHead className="text-right">Cost price</TableHead>
           <TableHead className="text-right">CRM stock</TableHead>
-          <TableHead className="text-right">Shopify</TableHead>
+          <TableHead className="text-right">Stock value</TableHead>
+          <TableHead className="hidden md:table-cell text-right">Shopify qty</TableHead>
           <TableHead className="hidden md:table-cell text-right">Weight</TableHead>
           <TableHead className="hidden lg:table-cell">Shopify variant ID</TableHead>
         </TableRow>
@@ -96,16 +130,32 @@ export function VariantTable({ variants }: { variants: ShopifyVariantView[] }) {
               {formatVariantPrice(variant.price)}
             </TableCell>
 
+            {/* Cost price: entered by hand in the CRM. A sync never overwrites
+                it, and an absent one is shown as unknown — never as zero. */}
+            <TableCell className="whitespace-nowrap text-right text-sm text-ink">
+              {variant.costPrice === null ? (
+                <span className="text-xs text-warning">Not set</span>
+              ) : (
+                formatVariantPrice(variant.costPrice)
+              )}
+            </TableCell>
+
             {/* CRM stock: maintained by hand, never written by a Shopify sync. */}
             <TableCell className="text-right text-sm tabular-nums text-ink">
               {variant.crmStockQty.toLocaleString('en-IN')}
+            </TableCell>
+
+            {/* costPrice x crmStockQty, computed by the shared valuation
+                function the dashboard total also uses. */}
+            <TableCell className="whitespace-nowrap text-right text-sm tabular-nums text-ink">
+              {formatVariantStockValue(variant)}
             </TableCell>
 
             {/* Shopify's sellable quantity. A negative figure is a real
                 oversell, shown and marked rather than clamped to zero. */}
             <TableCell
               className={cn(
-                'text-right text-sm tabular-nums',
+                'hidden md:table-cell text-right text-sm tabular-nums',
                 isNegativeVariantStock(variant) ? 'font-medium text-critical' : 'text-muted',
               )}
             >
@@ -125,5 +175,54 @@ export function VariantTable({ variants }: { variants: ShopifyVariantView[] }) {
         ))}
       </TableBody>
     </Table>
+  );
+}
+
+/**
+ * The product's own total, by the same rules as the dashboard's.
+ *
+ * `valueProduct` is the shared function the backend aggregation also calls, so
+ * this figure and the dashboard's cannot disagree about one product.
+ *
+ * What is deliberately NOT shown is a single grand number when some costs are
+ * missing. A total of ₹0.00 beside "3 variants need a cost price" is honest;
+ * ₹0.00 alone would look like a finished answer.
+ */
+export function ProductStockValue({ variants }: { variants: ShopifyVariantView[] }) {
+  const totals = valueProduct({ variants });
+
+  return (
+    <dl className="flex flex-wrap items-baseline gap-x-6 gap-y-2">
+      <div>
+        <dt className="text-xs font-medium uppercase tracking-wide text-muted">
+          Total stock value
+        </dt>
+        <dd className="mt-1 font-mono text-xl font-medium tabular-nums text-ink">
+          {formatStockMoney(totals.knownValue)}
+        </dd>
+      </div>
+
+      <div>
+        <dt className="text-xs font-medium uppercase tracking-wide text-muted">CRM units</dt>
+        <dd className="mt-1 font-mono text-xl font-medium tabular-nums text-ink">
+          {totals.totalUnits.toLocaleString('en-IN')}
+        </dd>
+      </div>
+
+      {totals.incomplete && (
+        <div>
+          <dt className="text-xs font-medium uppercase tracking-wide text-warning">
+            Cost price missing
+          </dt>
+          <dd className="mt-1 text-sm text-warning">
+            {totals.variantsMissingCost === 1
+              ? '1 variant'
+              : `${totals.variantsMissingCost} variants`}{' '}
+            holding {totals.unitsWithUnknownCost.toLocaleString('en-IN')} units — their value is
+            not included above.
+          </dd>
+        </div>
+      )}
+    </dl>
   );
 }
