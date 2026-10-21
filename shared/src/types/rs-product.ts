@@ -26,6 +26,21 @@ export type RsProductImageView = {
 
 export type ShopifyVariantView = {
   id: string;
+  /**
+   * Shopify's own id for this variant, null on a CRM-only one.
+   *
+   * Exposed because it is the identity a person needs when reconciling a CRM
+   * row against Shopify admin — the SKU cannot serve: it repeats across the
+   * live catalogue and two variants have none at all.
+   */
+  shopifyVariantId: string | null;
+  /**
+   * The inventory item behind the variant, null on a CRM-only one.
+   *
+   * The only key `inventory_levels/update` carries, so it is what an inventory
+   * discrepancy is traced through.
+   */
+  shopifyInventoryItemId: string | null;
   /** Null on a CRM-only variant, and not unique across Shopify anyway. */
   sku: string | null;
   title: string | null;

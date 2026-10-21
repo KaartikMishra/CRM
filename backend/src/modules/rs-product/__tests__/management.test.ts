@@ -106,6 +106,44 @@ describe('reading one product', () => {
     expect(product.editable.shopifyOwnedVariantFields).toBe(true);
   });
 
+  /*
+    The two Shopify identifiers are what a person reconciles a CRM variant
+    against the store by. The SKU cannot do it — values repeat across the live
+    catalogue and some variants have none — so these are read from the detail
+    payload, and were previously persisted but never returned.
+  */
+  it('exposes the Shopify variant and inventory-item ids on a synced variant', async () => {
+    const res = await api<Detail>('GET', `/api/rs-products/${shopifyProductId}`, {
+      token: adminToken,
+    });
+
+    expect(res.status).toBe(200);
+    const variant = res.body.data!.product.variants[0]!;
+
+    // Compared against the stored row rather than a literal: the fixture is a
+    // real synced product, so the assertion must follow whatever it holds.
+    const stored = await prisma.shopifyVariant.findUniqueOrThrow({
+      where: { id: variant.id },
+      select: { shopifyVariantId: true, shopifyInventoryItemId: true },
+    });
+
+    expect(variant.shopifyVariantId).toBe(stored.shopifyVariantId);
+    expect(variant.shopifyInventoryItemId).toBe(stored.shopifyInventoryItemId);
+    // A synced variant has both; this is the whole point of the pair.
+    expect(variant.shopifyVariantId).not.toBeNull();
+    expect(variant.shopifyInventoryItemId).not.toBeNull();
+  });
+
+  it('reports both Shopify ids as null on a CRM-only variant', async () => {
+    const product = await makeManualProduct();
+    const variant = product.variants[0]!;
+
+    // A manual product has never been synced, so neither id can exist. Null
+    // rather than absent: the field is always present in the payload.
+    expect(variant.shopifyVariantId).toBeNull();
+    expect(variant.shopifyInventoryItemId).toBeNull();
+  });
+
   it('404s for a product that does not exist', async () => {
     const res = await api('GET', '/api/rs-products/clx0000000000000000000000', {
       token: adminToken,

@@ -140,6 +140,11 @@ function toDetail(product: ProductWithChildren): RsProductDetail {
     updatedAt: product.updatedAt.toISOString(),
     variants: product.variants.map((v) => ({
       id: v.id,
+      // Already persisted by the sync; surfaced so a variant can be reconciled
+      // against Shopify admin, which the SKU cannot do — it repeats and is
+      // sometimes absent.
+      shopifyVariantId: v.shopifyVariantId,
+      shopifyInventoryItemId: v.shopifyInventoryItemId,
       sku: v.sku,
       title: v.title,
       price: v.price.toString(),

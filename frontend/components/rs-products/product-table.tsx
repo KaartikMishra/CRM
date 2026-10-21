@@ -1,4 +1,5 @@
 import Image from 'next/image';
+import Link from 'next/link';
 import { ImageOff } from 'lucide-react';
 import type { RsProductListRow } from '@rs/shared';
 import {
@@ -33,9 +34,10 @@ import {
  * gain. Where a product does have several, the row aggregates rather than
  * misreports — a price range, summed stock, and a badge saying how many.
  *
- * Not a Client Component: nothing here is interactive yet, so it renders on the
- * server and ships no JavaScript. A detail dialog in a later phase can make the
- * row clickable without changing this shape.
+ * Still not a Client Component: the title is a plain `Link`, so the table
+ * renders on the server and ships no JavaScript of its own. The link is how a
+ * product's individual variants are reached — this row deliberately cannot show
+ * them, and `/rs-products/[id]` is where they are listed.
  */
 export function RsProductTable({
   products,
@@ -86,11 +88,19 @@ export function RsProductTable({
               </TableCell>
 
               <TableCell>
-                {/* The full title stays reachable on hover: the longest in the
+                {/* The title is the way into the product: the row aggregates
+                    its variants, and the detail page is where the individual
+                    SKUs, prices and quantities are read.
+
+                    The full title stays reachable on hover: the longest in the
                     catalogue runs to 222 characters and cannot be shown. */}
-                <span className="text-sm font-medium text-ink" title={product.title}>
+                <Link
+                  href={`/rs-products/${product.id}`}
+                  className="text-sm font-medium text-ink hover:underline"
+                  title={product.title}
+                >
                   {truncateTitle(product.title)}
-                </span>
+                </Link>
                 {(variants ?? product.productType) && (
                   <span className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-muted">
                     {variants && <span>{variants}</span>}
