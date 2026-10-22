@@ -21,7 +21,12 @@ import { NotificationProvider } from '@/components/notifications/notification-pr
  */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await getCurrentUser();
-  if (!user) redirect('/login');
+  /*
+    `?from` tells the edge redirect that the API refused this session, so it
+    does not send the visitor straight back here on a cookie whose signature is
+    still intact. Without it the two layers disagree in a cycle. See proxy.ts.
+  */
+  if (!user) redirect('/login?from=%2Fdashboard');
 
   const items = visibleNavItems(accessibleModules(user), user.role === 'ADMIN');
 

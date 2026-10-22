@@ -16,15 +16,22 @@
 
 import { Router } from 'express';
 import {
+  createMonitoredVariantSchema,
   createRsProductSchema,
+  listInventoryAlertsSchema,
+  listMonitoredVariantsSchema,
+  monitoredVariantIdParamSchema,
   rsProductIdParamSchema,
   rsProductListQuerySchema,
+  searchMonitorCandidatesSchema,
+  updateMonitoredVariantSchema,
   updateRsProductSchema,
 } from '@rs/shared';
 import { requireAuth } from '../../middleware/requireAuth.js';
 import { requireAnyPermission, requirePermission } from '../../middleware/requirePermission.js';
 import { validate } from '../../middleware/validate.js';
 import * as controller from './rs-product.controller.js';
+import * as alerts from './inventory-alert.controller.js';
 
 export const rsProductRoutes = Router();
 
@@ -115,6 +122,75 @@ rsProductRoutes.post(
   '/shopify/sync',
   requirePermission('RS_PRODUCTS', 'CREATE'),
   controller.shopifySync,
+);
+
+/*
+ * ---------------------------------------------------------------------------
+ *  Inventory Alerts
+ * ---------------------------------------------------------------------------
+ *
+ * Mounted under this router rather than a module of their own: alerts are a
+ * view of RS Products stock, and reusing this namespace means no new AppModule
+ * value — which would be invisible even to administrators unless added to
+ * ROLE_DEFAULTS.ADMIN, because `effectivePermissions` derives its module list
+ * from that object's keys.
+ *
+ * VIEW to read, EDIT to configure. Every literal path is declared here, above
+ * `/:id`, or "alerts" would be parsed as a product id and answer 422.
+ */
+
+/** The dashboard card and the page header. */
+rsProductRoutes.get(
+  '/alerts/summary',
+  requirePermission('RS_PRODUCTS', 'VIEW'),
+  alerts.summary,
+);
+
+/** Alert history, active and resolved. */
+rsProductRoutes.get(
+  '/alerts/history',
+  requirePermission('RS_PRODUCTS', 'VIEW'),
+  validate({ query: listInventoryAlertsSchema }),
+  alerts.listAlerts,
+);
+
+/** The add-monitor picker: search the catalogue for a variant to watch. */
+rsProductRoutes.get(
+  '/alerts/candidates',
+  requirePermission('RS_PRODUCTS', 'VIEW'),
+  validate({ query: searchMonitorCandidatesSchema }),
+  alerts.candidates,
+);
+
+/** The monitored list. */
+rsProductRoutes.get(
+  '/alerts/monitored',
+  requirePermission('RS_PRODUCTS', 'VIEW'),
+  validate({ query: listMonitoredVariantsSchema }),
+  alerts.listMonitored,
+);
+
+/** Start watching a variant. EDIT: configuring is not reading. */
+rsProductRoutes.post(
+  '/alerts/monitored',
+  requirePermission('RS_PRODUCTS', 'EDIT'),
+  validate({ body: createMonitoredVariantSchema }),
+  alerts.createMonitored,
+);
+
+rsProductRoutes.get(
+  '/alerts/monitored/:id',
+  requirePermission('RS_PRODUCTS', 'VIEW'),
+  validate({ params: monitoredVariantIdParamSchema }),
+  alerts.monitoredDetail,
+);
+
+/** Change a threshold, or enable/disable monitoring. */
+rsProductRoutes.patch(
+  '/alerts/monitored/:id',
+  requirePermission('RS_PRODUCTS', 'EDIT'),
+  validate({ params: monitoredVariantIdParamSchema, body: updateMonitoredVariantSchema }),
+  alerts.updateMonitored,
 );
 
 /**

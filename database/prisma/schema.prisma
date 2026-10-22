@@ -238,6 +238,10 @@ model User {
   finalizedPayrollPeriods PayrollPeriod[]     @relation("PayrollFinalizedBy")
   createdPayrollAdjustments PayrollAdjustment[] @relation("PayrollAdjustmentCreatedBy")
 
+  /// Inventory Alerts — who chose to watch a variant, and who last changed it.
+  createdMonitoredVariants MonitoredVariant[] @relation("MonitoredVariantCreatedBy")
+  updatedMonitoredVariants MonitoredVariant[] @relation("MonitoredVariantUpdatedBy")
+
   @@index([role, isActive])
 }
 
@@ -1807,6 +1811,12 @@ enum NotificationType {
   HR_PAYSLIP_AVAILABLE
   HR_PAYROLL_FINALIZED
   HR_PAYROLL_ADJUSTMENT_RECORDED
+
+  /// Inventory Alerts. A notice carries the product, the SKU and the two
+  /// numbers that matter; it never carries a cost price, because a bell is read
+  /// by more people than may read what stock cost.
+  INVENTORY_LOW_STOCK
+  INVENTORY_STOCK_RECOVERED
 }
 
 /// One thing somebody should know about, addressed to one person.
@@ -2043,6 +2053,17 @@ model ShopifyVariant {
   updatedAt DateTime @updatedAt
 
   rsProduct RsProduct @relation(fields: [rsProductId], references: [id], onDelete: Cascade)
+
+  /*
+   * Inventory Alerts. Both virtual — the foreign key lives on the other table,
+   * and nothing on this one changes.
+   *
+   * `monitoring` cascades from here: a configuration for a variant that no
+   * longer exists has nothing to monitor. `alerts` deliberately does NOT —
+   * see the note on InventoryAlert. History outlives its subject.
+   */
+  monitoring MonitoredVariant?
+  alerts     InventoryAlert[]
 
   @@index([rsProductId, position])
   @@index([sku])
@@ -6952,4 +6973,170 @@ model PayrollCodeCounter {
   scope     String   @id
   lastValue Int      @default(0)
   updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+//  Inventory Alerts
+//
+//  Watches CRM stock — `ShopifyVariant.crmStockQty`, the hand-maintained count
+//  — and never Shopify's `inventoryQty`. The two answer different questions:
+//  one is what the warehouse holds, the other is what the storefront believes
+//  it can sell, and the storefront figure is overwritten by every sync.
+//
+//  Two tables rather than one, because a configuration and an event have
+//  different lifetimes. A threshold is edited; an alert is a fact about a
+//  moment and must not change when the threshold later does.
+// ---------------------------------------------------------------------------
+
+/// Why an alert stopped being active. Recorded rather than inferred: "stock
+/// recovered" and "somebody switched monitoring off" are different stories and
+/// a history that cannot tell them apart is not worth keeping.
+enum InventoryAlertResolution {
+  /// crmStockQty rose above the threshold.
+  STOCK_RECOVERED
+  /// An administrator disabled monitoring while the alert was live.
+  MONITORING_DISABLED
+  /// The threshold was lowered so the current stock is no longer low.
+  THRESHOLD_CHANGED
+  /// The variant itself disappeared — a Shopify sync removed it.
+  VARIANT_REMOVED
+}
+
+enum InventoryAlertStatus {
+  ACTIVE
+  RESOLVED
+}
+
+/// One variant somebody chose to watch, and the level they chose.
+///
+/// Keyed on `variantId`, which is `ShopifyVariant.id` — a cuid. Deliberately
+/// NOT the SKU: the live catalogue holds five duplicate SKU groups (one SKU on
+/// three variants) and two variants with no SKU at all, so a SKU-keyed
+/// configuration would silently watch three things as one, or nothing.
+model MonitoredVariant {
+  id String @id @default(cuid())
+
+  /**
+   * The variant being watched — null once it no longer exists.
+   *
+   * Nullable with `SetNull` rather than non-null with `Cascade`, and that
+   * distinction is the whole history-preservation design. A Shopify sync
+   * hard-deletes variants absent from a payload; under a cascade the
+   * configuration went with the variant, and `InventoryAlert` cascades from the
+   * configuration, so the alert history went too — erasing the record that a
+   * product had run out of stock, which is exactly the record somebody
+   * reviewing a stockout needs.
+   *
+   * With `SetNull` the configuration row survives with `variantId` null, the
+   * history hangs off a row that still exists, and the snapshots on each alert
+   * remain the readable description of what happened.
+   *
+   * `@unique` on a nullable column still does the job: Postgres permits many
+   * NULLs in a unique index, so any number of archived configurations coexist
+   * while a live variant can still be configured only once.
+   */
+  variantId String? @unique
+
+  /// The level at or below which stock is low. Non-negative whole units; a
+  /// CHECK enforces it in the database as well as in Zod, because a negative
+  /// threshold would make every variant permanently alerting.
+  threshold Int
+
+  /// Whether this configuration is being evaluated.
+  ///
+  /// Disabling is not deletion: the row and its alert history stay, so turning
+  /// monitoring back on restores the threshold somebody chose rather than
+  /// asking them to remember it.
+  isActive Boolean @default(true)
+
+  /// Set when the variant this watched no longer exists. The configuration is
+  /// archived rather than removed so the history below stays explicable.
+  archivedAt DateTime?
+
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedById String?
+  updatedAt   DateTime  @updatedAt
+
+  /*
+    SetNull, never Cascade. Deleting a variant detaches this row rather than
+    removing it, so `archivedAt` can be stamped and the alert history below
+    survives. See the note on `variantId` above.
+  */
+  variant ShopifyVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  createdBy User? @relation("MonitoredVariantCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy User? @relation("MonitoredVariantUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  alerts InventoryAlert[]
+
+  /// The evaluator's own query: every configuration still being watched.
+  @@index([isActive])
+}
+
+/// One low-stock episode: raised when stock went low, resolved when it stopped.
+///
+/// ### Why this does not cascade from the variant
+///
+/// A Shopify sync hard-deletes variants absent from a payload, and
+/// `ShopifyVariant` cascades from `RsProduct`. If alert history cascaded from
+/// either, a product leaving the Shopify catalogue would erase the record that
+/// it ran out of stock — which is exactly the record somebody reviewing a
+/// stockout needs. So `variantId` is nullable with `SetNull`, and the columns
+/// below snapshot what the row described.
+///
+/// ### Why the snapshots exist
+///
+/// `thresholdAtRaise` and `stockAtRaise` are copies, not lookups. An alert
+/// says "stock was 2 against a threshold of 10 on this date". Reading the
+/// threshold live would rewrite that sentence every time somebody edited the
+/// configuration, and the product title and SKU would vanish entirely once the
+/// variant did.
+model InventoryAlert {
+  id                 String @id @default(cuid())
+  monitoredVariantId String
+
+  /// Nullable on purpose — see the note above. Null means the variant has been
+  /// removed; the snapshots are then the only description of what this was.
+  variantId String?
+
+  status     InventoryAlertStatus      @default(ACTIVE)
+  resolution InventoryAlertResolution?
+
+  /// What was true when this was raised. Never recomputed.
+  thresholdAtRaise Int
+  stockAtRaise     Int
+
+  /// Identity and display, copied so history survives the variant.
+  productTitleAtRaise String
+  skuAtRaise          String?
+  /// The product this belonged to, for a link that may later 404. Plain string
+  /// rather than a relation: a product can be deleted too.
+  rsProductIdAtRaise  String
+
+  raisedAt       DateTime  @default(now())
+  resolvedAt     DateTime?
+  stockAtResolve Int?
+
+  monitoredVariant MonitoredVariant @relation(fields: [monitoredVariantId], references: [id], onDelete: Cascade)
+  variant          ShopifyVariant?  @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  /// The alerts page: active first, newest first.
+  @@index([status, raisedAt])
+  /// One configuration's own history.
+  @@index([monitoredVariantId, raisedAt])
+  /*
+    AT MOST ONE ACTIVE ALERT PER CONFIGURATION.
+
+    Prisma cannot express a partial unique index, so the real guarantee is
+    added by hand in the migration:
+
+      CREATE UNIQUE INDEX "InventoryAlert_one_active_per_monitor"
+        ON "InventoryAlert"("monitoredVariantId") WHERE status = 'ACTIVE';
+
+    It is a database constraint rather than a service check because two
+    concurrent stock updates can both read "no active alert" and both insert.
+    The loser gets P2002, which the service treats as "somebody else raised it"
+    — the same pattern Notification already uses for its own dedupe.
+  */
 }

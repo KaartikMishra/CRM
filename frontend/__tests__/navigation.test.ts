@@ -391,15 +391,21 @@ describe('Purchase & Procurement is a parent, and Procurement Clock sits under i
 
   it('names exactly the modules that have children', () => {
     /*
-      Four: Procurement carries the Clock, Create Lead / Deal the analytics board,
-      Post Sales its case views, and HR the directory, create form, Attendance and
-      Leave. The first three share their parent's module; HR's Attendance and Leave
-      deliberately do not, because HR is seven namespaces and a single grant must
-      not open all of them. The department and designation masters stay off the
-      sidebar entirely, on HR_ADMIN.
+      Five: Procurement carries the Clock, Create Lead / Deal the analytics board,
+      Post Sales its case views, RS Products the Inventory Alerts page, and HR the
+      directory, create form, Attendance and Leave. All but HR share their parent's
+      module; HR's Attendance and Leave deliberately do not, because HR is seven
+      namespaces and a single grant must not open all of them. The department and
+      designation masters stay off the sidebar entirely, on HR_ADMIN.
     */
     const withChildren = NAV_ITEMS.filter((i) => i.children?.length).map((i) => i.href);
-    expect(withChildren.sort()).toEqual(['/create-lead', '/hr', '/post-sales', '/procurement']);
+    expect(withChildren.sort()).toEqual([
+      '/create-lead',
+      '/hr',
+      '/post-sales',
+      '/procurement',
+      '/rs-products',
+    ]);
   });
 
   it('gates every child on a real module of its own', () => {

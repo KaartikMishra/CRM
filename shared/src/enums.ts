@@ -764,6 +764,13 @@ export const NOTIFICATION_TYPES = [
   'HR_PAYSLIP_AVAILABLE',
   'HR_PAYROLL_FINALIZED',
   'HR_PAYROLL_ADJUSTMENT_RECORDED',
+  /*
+    Inventory Alerts. A notice carries the product, the SKU and the two
+    numbers that matter — stock and threshold — and never a cost price: a
+    bell is read by more colleagues than may read what stock cost.
+  */
+  'INVENTORY_LOW_STOCK',
+  'INVENTORY_STOCK_RECOVERED',
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 

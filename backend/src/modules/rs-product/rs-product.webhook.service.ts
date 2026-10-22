@@ -27,6 +27,7 @@ import { prisma } from '../../config/database.js';
 import { shopifyAdminGraphQL } from '../../integrations/shopify/client.js';
 import type { ShopifyWebhookTopic } from '../../integrations/shopify/webhook-verify.js';
 import { mapImage, mapProduct, mapVariant } from './rs-product.mapper.js';
+import { reconcileMonitors } from './inventory-alert.service.js';
 import type { ShopifyProductNode } from '../../integrations/shopify/product-query.js';
 import { upsertShopifyProduct } from './rs-product.repository.js';
 
@@ -315,13 +316,27 @@ async function upsertFromPayload(payload: unknown): Promise<WebhookOutcome> {
   const node = toProductNode(payload as RestProductPayload);
   if (!node) return { status: 'ignored', reason: 'MALFORMED_PRODUCT_PAYLOAD' };
 
-  const { skippedManual } = await upsertShopifyProduct(
+  const { skippedManual, detachedMonitorIds } = await upsertShopifyProduct(
     mapProduct(node),
     node.variants.edges.map((e) => mapVariant(e.node)),
     node.images.edges.map((e, i) => mapImage(e.node, i)),
   );
 
   if (skippedManual) return { status: 'ignored', reason: 'MANUAL_PRODUCT_PROTECTED' };
+
+  /*
+    The same post-commit reconciliation the full sync performs, for the same
+    reason: a `products/update` payload that drops a variant deletes it here
+    too, detaching any monitoring configuration that watched it.
+
+    `upsertShopifyProduct` has already committed, so the detachment is visible.
+    Only the configurations this payload actually detached are passed. Errors
+    are logged and swallowed inside `reconcileMonitors`, so a tidying failure
+    cannot turn an applied webhook into a failed one — Shopify would then retry
+    a delivery whose write already succeeded.
+  */
+  if (detachedMonitorIds.length > 0) await reconcileMonitors(detachedMonitorIds);
+
   return { status: 'applied' };
 }
 

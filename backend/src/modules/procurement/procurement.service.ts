@@ -58,6 +58,7 @@ import {
   totalFulfilled,
 } from './procurement.calc.js';
 import * as repo from './procurement.repository.js';
+import { evaluateVariant } from '../rs-product/inventory-alert.service.js';
 import * as clock from './procurement-clock.service.js';
 
 /** Neon is a network hop away; the same budget the enquiry module uses. */
@@ -638,6 +639,32 @@ export async function reconcileLineStock(
 
   await repo.moveCrmStock(tx, variantId, delta);
   await tx.purchaseBillItem.update({ where: { id: itemId }, data: { stockedQty: target } });
+
+  /*
+    CRM STOCK WRITER 2 of 2 — Inventory Alerts.
+
+    This is the only place Procurement writes `crmStockQty`, and all nine call
+    sites of `reconcileLineStock` converge here, so one line covers bill
+    approval, receipt, allocation, release and line re-mapping alike.
+
+    Inside the caller's transaction and after the write above, for the same two
+    reasons as the manual path: the evaluation sees the stock level actually
+    being committed, and a rolled-back reconciliation takes any alert with it.
+
+    `delta === 0` is not skipped. A reconciliation that moves nothing can still
+    need an alert decision — a threshold may have been raised since the last
+    movement — and the evaluator answers NONE cheaply when there is nothing to
+    do. `evaluateVariant` returns immediately for a variant nobody monitors,
+    which is the overwhelmingly common case here.
+
+    The outcome is deliberately discarded. Notifying would require the caller to
+    act after commit, and `reconcileLineStock` has nine call sites inside larger
+    transactions; threading a notification through all of them is a far larger
+    change to a protected file than this feature justifies. The alert itself is
+    raised and visible on the Inventory Alerts page and the dashboard — only the
+    bell is deferred, and it is documented as a known limitation.
+  */
+  await evaluateVariant(tx, variantId);
 }
 
 /**
@@ -655,7 +682,32 @@ async function releaseLineStock(tx: Prisma.TransactionClient, itemId: string): P
 
   if (line.rsProductId) {
     const variantId = await repo.firstVariantId(tx, line.rsProductId);
-    if (variantId) await repo.moveCrmStock(tx, variantId, -line.stockedQty);
+    if (variantId) {
+      await repo.moveCrmStock(tx, variantId, -line.stockedQty);
+
+      /*
+        CRM STOCK WRITER 2b — the OLD variant, during a re-mapping.
+
+        This release is the only CRM stock movement that is not followed by a
+        `reconcileLineStock` for the SAME variant. Both callers release from the
+        old product, move the line's `rsProductId`, then reconcile — and that
+        reconcile evaluates the NEW variant, because it resolves the variant
+        from the line's current product. The old variant's stock has just
+        FALLEN and would otherwise never be evaluated, which is precisely when
+        an alert should be raised.
+
+        Inside the caller's transaction and immediately after the write, so the
+        evaluation sees the committed level and a rolled-back re-mapping takes
+        any alert with it.
+
+        No duplicate risk: the new variant is evaluated by the reconcile that
+        follows, this evaluates the old one, and when a line is re-mapped back
+        to the same product the two ids are equal — `evaluateVariant` then
+        simply decides twice on an unchanged state and answers NONE the second
+        time, because `decideAlert` is idempotent.
+      */
+      await evaluateVariant(tx, variantId);
+    }
   }
 
   await tx.purchaseBillItem.update({ where: { id: itemId }, data: { stockedQty: 0 } });

@@ -10,6 +10,7 @@ export * from './sales.js';
 export * from './user.js';
 export * from './procurement.js';
 export * from './rs-product.js';
+export * from './inventory-alert.js';
 export * from './notification.js';
 export * from './lead.js';
 export * from './lead-analytics.js';

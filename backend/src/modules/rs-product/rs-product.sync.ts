@@ -30,6 +30,7 @@ import {
   type ShopifyProductNode,
 } from '../../integrations/shopify/product-query.js';
 import { mapImage, mapProduct, mapVariant } from './rs-product.mapper.js';
+import { reconcileMonitors } from './inventory-alert.service.js';
 import { upsertShopifyProduct } from './rs-product.repository.js';
 
 /** Products per page. Comfortably inside Shopify's cost budget per request. */
@@ -58,6 +59,10 @@ export type SyncReport = {
   skippedManual: string[];
   /** Products whose variant/image list hit the per-product fetch limit. */
   truncated: string[];
+  /** Monitoring configurations archived because their variant was deleted. */
+  detachedMonitors: number;
+  /** Low-stock alerts closed with VARIANT_REMOVED as a result. */
+  resolvedAlerts: number;
   throttle: { minAvailable: number | null; maximumAvailable: number | null };
 };
 
@@ -81,6 +86,8 @@ export async function syncShopifyCatalogue(): Promise<SyncReport> {
     failures: [],
     skippedManual: [],
     truncated: [],
+    detachedMonitors: 0,
+    resolvedAlerts: 0,
     throttle: { minAvailable: null, maximumAvailable: null },
   };
 
@@ -170,13 +177,38 @@ async function syncOneProduct(node: ShopifyProductNode, report: SyncReport): Pro
     const variants = variantNodes.map((edge) => mapVariant(edge.node));
     const images = imageNodes.map((edge, index) => mapImage(edge.node, index));
 
-    const { created, skippedManual } = await upsertShopifyProduct(product, variants, images);
+    const { created, skippedManual, detachedMonitorIds } = await upsertShopifyProduct(
+      product,
+      variants,
+      images,
+    );
 
     // A MANUAL row carrying this Shopify id: the repository refuses it, so the
     // product is recorded as skipped rather than counted as written.
     if (skippedManual) {
       report.skippedManual.push(node.id);
       return;
+    }
+
+    /*
+      The product's transaction has COMMITTED by now — `upsertShopifyProduct`
+      resolves only after its own `$transaction` does. So any variant this pass
+      deleted is gone, and the monitoring configurations that pointed at them
+      have been detached by `ON DELETE SET NULL`.
+
+      Those configurations are archived here and any live alert closed with
+      VARIANT_REMOVED, keeping the alert history and its snapshots. Only the ids
+      this product actually detached are passed, so nothing scans the catalogue.
+
+      After the commit rather than inside it, deliberately: within the
+      transaction the detachment is not yet visible to a nested read, and the
+      evaluator would decide nothing. It cannot fail the sync — every error is
+      logged and swallowed inside `reconcileMonitors`.
+    */
+    if (detachedMonitorIds.length > 0) {
+      const { archived, resolved } = await reconcileMonitors(detachedMonitorIds);
+      report.detachedMonitors += archived;
+      report.resolvedAlerts += resolved;
     }
 
     if (created) report.written.created += 1;

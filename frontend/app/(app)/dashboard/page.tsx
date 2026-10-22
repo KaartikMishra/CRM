@@ -10,8 +10,9 @@ import { EmptyState } from '@/components/common/empty-state';
 import { getCurrentUser } from '@/lib/current-user';
 import { hasModule } from '@/lib/module-access';
 import { fetchEnquiries } from '@/lib/enquiry-api';
-import { fetchStockValuation } from '@/lib/rs-product-api';
+import { fetchAlertSummary, fetchStockValuation } from '@/lib/rs-product-api';
 import { StockValuationCard } from '@/components/rs-products/stock-valuation-card';
+import { AlertSummaryCard } from '@/components/rs-products/alert-summary-card';
 
 export const metadata: Metadata = { title: 'Dashboard' };
 
@@ -27,7 +28,9 @@ export const metadata: Metadata = { title: 'Dashboard' };
  */
 export default async function DashboardPage() {
   const user = await getCurrentUser();
-  if (!user) redirect('/login');
+  // `?from` so the edge redirect does not bounce a refused session back here.
+  // See proxy.ts.
+  if (!user) redirect('/login?from=%2Fdashboard');
 
   const canEnquiry = hasModule(user, 'PRODUCT_ENQUIRY');
   const canSales = hasModule(user, 'SALES');
@@ -36,10 +39,11 @@ export default async function DashboardPage() {
   // refused, and a row of dashes is a worse answer than not asking.
   const canProducts = hasModule(user, 'RS_PRODUCTS');
 
-  const [open, mine, valuation] = await Promise.all([
+  const [open, mine, valuation, alertSummary] = await Promise.all([
     canEnquiry ? fetchEnquiries({ status: 'OPEN', limit: '25' }) : null,
     canEnquiry ? fetchEnquiries({ assignedToId: user.id, status: 'OPEN', limit: '25' }) : null,
     canProducts ? fetchStockValuation() : null,
+    canProducts ? fetchAlertSummary() : null,
   ]);
 
   const openCount = open?.result.success ? open.result.data.enquiries.length : null;
@@ -121,7 +125,7 @@ export default async function DashboardPage() {
         money held in stock, which is worse than saying nothing is known.
       */}
       {canProducts && (
-        <div className="grid gap-4 lg:max-w-md">
+        <div className="grid gap-4 sm:grid-cols-2">
           {valuation?.success ? (
             <StockValuationCard valuation={valuation.data.valuation} />
           ) : (
@@ -131,6 +135,13 @@ export default async function DashboardPage() {
               // place for it. The request id is the way to trace the cause.
               unavailable
             />
+          )}
+
+          {/* Low-stock alerts, from the same aggregation the alerts page uses. */}
+          {alertSummary?.success ? (
+            <AlertSummaryCard summary={alertSummary.data.summary} />
+          ) : (
+            <AlertSummaryCard unavailable />
           )}
         </div>
       )}

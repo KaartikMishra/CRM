@@ -21,6 +21,7 @@ export type NavIconKey =
   | 'procurement'
   | 'procurement-clock'
   | 'rs-products'
+  | 'inventory-alerts'
   | 'dispatch'
   | 'billing'
   | 'vendor-invoices'
@@ -129,6 +130,23 @@ export const NAV_ITEMS: NavItem[] = [
     icon: 'rs-products',
     available: true,
     module: 'RS_PRODUCTS',
+    children: [
+      /*
+        Inventory Alerts sits under RS Products rather than beside it: it
+        watches RS Products stock and reuses the same module permission, so a
+        separate top-level entry would imply a separate area of the CRM.
+
+        Same `module`, so visibility follows the same resolved permission —
+        somebody without RS_PRODUCTS sees neither.
+      */
+      {
+        label: 'Inventory Alerts',
+        href: '/rs-products/alerts',
+        icon: 'inventory-alerts',
+        available: true,
+        module: 'RS_PRODUCTS',
+      },
+    ],
   },
   {
     label: 'Packing & Dispatch',

@@ -1,4 +1,12 @@
-import type { RsProductDetail, RsProductListRow, StockValuationView } from '@rs/shared';
+import type {
+  InventoryAlertSummary,
+  InventoryAlertView,
+  MonitorCandidateView,
+  MonitoredVariantView,
+  RsProductDetail,
+  RsProductListRow,
+  StockValuationView,
+} from '@rs/shared';
 import { apiFetch, type ApiResult } from './api-server';
 
 /**
@@ -49,4 +57,57 @@ export async function fetchStockValuation(): Promise<
   ApiResult<{ valuation: StockValuationView }>
 > {
   return apiFetch<{ valuation: StockValuationView }>('/api/rs-products/valuation');
+}
+
+// ---------------------------------------------------------------------------
+//  Inventory Alerts
+// ---------------------------------------------------------------------------
+
+/** The dashboard card and the alerts page header. */
+export async function fetchAlertSummary(): Promise<
+  ApiResult<{ summary: InventoryAlertSummary }>
+> {
+  return apiFetch<{ summary: InventoryAlertSummary }>('/api/rs-products/alerts/summary');
+}
+
+/** Monitored variants, paginated — hundreds may be watched. */
+export async function fetchMonitoredVariants(
+  params: Record<string, string | undefined> = {},
+): Promise<{ result: ApiResult<{ monitored: MonitoredVariantView[] }>; meta: ListMeta }> {
+  const query = new URLSearchParams({ limit: String(RS_PRODUCT_PAGE_LIMIT) });
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== '') query.set(key, value);
+  }
+  const result = await apiFetch<{ monitored: MonitoredVariantView[] }>(
+    `/api/rs-products/alerts/monitored?${query}`,
+  );
+  return { result, meta: result.success ? ((result.meta ?? {}) as ListMeta) : {} };
+}
+
+/** Alert history — active and resolved. */
+export async function fetchAlertHistory(
+  params: Record<string, string | undefined> = {},
+): Promise<{ result: ApiResult<{ alerts: InventoryAlertView[] }>; meta: ListMeta }> {
+  const query = new URLSearchParams({ limit: String(RS_PRODUCT_PAGE_LIMIT) });
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== '') query.set(key, value);
+  }
+  const result = await apiFetch<{ alerts: InventoryAlertView[] }>(
+    `/api/rs-products/alerts/history?${query}`,
+  );
+  return { result, meta: result.success ? ((result.meta ?? {}) as ListMeta) : {} };
+}
+
+/** The add-monitor picker: search the catalogue by title or SKU. */
+export async function fetchMonitorCandidates(
+  params: Record<string, string | undefined> = {},
+): Promise<{ result: ApiResult<{ candidates: MonitorCandidateView[] }>; meta: ListMeta }> {
+  const query = new URLSearchParams({ limit: String(RS_PRODUCT_PAGE_LIMIT) });
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== '') query.set(key, value);
+  }
+  const result = await apiFetch<{ candidates: MonitorCandidateView[] }>(
+    `/api/rs-products/alerts/candidates?${query}`,
+  );
+  return { result, meta: result.success ? ((result.meta ?? {}) as ListMeta) : {} };
 }

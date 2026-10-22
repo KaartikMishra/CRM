@@ -36,6 +36,7 @@ import {
 } from '../../integrations/shopify/connection.js';
 import { syncShopifyCatalogue, type SyncReport } from './rs-product.sync.js';
 import { crmStockOf } from './rs-product.mapper.js';
+import { notifyRaised } from './inventory-alert.service.js';
 
 type ProductWithChildren = Prisma.RsProductGetPayload<{
   include: { variants: true; images: true };
@@ -257,7 +258,17 @@ export async function updateRsProduct(
     if (Object.keys(data).length > 0) variantUpdates.push({ id: variant.id, data });
   }
 
-  await repository.updateRsProduct(id, productData, variantUpdates);
+  /*
+    The transaction commits here, with any alert decision inside it. Notices go
+    out afterwards: a WebSocket push cannot be rolled back, so a notice must
+    never be sent for an alert that did not survive the commit.
+  */
+  const outcomes = await repository.updateRsProduct(id, productData, variantUpdates);
+
+  for (const outcome of outcomes) {
+    if (outcome.action === 'RAISED') await notifyRaised(outcome.alertId);
+  }
+
   return getRsProduct(id);
 }
 

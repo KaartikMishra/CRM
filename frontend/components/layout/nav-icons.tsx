@@ -21,6 +21,7 @@ import {
   Wallet,
   UserRound,
   Users,
+  TriangleAlert,
   type LucideIcon,
 } from 'lucide-react';
 import type { NavIconKey } from './nav-items';
@@ -43,6 +44,7 @@ const ICONS: Record<NavIconKey, LucideIcon> = {
   procurement: Boxes,
   'procurement-clock': Clock,
   'rs-products': Tags,
+  'inventory-alerts': TriangleAlert,
   dispatch: Package,
   'lead-deal': Sparkles,
   billing: Receipt,

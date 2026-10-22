@@ -14,6 +14,7 @@ import type { Prisma } from '@prisma/client';
 import type { RsProductListQuery, RsProductListRow, ShopifyProductStatus } from '@rs/shared';
 import { prisma } from '../../config/database.js';
 import type { MappedImage, MappedProduct, MappedVariant } from './rs-product.mapper.js';
+import { evaluateVariants, type EvaluationOutcome } from './inventory-alert.service.js';
 
 export type RsProductPage = {
   products: RsProductListRow[];
@@ -119,12 +120,14 @@ export async function updateRsProduct(
   id: string,
   product: Prisma.RsProductUpdateInput,
   variants: { id: string; data: Prisma.ShopifyVariantUpdateInput }[],
-): Promise<void> {
-  await prisma.$transaction(
+): Promise<EvaluationOutcome[]> {
+  return prisma.$transaction(
     async (tx) => {
       if (Object.keys(product).length > 0) {
         await tx.rsProduct.update({ where: { id }, data: product });
       }
+
+      const stockTouched: string[] = [];
 
       for (const variant of variants) {
         // updateMany with rsProductId in the filter: an id from another product
@@ -133,7 +136,28 @@ export async function updateRsProduct(
           where: { id: variant.id, rsProductId: id },
           data: variant.data,
         });
+
+        /*
+          CRM STOCK WRITER 1 of 2 — the manual edit.
+
+          Only variants whose `crmStockQty` actually appears in this payload are
+          evaluated. A cost-price or dimension edit cannot change a stock level,
+          so evaluating it would be a lock and a query for a guaranteed no-op on
+          a page people use constantly.
+        */
+        if (variant.data.crmStockQty !== undefined) stockTouched.push(variant.id);
       }
+
+      /*
+        Evaluated INSIDE this transaction, after the writes above. Two
+        consequences, both wanted:
+
+          - the alert sees the stock level that is actually being committed, not
+            the one read before the update;
+          - if this transaction rolls back, the alert goes with it. A stock
+            change that never happened must not leave an alert claiming it did.
+      */
+      return evaluateVariants(tx, stockTouched);
     },
     { timeout: 15_000, maxWait: 10_000 },
   );
@@ -235,7 +259,15 @@ export async function upsertShopifyProduct(
   product: MappedProduct,
   variants: MappedVariant[],
   images: MappedImage[],
-): Promise<{ created: boolean; skippedManual: boolean }> {
+): Promise<{ created: boolean; skippedManual: boolean; detachedMonitorIds: string[] }> {
+  /*
+    Collected inside the transaction, acted on after it commits. Declared out
+    here so the value survives the callback — a monitoring configuration whose
+    variant this sync deleted still needs archiving, and an alert it holds still
+    needs closing with VARIANT_REMOVED.
+  */
+  let detachedMonitorIds: string[] = [];
+
   return prisma.$transaction(
     async (tx) => {
       const existing = await tx.rsProduct.findUnique({
@@ -247,7 +279,8 @@ export async function upsertShopifyProduct(
       // a Shopify id, but if one is ever attached by hand this is the guard
       // that stops the catalogue overwriting somebody's own product.
       if (existing && existing.source !== 'SHOPIFY') {
-        return { created: false, skippedManual: true };
+        // Nothing was deleted, so nothing was detached.
+        return { created: false, skippedManual: true, detachedMonitorIds: [] };
       }
 
       const row = await tx.rsProduct.upsert({
@@ -285,6 +318,27 @@ export async function upsertShopifyProduct(
         });
       }
 
+      /*
+        Variants Shopify no longer sends are removed. Before removing them, the
+        monitoring configurations that point at them are read — because the
+        `SET NULL` that detaches those configurations leaves nothing to
+        identify afterwards, and a full-table sweep to rediscover them would
+        scan every configuration on every product of every sync.
+
+        Read first, delete second, inside this transaction. The ids are returned
+        to the caller, which reconciles them only once this has committed.
+      */
+      const doomed = await tx.shopifyVariant.findMany({
+        where: {
+          rsProductId: row.id,
+          shopifyVariantId: { notIn: variants.map((v) => v.shopifyVariantId) },
+        },
+        select: { monitoring: { select: { id: true } } },
+      });
+      detachedMonitorIds = doomed
+        .map((v) => v.monitoring?.id)
+        .filter((id): id is string => id !== undefined);
+
       await tx.shopifyVariant.deleteMany({
         where: {
           rsProductId: row.id,
@@ -307,7 +361,7 @@ export async function upsertShopifyProduct(
         },
       });
 
-      return { created: existing === null, skippedManual: false };
+      return { created: existing === null, skippedManual: false, detachedMonitorIds };
     },
     { timeout: 15_000, maxWait: 10_000 },
   );

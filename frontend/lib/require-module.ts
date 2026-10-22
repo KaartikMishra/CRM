@@ -27,9 +27,19 @@ export type ModuleAccess =
   | { allowed: true; user: CurrentUser }
   | { allowed: false; user: CurrentUser };
 
+/**
+ * Where a refused session is sent.
+ *
+ * The `from` parameter is what stops the edge redirect bouncing the visitor
+ * straight back: a session cookie keeps a valid signature after its user row is
+ * deleted or deactivated, so proxy.ts would otherwise read "signed in" while
+ * the API here reads "no". See the note in proxy.ts.
+ */
+const LOGIN_AFTER_REFUSAL = '/login?from=1';
+
 export async function requireModule(module: AppModule): Promise<ModuleAccess> {
   const user = await getCurrentUser();
-  if (!user) redirect('/login');
+  if (!user) redirect(LOGIN_AFTER_REFUSAL);
 
   return { allowed: hasModule(user, module), user };
 }
@@ -37,7 +47,7 @@ export async function requireModule(module: AppModule): Promise<ModuleAccess> {
 /** The same, for administrator-only areas outside the CRM modules entirely. */
 export async function requireAdminUser(): Promise<{ allowed: boolean; user: CurrentUser }> {
   const user = await getCurrentUser();
-  if (!user) redirect('/login');
+  if (!user) redirect(LOGIN_AFTER_REFUSAL);
 
   return { allowed: user.role === 'ADMIN', user };
 }
