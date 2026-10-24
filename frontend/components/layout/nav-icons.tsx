@@ -1,4 +1,5 @@
 import {
+  BookUser,
   Boxes,
   Sparkles,
   ClipboardList,
@@ -50,6 +51,12 @@ const ICONS: Record<NavIconKey, LucideIcon> = {
   billing: Receipt,
   'vendor-invoices': FileText,
   'post-sales': LifeBuoy,
+  /*
+    A directory of people, distinct from `users` (Users) which is the staff
+    admin screen and from `hr` (UserRound). Each nav key must map to its own
+    glyph — the icon registry test asserts it — so these three stay apart.
+  */
+  customers: BookUser,
   hr: UserRound,
   attendance: CalendarCheck,
   leave: CalendarDays,

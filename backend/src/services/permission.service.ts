@@ -85,6 +85,15 @@ const ROLE_DEFAULTS: Record<Role, ModuleMatrix> = {
     LEAD_DEAL: CRUD_ASSIGN,
 
     /*
+      All Customers. EXPORT is granted here deliberately: the directory can be
+      downloaded as a CSV of names, phone numbers, emails and GSTINs, and that
+      is a different act from reading one customer on screen. VIEW and EXPORT
+      are therefore separate grants, and the export route checks EXPORT rather
+      than settling for VIEW.
+    */
+    CUSTOMERS: { ...CRUD_ASSIGN, EXPORT: true },
+
+    /*
       HR — the same mandatory rule, which is why these are here in Phase 0.5
       rather than waiting for Phase 1's pages. A namespace omitted from this
       object does not exist as far as /api/auth/me is concerned, so an

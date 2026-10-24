@@ -190,3 +190,105 @@ export const salesNewCustomerSchema = customerFields
 export type CreateCustomerInput = z.infer<typeof createCustomerSchema>;
 export type SalesNewCustomerInput = z.infer<typeof salesNewCustomerSchema>;
 export type CustomerSelection = z.infer<typeof customerSelectionSchema>;
+
+// ---------------------------------------------------------------------------
+//  All Customers — the directory
+// ---------------------------------------------------------------------------
+
+/*
+  `customerSearchSchema` above is deliberately untouched. It validates the
+  picker that Product Enquiry, Create Lead and Sales all submit to — a name
+  typeahead, capped, no cursor — and widening it would change a contract four
+  modules depend on. The directory is a different query shape, so it gets its
+  own schema and its own route.
+*/
+
+/**
+ * How the directory may be ordered.
+ *
+ * Note which of these are columns and which are derived. `name` and `createdAt`
+ * are columns on Customer. The other three are aggregates over orders and
+ * enquiries that no column holds, so the repository must order them in SQL over
+ * the aggregate — page-local sorting would present one page as if it were a
+ * global ordering, which is a lie the RS Products listing already documents.
+ */
+export const CUSTOMER_DIRECTORY_SORTS = [
+  'name',
+  'createdAt',
+  'lastPurchaseAt',
+  'purchaseValue',
+  'orderCount',
+] as const;
+export type CustomerDirectorySort = (typeof CUSTOMER_DIRECTORY_SORTS)[number];
+
+export const customerDirectoryQuerySchema = z.object({
+  /** Matched against name, companyName, phone (digits), email and GSTIN. */
+  q: z.string().trim().max(160).optional(),
+  type: z.enum(CUSTOMER_TYPES).optional(),
+  state: z.string().trim().max(80).optional(),
+  country: z.string().trim().max(80).optional(),
+  /** A first-touch or last-touch source value, as stored. */
+  source: z.string().trim().max(60).optional(),
+  /** Which end of the journey `source` filters on. */
+  sourceTouch: z.enum(['FIRST', 'LAST']).default('LAST'),
+  hasOrders: z.coerce.boolean().optional(),
+  isRepeat: z.coerce.boolean().optional(),
+  /** Only customers appearing in an open duplicate suggestion. */
+  duplicatesOnly: z.coerce.boolean().optional(),
+  minPurchaseValue: z.coerce.number().min(0).optional(),
+  maxPurchaseValue: z.coerce.number().min(0).optional(),
+  /** Filters on SalesOrder.orderDate — the business date. */
+  purchasedFrom: z.coerce.date().optional(),
+  purchasedTo: z.coerce.date().optional(),
+  sort: z.enum(CUSTOMER_DIRECTORY_SORTS).default('name'),
+  direction: z.enum(['asc', 'desc']).default('asc'),
+  /*
+    Keyset where the sort is a column; offset where it is an aggregate. Both are
+    accepted so the repository can choose, and the response says which it used
+    rather than leaving the caller to guess.
+  */
+  cursor: cuidSchema.optional(),
+  page: z.coerce.number().int().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+});
+export type CustomerDirectoryQuery = z.infer<typeof customerDirectoryQuerySchema>;
+
+export const customerIdParamSchema = z.object({ id: cuidSchema });
+export type CustomerIdParam = z.infer<typeof customerIdParamSchema>;
+
+/** A page of one customer's related records. */
+export const customerHistoryQuerySchema = z.object({
+  cursor: cuidSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+});
+export type CustomerHistoryQuery = z.infer<typeof customerHistoryQuerySchema>;
+
+// ---------------------------------------------------------------------------
+//  Duplicate review
+// ---------------------------------------------------------------------------
+
+export const CUSTOMER_DUPLICATE_STATUSES = ['SUGGESTED', 'CONFIRMED', 'DISMISSED'] as const;
+export type CustomerDuplicateStatusValue = (typeof CUSTOMER_DUPLICATE_STATUSES)[number];
+
+export const customerDuplicateQuerySchema = z.object({
+  status: z.enum(CUSTOMER_DUPLICATE_STATUSES).default('SUGGESTED'),
+  cursor: cuidSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+});
+export type CustomerDuplicateQuery = z.infer<typeof customerDuplicateQuerySchema>;
+
+/**
+ * Recording a decision about a pair.
+ *
+ * Only the two decided states are accepted: a reviewer can confirm or dismiss,
+ * and cannot set a pair back to SUGGESTED by hand. Reopening happens one way
+ * only — a rescan finding that the matched identifiers changed — so a dismissal
+ * cannot be quietly undone without the underlying data having moved.
+ *
+ * Confirming records agreement. It merges nothing: no customer row, enquiry,
+ * lead or order is touched by this endpoint.
+ */
+export const customerDuplicateDecisionSchema = z.object({
+  status: z.enum(['CONFIRMED', 'DISMISSED']),
+});
+export type CustomerDuplicateDecisionInput = z.infer<typeof customerDuplicateDecisionSchema>;

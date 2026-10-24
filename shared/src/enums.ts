@@ -19,6 +19,20 @@ export const APP_MODULES = [
   'VENDOR_INVOICE',
   'POST_SALES',
   'LEAD_DEAL',
+  /*
+    All Customers — the CRM customer directory.
+
+    A namespace of its own rather than a reuse of PRODUCT_ENQUIRY, which is what
+    currently gates customer creation. The two are different grants: the people
+    who may raise an enquiry are not necessarily the people who may read every
+    customer's purchase history, phone number and GSTIN. Folding the directory
+    into PRODUCT_ENQUIRY would hand that history to everyone who can file an
+    enquiry, which is exactly the conflation these namespaces exist to prevent.
+
+    The existing customer picker keeps its own gating, so this changes nothing
+    about who can attach a customer to an enquiry, lead or order.
+  */
+  'CUSTOMERS',
   // --- HR & Workforce Management -------------------------------------------
   //
   // Seven namespaces rather than one HR module, because HR is the first area

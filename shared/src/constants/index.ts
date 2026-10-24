@@ -179,6 +179,7 @@ export const APP_MODULE_LABELS = {
   VENDOR_INVOICE: 'Vendor Invoices',
   POST_SALES: 'Post Sales & Grievance',
   LEAD_DEAL: 'Create Lead / Deal',
+  CUSTOMERS: 'All Customers',
   /*
     HR carries a label even though it has no page yet, because the admin
     permission grid renders APP_MODULE_LABELS[module] for every AppModule. The

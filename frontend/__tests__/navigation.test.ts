@@ -80,13 +80,16 @@ describe('the icon registry', () => {
 });
 
 describe('the navigation table itself is unchanged', () => {
-  it('still lists all twelve destinations in order', () => {
+  it('still lists all thirteen destinations in order', () => {
     // HR & Workforce joined in Phase 1, between Post Sales and User Management.
+    // All Customers joined beside Sales: a customer is a master record that
+    // enquiries, leads and orders point at, not a section of any one of them.
     expect(NAV_ITEMS.map((i) => i.href)).toEqual([
       '/dashboard',
       '/create-lead',
       '/product-enquiry',
       '/sales',
+      '/customers',
       '/procurement',
       '/rs-products',
       '/dispatch',
@@ -286,8 +289,8 @@ describe('module visibility is unchanged by the fix', () => {
 
   it('shows an administrator everything, including User Management', () => {
     const hrefs = visibleNavItems([...APP_MODULES], true).map((i) => i.href);
-    // Twelve since HR & Workforce joined the table.
-    expect(hrefs).toHaveLength(12);
+    // Thirteen since All Customers joined the table.
+    expect(hrefs).toHaveLength(13);
     expect(hrefs).toContain('/users');
   });
 
@@ -354,7 +357,7 @@ describe('Purchase & Procurement is a parent, and Procurement Clock sits under i
     // The whole point of the nesting. If this ever fails, the submodule has
     // been promoted to a sidebar module of its own.
     expect(NAV_ITEMS.map((i) => i.href)).not.toContain('/procurement/clock');
-    expect(NAV_ITEMS).toHaveLength(12);
+    expect(NAV_ITEMS).toHaveLength(13);
   });
 
   it('carries it as a child of Purchase & Procurement', () => {

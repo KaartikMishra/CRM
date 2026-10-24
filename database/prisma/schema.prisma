@@ -50,6 +50,14 @@ enum AppModule {
   /// — it carries an ALTER TYPE migration of its own.
   LEAD_DEAL
 
+  /// All Customers — the CRM customer directory, with its own ALTER TYPE
+  /// migration for the same reason as LEAD_DEAL.
+  ///
+  /// Not a reuse of PRODUCT_ENQUIRY, which is what gates customer creation
+  /// today: the people who may file an enquiry are not necessarily the people
+  /// who may read every customer's purchase history, phone number and GSTIN.
+  CUSTOMERS
+
   /// HR & Workforce Management — seven namespaces, not one module.
   ///
   /// HR is the first area where holding one capability must not imply another:
@@ -242,6 +250,9 @@ model User {
   createdMonitoredVariants MonitoredVariant[] @relation("MonitoredVariantCreatedBy")
   updatedMonitoredVariants MonitoredVariant[] @relation("MonitoredVariantUpdatedBy")
 
+  /// Duplicate-review decisions this person made. Reverse side only.
+  decidedDuplicateCandidates CustomerDuplicateCandidate[] @relation("DuplicateCandidateDecidedBy")
+
   @@index([role, isActive])
 }
 
@@ -268,6 +279,18 @@ enum CustomerType {
   BULK
   WEDDING_GIFTING
   CORPORATE_GIFTING
+}
+
+/// Where a duplicate-candidate pair stands.
+///
+/// SUGGESTED is where every pair starts and the only state a scan writes.
+/// CONFIRMED means a human agreed these are one customer — a label, not a
+/// merge. DISMISSED means they are different people, and the scan honours that
+/// until the matched identifiers themselves change.
+enum CustomerDuplicateStatus {
+  SUGGESTED
+  CONFIRMED
+  DISMISSED
 }
 
 /// Q1 — one enquiry belongs to one customer. Sales and Billing will reference
@@ -309,18 +332,114 @@ model Customer {
   /// than one row. Structure is checked at the edge; the database enforces no
   /// checksum and no cross-check against `state`.
   gstNumber String?
+  /// `phone` with every non-digit removed, maintained alongside it.
+  ///
+  /// Stored rather than derived per query because the directory searches on it
+  /// and duplicate detection compares it across the whole table: the existing
+  /// `lookupCustomersByPhone` reads every phone-bearing customer and filters in
+  /// memory, which is acceptable for one lead form and not for either of those.
+  ///
+  /// Nullable, because `phone` is — and because every existing row predates
+  /// this column. Not unique: two real people legitimately share a landline,
+  /// and enforcing otherwise would refuse honest data. The value is the
+  /// digits-only fold from `normalizePhone` in @rs/shared, so the column and
+  /// the matcher cannot disagree about what "the same number" means.
+  phoneNormalized String?
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
 
   enquiries   ProductEnquiry[]
   salesOrders SalesOrder[]
   leads       Lead[]
+  /// Duplicate-review pairs this customer appears in, on either side.
+  duplicateCandidatesAsA CustomerDuplicateCandidate[] @relation("DuplicateCandidateA")
+  duplicateCandidatesAsB CustomerDuplicateCandidate[] @relation("DuplicateCandidateB")
   /// Post-sales cases raised against this customer. Reverse side only; the case
   /// holds the foreign key and no customer field is copied onto it.
   postSalesCases PostSalesCase[]
 
   /// Not unique: two real firms can legitimately share a name.
   @@index([name])
+  /// The directory searches on these, and duplicate detection scans them.
+  @@index([phoneNormalized])
+  @@index([email])
+}
+
+/// Where a duplicate-review decision is recorded.
+///
+/// Two customer rows can describe one real customer: `Customer` enforces no
+/// uniqueness on phone, email or GSTIN — deliberately, because two real people
+/// share a landline and the same GSTIN legitimately appears on more than one
+/// row — and `createCustomer` has never deduplicated. So duplicates exist, and
+/// `lookupCustomersByPhone` already hands the caller every match rather than
+/// silently picking one.
+///
+/// This table records what a human decided about a pair. It does NOT merge
+/// anything: confirming a candidate marks it confirmed and changes no customer
+/// row, no enquiry, no lead and no order. Merging is a separate decision with
+/// its own rules, and nothing here presumes it.
+///
+/// ## Why the pair is stored in a fixed order
+///
+/// (A, B) and (B, A) are the same pair. Storing both would let one be dismissed
+/// while the other stayed suggested, so the service writes them with
+/// `customerAId < customerBId` by string comparison and the unique index below
+/// makes a second spelling impossible. That is also what makes a rescan
+/// idempotent: it upserts the pair it already wrote instead of adding a twin.
+model CustomerDuplicateCandidate {
+  id String @id @default(cuid())
+
+  /// The lower customer id of the pair, by string comparison. See the note above.
+  customerAId String
+  /// The higher customer id of the pair.
+  customerBId String
+
+  /// How strong the match is, 0-100, from the scoring rules in @rs/shared.
+  ///
+  /// Stored rather than recomputed on read so a reviewer sees the score the
+  /// suggestion was made on, and so `identifierFingerprint` below has something
+  /// to be compared against.
+  score Int
+
+  /// Which identifiers matched, as the scorer named them — "phone", "email",
+  /// "gstNumber", "companyAndState". Plain text in input order: this is shown to
+  /// a reviewer to explain the suggestion, never parsed to make a decision.
+  matchedOn String
+
+  /// A digest of the identifier VALUES the match was based on.
+  ///
+  /// This is what makes the reopening rule work. A dismissed pair stays
+  /// dismissed — but only while it is the same pair of facts. If somebody
+  /// corrects a phone number or adds an email, the fingerprint changes, and the
+  /// scan reopens the pair as SUGGESTED rather than honouring a dismissal that
+  /// was made about different data.
+  identifierFingerprint String
+
+  status CustomerDuplicateStatus @default(SUGGESTED)
+
+  /// Who decided, and when. Null while the pair is still SUGGESTED.
+  ///
+  /// SetNull rather than Cascade: the decision is the record, and it outlives
+  /// the reviewer's account. Losing who decided is a smaller loss than losing
+  /// that a decision was made at all.
+  decidedById String?
+  decidedBy   User?     @relation("DuplicateCandidateDecidedBy", fields: [decidedById], references: [id], onDelete: SetNull)
+  decidedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Restrict on both sides, matching `Lead.customerId`: a customer named by a
+  /// review decision is referenced history, and deleting one should fail loudly
+  /// rather than quietly discard the decision.
+  customerA Customer @relation("DuplicateCandidateA", fields: [customerAId], references: [id], onDelete: Restrict)
+  customerB Customer @relation("DuplicateCandidateB", fields: [customerBId], references: [id], onDelete: Restrict)
+
+  /// One row per pair, which is what makes a rescan an upsert rather than a
+  /// duplicate. Relies on the ordering rule above.
+  @@unique([customerAId, customerBId])
+  /// The review queue reads by status, newest suggestion first.
+  @@index([status, score])
 }
 
 /// §37 — a reusable entity, never re-created per enquiry.

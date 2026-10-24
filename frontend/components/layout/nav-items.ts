@@ -27,6 +27,7 @@ export type NavIconKey =
   | 'vendor-invoices'
   | 'post-sales'
   | 'lead-deal'
+  | 'customers'
   | 'hr'
   | 'attendance'
   | 'leave'
@@ -102,6 +103,14 @@ export const NAV_ITEMS: NavItem[] = [
     module: 'PRODUCT_ENQUIRY',
   },
   { label: 'Sales', href: '/sales', icon: 'sales', available: true, module: 'SALES' },
+  /*
+    All Customers sits beside Sales rather than under it: a customer is a master
+    record that enquiries, leads and orders all point at, not a section of any
+    one of them. Its own module, so reading a customer's purchase history and
+    contact details is a separate grant from filing an enquiry — which is what
+    gates customer creation today.
+  */
+  { label: 'All Customers', href: '/customers', icon: 'customers', available: true, module: 'CUSTOMERS' },
   {
     label: 'Purchase & Procurement',
     href: '/procurement',
